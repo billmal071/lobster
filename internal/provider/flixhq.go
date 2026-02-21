@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -108,7 +109,7 @@ func (f *FlixHQ) GetServers(id string, episodeID string) ([]media.Server, error)
 		if numID == "" {
 			return nil, fmt.Errorf("cannot extract numeric ID from %q", id)
 		}
-		url = fmt.Sprintf("%s/ajax/v2/movie/episodes/%s", f.baseURL(), numID)
+		url = fmt.Sprintf("%s/ajax/movie/episodes/%s", f.baseURL(), numID)
 	}
 
 	doc, err := f.fetchDocument(url)
@@ -125,68 +126,42 @@ func (f *FlixHQ) GetEmbedURL(serverID string) (string, error) {
 		return "", fmt.Errorf("invalid server ID: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/ajax/get_link/%s", f.baseURL(), serverID)
+	url := fmt.Sprintf("%s/ajax/episode/sources/%s", f.baseURL(), serverID)
 	resp, err := httputil.Get(f.client, url)
 	if err != nil {
 		return "", fmt.Errorf("getting embed URL: %w", err)
 	}
 	defer resp.Body.Close()
 
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status %d for server %s", resp.StatusCode, serverID)
+	}
+
+	// The endpoint returns JSON: {"type":"iframe","link":"https://...","sources":[],"tracks":[],"title":""}
+	var result struct {
+		Link string `json:"link"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", fmt.Errorf("parsing embed response: %w", err)
 	}
 
-	// The response contains a redirect URL or iframe src
-	embedURL := ""
-	doc.Find("iframe").Each(func(_ int, s *goquery.Selection) {
-		if src, exists := s.Attr("src"); exists {
-			embedURL = src
-		}
-	})
-
-	// Some endpoints return the URL directly in a link element
-	if embedURL == "" {
-		doc.Find("a").Each(func(_ int, s *goquery.Selection) {
-			if href, exists := s.Attr("href"); exists && strings.HasPrefix(href, "http") {
-				embedURL = href
-			}
-		})
-	}
-
-	// The AJAX endpoint may return the link as text content
-	if embedURL == "" {
-		text := strings.TrimSpace(doc.Text())
-		if strings.HasPrefix(text, "http") {
-			embedURL = strings.Fields(text)[0]
-		}
-	}
-
-	if embedURL == "" {
+	if result.Link == "" {
 		return "", fmt.Errorf("no embed URL found for server %s", serverID)
 	}
 
-	return embedURL, nil
+	return result.Link, nil
 }
 
-// Trending returns trending content.
+// Trending returns trending content from the /home page.
 func (f *FlixHQ) Trending(mediaType media.MediaType) ([]media.SearchResult, error) {
-	var url string
-	switch mediaType {
-	case media.Movie:
-		url = fmt.Sprintf("%s/trending-movies", f.baseURL())
-	case media.TV:
-		url = fmt.Sprintf("%s/trending-tv-shows", f.baseURL())
-	default:
-		url = fmt.Sprintf("%s/home", f.baseURL())
-	}
+	url := fmt.Sprintf("%s/home", f.baseURL())
 
 	doc, err := f.fetchDocument(url)
 	if err != nil {
 		return nil, fmt.Errorf("getting trending: %w", err)
 	}
 
-	results := parseTrendingResults(doc)
+	results := parseTrendingResults(doc, mediaType)
 	for i := range results {
 		if !strings.HasPrefix(results[i].URL, "http") {
 			results[i].URL = f.baseURL() + results[i].URL
@@ -195,16 +170,16 @@ func (f *FlixHQ) Trending(mediaType media.MediaType) ([]media.SearchResult, erro
 	return results, nil
 }
 
-// Recent returns recently added content.
+// Recent returns recently added content from /movie or /tv-show pages.
 func (f *FlixHQ) Recent(mediaType media.MediaType) ([]media.SearchResult, error) {
 	var url string
 	switch mediaType {
 	case media.Movie:
-		url = fmt.Sprintf("%s/recently-added-movies", f.baseURL())
+		url = fmt.Sprintf("%s/movie", f.baseURL())
 	case media.TV:
-		url = fmt.Sprintf("%s/recently-added-tv-shows", f.baseURL())
+		url = fmt.Sprintf("%s/tv-show", f.baseURL())
 	default:
-		url = fmt.Sprintf("%s/recently-added", f.baseURL())
+		url = fmt.Sprintf("%s/movie", f.baseURL())
 	}
 
 	doc, err := f.fetchDocument(url)
@@ -212,7 +187,7 @@ func (f *FlixHQ) Recent(mediaType media.MediaType) ([]media.SearchResult, error)
 		return nil, fmt.Errorf("getting recent: %w", err)
 	}
 
-	results := parseTrendingResults(doc)
+	results := parseSearchResults(doc)
 	for i := range results {
 		if !strings.HasPrefix(results[i].URL, "http") {
 			results[i].URL = f.baseURL() + results[i].URL

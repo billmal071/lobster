@@ -116,6 +116,68 @@ func TestExtractNumericID(t *testing.T) {
 	}
 }
 
+func TestParseTrendingResultsMovies(t *testing.T) {
+	doc := loadTestDoc(t, "home_trending.html")
+	results := parseTrendingResults(doc, media.Movie)
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 trending movies, got %d", len(results))
+	}
+
+	if results[0].Title != "Dune: Part Two" {
+		t.Errorf("result[0].Title = %q, want 'Dune: Part Two'", results[0].Title)
+	}
+	if results[0].Type != media.Movie {
+		t.Errorf("result[0].Type = %v, want Movie", results[0].Type)
+	}
+	if results[0].Year != "2024" {
+		t.Errorf("result[0].Year = %q, want '2024'", results[0].Year)
+	}
+	if results[0].ID != "movie/free-dune-part-two-hd-98765" {
+		t.Errorf("result[0].ID = %q, want 'movie/free-dune-part-two-hd-98765'", results[0].ID)
+	}
+
+	if results[1].Title != "Oppenheimer" {
+		t.Errorf("result[1].Title = %q, want 'Oppenheimer'", results[1].Title)
+	}
+}
+
+func TestParseTrendingResultsTV(t *testing.T) {
+	doc := loadTestDoc(t, "home_trending.html")
+	results := parseTrendingResults(doc, media.TV)
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 trending TV shows, got %d", len(results))
+	}
+
+	if results[0].Title != "The Last of Us" {
+		t.Errorf("result[0].Title = %q, want 'The Last of Us'", results[0].Title)
+	}
+	if results[0].Type != media.TV {
+		t.Errorf("result[0].Type = %v, want TV", results[0].Type)
+	}
+	if results[0].Year != "2023" {
+		t.Errorf("result[0].Year = %q, want '2023'", results[0].Year)
+	}
+
+	if results[1].Title != "Shogun" {
+		t.Errorf("result[1].Title = %q, want 'Shogun'", results[1].Title)
+	}
+	if results[1].Year != "2024" {
+		t.Errorf("result[1].Year = %q, want '2024'", results[1].Year)
+	}
+}
+
+func TestParseTrendingResultsEmpty(t *testing.T) {
+	doc := loadTestDoc(t, "search_results.html")
+	// search_results.html has no #trending-movies or #trending-tv panels
+	results := parseTrendingResults(doc, media.Movie)
+
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for missing panel, got %d", len(results))
+	}
+}
+
 func TestFormatDisplayTitle(t *testing.T) {
 	tests := []struct {
 		name     string

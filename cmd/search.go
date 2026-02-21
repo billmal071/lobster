@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"lobster/internal/decrypt"
 	"lobster/internal/download"
+	"lobster/internal/extract"
 	"lobster/internal/history"
 	"lobster/internal/media"
 	"lobster/internal/player"
@@ -171,9 +171,9 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	}
 	debugf("embed URL: %s", embedURL)
 
-	// Decrypt to get stream
-	dec := decrypt.New()
-	stream, err := dec.Decrypt(embedURL, cfg.Quality)
+	// Extract stream from embed URL
+	ext := extract.New()
+	stream, err := ext.Extract(embedURL, cfg.Quality)
 	if err != nil {
 		return fmt.Errorf("decrypting stream: %w", err)
 	}

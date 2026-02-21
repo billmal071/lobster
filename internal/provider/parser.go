@@ -120,11 +120,16 @@ func parseEpisodes(doc *goquery.Document) []media.Episode {
 }
 
 // parseServers extracts server options from a content page.
+// Movie endpoints use data-linkid, TV episode endpoints use data-id.
 func parseServers(doc *goquery.Document) []media.Server {
 	var servers []media.Server
 
-	doc.Find(".server-item a, [data-id]").Each(func(_ int, s *goquery.Selection) {
-		dataID, exists := s.Attr("data-id")
+	doc.Find(".link-item, .server-item a, [data-id]").Each(func(_ int, s *goquery.Selection) {
+		// Try data-linkid first (movie servers), then data-id (TV episode servers)
+		dataID, exists := s.Attr("data-linkid")
+		if !exists {
+			dataID, exists = s.Attr("data-id")
+		}
 		if !exists {
 			return
 		}
@@ -168,10 +173,52 @@ func extractNumericID(id string) string {
 	return ""
 }
 
-// parseTrendingResults extracts results from trending/recent pages.
-func parseTrendingResults(doc *goquery.Document) []media.SearchResult {
-	// The trending/recent pages use the same layout as search
-	return parseSearchResults(doc)
+// parseTrendingResults extracts results from the /home page's trending tab panels.
+// It scopes to #trending-movies or #trending-tv based on mediaType, then parses
+// the standard .film_list-wrap .flw-item structure within that panel.
+func parseTrendingResults(doc *goquery.Document, mediaType media.MediaType) []media.SearchResult {
+	var selector string
+	switch mediaType {
+	case media.Movie:
+		selector = "#trending-movies"
+	case media.TV:
+		selector = "#trending-tv"
+	default:
+		// Fallback: parse the whole document
+		return parseSearchResults(doc)
+	}
+
+	var results []media.SearchResult
+	doc.Find(selector).Find(".film_list-wrap .flw-item").Each(func(_ int, s *goquery.Selection) {
+		result := media.SearchResult{}
+
+		link := s.Find(".film-name a")
+		result.Title = strings.TrimSpace(link.Text())
+		href, exists := link.Attr("href")
+		if exists {
+			result.URL = href
+			result.ID = extractID(href)
+		}
+
+		if strings.Contains(href, "/tv/") {
+			result.Type = media.TV
+		} else {
+			result.Type = media.Movie
+		}
+
+		s.Find(".fd-infor span").Each(func(_ int, span *goquery.Selection) {
+			text := strings.TrimSpace(span.Text())
+			if _, err := strconv.Atoi(text); err == nil && len(text) == 4 {
+				result.Year = text
+			}
+		})
+
+		if result.Title != "" {
+			results = append(results, result)
+		}
+	})
+
+	return results
 }
 
 // formatDisplayTitle creates a display string for fzf selection.
