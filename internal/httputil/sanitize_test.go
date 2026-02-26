@@ -147,9 +147,12 @@ func TestEncodeQuery(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"breaking bad", "breaking+bad"},
-		{"the office", "the+office"},
-		{"special&chars=here", "special%26chars%3Dhere"},
+		{"breaking bad", "breaking-bad"},
+		{"the office", "the-office"},
+		{"star wars", "star-wars"},
+		{"  extra   spaces  ", "extra-spaces"},
+		{"special&chars=here", "special&chars=here"},
+		{"singleword", "singleword"},
 	}
 
 	for _, tt := range tests {

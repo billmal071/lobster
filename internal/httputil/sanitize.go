@@ -112,9 +112,11 @@ func SafeDownloadPath(dir, filename string) (string, error) {
 	return resolved, nil
 }
 
-// EncodeQuery URL-encodes a search query for safe inclusion in URLs.
+// EncodeQuery encodes a search query for inclusion in FlixHQ search URLs.
+// FlixHQ expects hyphen-separated words in the path (e.g., /search/star-wars).
 func EncodeQuery(query string) string {
-	return url.QueryEscape(query)
+	words := strings.Fields(query)
+	return url.PathEscape(strings.Join(words, "-"))
 }
 
 // BuildURL constructs a URL from base and path components, encoding each path segment.

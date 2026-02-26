@@ -54,12 +54,7 @@ func parseSearchResults(doc *goquery.Document) []media.SearchResult {
 func parseSeasons(doc *goquery.Document) []media.Season {
 	var seasons []media.Season
 
-	doc.Find(".dropdown-menu-model .dropdown-item a").Each(func(_ int, s *goquery.Selection) {
-		href, exists := s.Attr("href")
-		if !exists {
-			return
-		}
-
+	doc.Find(".dropdown-menu a.dropdown-item").Each(func(_ int, s *goquery.Selection) {
 		dataID, _ := s.Attr("data-id")
 		title := strings.TrimSpace(s.Text())
 
@@ -70,9 +65,12 @@ func parseSeasons(doc *goquery.Document) []media.Season {
 
 		if dataID == "" {
 			// Try extracting from href
-			parts := strings.Split(href, "/")
-			if len(parts) > 0 {
-				dataID = parts[len(parts)-1]
+			href, exists := s.Attr("href")
+			if exists {
+				parts := strings.Split(href, "/")
+				if len(parts) > 0 {
+					dataID = parts[len(parts)-1]
+				}
 			}
 		}
 
@@ -101,10 +99,16 @@ func parseEpisodes(doc *goquery.Document) []media.Episode {
 		}
 
 		num := 0
-		// Try to extract episode number from the title or text
+		// Try to extract episode number from the title or text.
+		// FlixHQ format: "Eps 1: Title" or "Eps 1"
 		text := strings.TrimSpace(s.Text())
 		if parts := strings.Fields(text); len(parts) >= 2 {
-			if n, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
+			// Try "Eps N:" format first (strip trailing colon)
+			candidate := strings.TrimRight(parts[1], ":")
+			if n, err := strconv.Atoi(candidate); err == nil {
+				num = n
+			} else if n, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
+				// Fallback: last token as number
 				num = n
 			}
 		}
@@ -146,6 +150,27 @@ func parseServers(doc *goquery.Document) []media.Server {
 	})
 
 	return servers
+}
+
+// parseLastPage extracts the last page number from pagination links.
+// Returns 1 if no pagination is found.
+func parseLastPage(doc *goquery.Document) int {
+	lastPage := 1
+	doc.Find(".pagination .page-item a.page-link").Each(func(_ int, s *goquery.Selection) {
+		title, _ := s.Attr("title")
+		if title == "Last" {
+			href, exists := s.Attr("href")
+			if exists {
+				if idx := strings.Index(href, "page="); idx >= 0 {
+					pageStr := href[idx+5:]
+					if n, err := strconv.Atoi(pageStr); err == nil {
+						lastPage = n
+					}
+				}
+			}
+		}
+	})
+	return lastPage
 }
 
 // extractID extracts the content ID from a URL path.

@@ -30,17 +30,37 @@ func (f *FlixHQ) baseURL() string {
 	return "https://" + f.base
 }
 
-// Search returns matching results for a query.
+// maxSearchPages limits how many pages of search results to fetch.
+const maxSearchPages = 3
+
+// Search returns matching results for a query, fetching multiple pages.
 func (f *FlixHQ) Search(query string) ([]media.SearchResult, error) {
 	encoded := httputil.EncodeQuery(query)
-	url := fmt.Sprintf("%s/search/%s", f.baseURL(), encoded)
+	baseSearchURL := fmt.Sprintf("%s/search/%s", f.baseURL(), encoded)
 
-	doc, err := f.fetchDocument(url)
+	// Fetch first page
+	doc, err := f.fetchDocument(baseSearchURL)
 	if err != nil {
 		return nil, fmt.Errorf("searching for %q: %w", query, err)
 	}
 
 	results := parseSearchResults(doc)
+	lastPage := parseLastPage(doc)
+
+	// Fetch additional pages (up to maxSearchPages)
+	pages := lastPage
+	if pages > maxSearchPages {
+		pages = maxSearchPages
+	}
+	for page := 2; page <= pages; page++ {
+		pageURL := fmt.Sprintf("%s?page=%d", baseSearchURL, page)
+		pageDoc, err := f.fetchDocument(pageURL)
+		if err != nil {
+			break // Stop on error but return what we have
+		}
+		results = append(results, parseSearchResults(pageDoc)...)
+	}
+
 	if len(results) == 0 {
 		return nil, fmt.Errorf("no results found for %q", query)
 	}
