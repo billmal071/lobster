@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -65,6 +66,9 @@ func (f *FlixHQ) Search(query string) ([]media.SearchResult, error) {
 		return nil, fmt.Errorf("no results found for %q", query)
 	}
 
+	// Sort by relevance to the original query
+	sortByRelevance(results, query)
+
 	// Set full URLs
 	for i := range results {
 		if !strings.HasPrefix(results[i].URL, "http") {
@@ -73,6 +77,44 @@ func (f *FlixHQ) Search(query string) ([]media.SearchResult, error) {
 	}
 
 	return results, nil
+}
+
+// sortByRelevance sorts search results so titles closely matching the query appear first.
+func sortByRelevance(results []media.SearchResult, query string) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	sort.SliceStable(results, func(i, j int) bool {
+		return relevanceScore(results[i].Title, q) > relevanceScore(results[j].Title, q)
+	})
+}
+
+// relevanceScore returns a score for how well a title matches a query.
+// Higher is better.
+func relevanceScore(title, queryLower string) int {
+	t := strings.ToLower(title)
+	switch {
+	case t == queryLower:
+		return 100 // exact match
+	case strings.HasPrefix(t, queryLower+":") || strings.HasPrefix(t, queryLower+" "):
+		return 90 // title starts with query (e.g., "Star Wars: Visions")
+	case strings.HasPrefix(t, queryLower):
+		return 85 // starts with query
+	case strings.Contains(t, queryLower):
+		return 70 // contains query as substring (e.g., "LEGO Star Wars")
+	default:
+		// Check if all query words appear in the title
+		words := strings.Fields(queryLower)
+		allFound := true
+		for _, w := range words {
+			if !strings.Contains(t, w) {
+				allFound = false
+				break
+			}
+		}
+		if allFound {
+			return 50 // all words present but not as phrase
+		}
+		return 10 // partial match
+	}
 }
 
 // GetDetails returns detailed metadata for a content item.
