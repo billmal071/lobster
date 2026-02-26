@@ -34,11 +34,21 @@ func parseSearchResults(doc *goquery.Document) []media.SearchResult {
 			result.Type = media.Movie
 		}
 
-		// Extract metadata (year, seasons, episodes)
-		s.Find(".fd-infor span").Each(func(_ int, span *goquery.Selection) {
+		// Extract metadata (year, duration, seasons, episodes)
+		s.Find(".fd-infor span.fdi-item").Each(func(_ int, span *goquery.Selection) {
 			text := strings.TrimSpace(span.Text())
 			if _, err := strconv.Atoi(text); err == nil && len(text) == 4 {
 				result.Year = text
+			} else if strings.HasSuffix(text, "m") {
+				result.Duration = text
+			} else if strings.HasPrefix(text, "SS ") {
+				if n, err := strconv.Atoi(strings.TrimPrefix(text, "SS ")); err == nil {
+					result.Seasons = n
+				}
+			} else if strings.HasPrefix(text, "EPS ") {
+				if n, err := strconv.Atoi(strings.TrimPrefix(text, "EPS ")); err == nil {
+					result.Episodes = n
+				}
 			}
 		})
 
@@ -152,6 +162,59 @@ func parseServers(doc *goquery.Document) []media.Server {
 	return servers
 }
 
+// parseDetailPage extracts detailed metadata from a content's detail page.
+func parseDetailPage(doc *goquery.Document) *media.ContentDetail {
+	detail := &media.ContentDetail{}
+
+	// Description
+	detail.Description = strings.TrimSpace(doc.Find(".description").First().Text())
+
+	// Rating and duration from .stats spans
+	doc.Find(".stats .item").Each(func(_ int, s *goquery.Selection) {
+		text := strings.TrimSpace(s.Text())
+		// Rating: contains star icon, text is just the number
+		if s.Find("i.fa-star, i.fas.fa-star").Length() > 0 {
+			detail.Rating = strings.TrimSpace(strings.TrimPrefix(text, ""))
+			// The icon text gets included, strip any non-numeric prefix
+			for i, c := range detail.Rating {
+				if c >= '0' && c <= '9' {
+					detail.Rating = detail.Rating[i:]
+					break
+				}
+			}
+		} else if strings.Contains(text, "min") {
+			detail.Duration = text
+		}
+	})
+
+	// Genre, Released, Country, Casts from .elements .row-line
+	doc.Find(".elements .row-line").Each(func(_ int, s *goquery.Selection) {
+		label := strings.TrimSpace(s.Find(".type").Text())
+		switch {
+		case strings.HasPrefix(label, "Genre"):
+			s.Find("a").Each(func(_ int, a *goquery.Selection) {
+				if g := strings.TrimSpace(a.Text()); g != "" {
+					detail.Genre = append(detail.Genre, g)
+				}
+			})
+		case strings.HasPrefix(label, "Released"):
+			// Text after the span
+			full := strings.TrimSpace(s.Text())
+			detail.Released = strings.TrimSpace(strings.TrimPrefix(full, label))
+		case strings.HasPrefix(label, "Country"):
+			detail.Country = strings.TrimSpace(s.Find("a").First().Text())
+		case strings.HasPrefix(label, "Casts"):
+			s.Find("a").Each(func(_ int, a *goquery.Selection) {
+				if c := strings.TrimSpace(a.Text()); c != "" {
+					detail.Casts = append(detail.Casts, c)
+				}
+			})
+		}
+	})
+
+	return detail
+}
+
 // parseLastPage extracts the last page number from pagination links.
 // Returns 1 if no pagination is found.
 func parseLastPage(doc *goquery.Document) int {
@@ -231,10 +294,20 @@ func parseTrendingResults(doc *goquery.Document, mediaType media.MediaType) []me
 			result.Type = media.Movie
 		}
 
-		s.Find(".fd-infor span").Each(func(_ int, span *goquery.Selection) {
+		s.Find(".fd-infor span.fdi-item").Each(func(_ int, span *goquery.Selection) {
 			text := strings.TrimSpace(span.Text())
 			if _, err := strconv.Atoi(text); err == nil && len(text) == 4 {
 				result.Year = text
+			} else if strings.HasSuffix(text, "m") {
+				result.Duration = text
+			} else if strings.HasPrefix(text, "SS ") {
+				if n, err := strconv.Atoi(strings.TrimPrefix(text, "SS ")); err == nil {
+					result.Seasons = n
+				}
+			} else if strings.HasPrefix(text, "EPS ") {
+				if n, err := strconv.Atoi(strings.TrimPrefix(text, "EPS ")); err == nil {
+					result.Episodes = n
+				}
 			}
 		})
 
@@ -246,7 +319,6 @@ func parseTrendingResults(doc *goquery.Document, mediaType media.MediaType) []me
 	return results
 }
 
-// formatDisplayTitle creates a display string for fzf selection.
 // FormatDisplayTitle creates a display string for fzf selection.
 func FormatDisplayTitle(r media.SearchResult) string {
 	parts := []string{r.Title}
@@ -254,9 +326,22 @@ func FormatDisplayTitle(r media.SearchResult) string {
 		parts = append(parts, fmt.Sprintf("(%s)", r.Year))
 	}
 	if r.Type == media.TV {
-		parts = append(parts, "[TV]")
+		meta := "[TV"
+		if r.Seasons > 0 {
+			meta += fmt.Sprintf(" S:%d", r.Seasons)
+		}
+		if r.Episodes > 0 {
+			meta += fmt.Sprintf(" Ep:%d", r.Episodes)
+		}
+		meta += "]"
+		parts = append(parts, meta)
 	} else {
-		parts = append(parts, "[Movie]")
+		meta := "[Movie"
+		if r.Duration != "" {
+			meta += " " + r.Duration
+		}
+		meta += "]"
+		parts = append(parts, meta)
 	}
 	return strings.Join(parts, " ")
 }

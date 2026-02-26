@@ -45,21 +45,68 @@ func playFlow(p provider.Provider, query string) error {
 		return fmt.Errorf("search failed: %w", err)
 	}
 
-	// Select content
 	items := make([]string, len(results))
 	for i, r := range results {
 		items[i] = provider.FormatDisplayTitle(r)
 	}
 
-	idx, err := ui.Select("Select", items)
-	if err != nil {
-		return err
+	for {
+		// Select content
+		idx, err := ui.Select("Select", items)
+		if err != nil {
+			return err
+		}
+
+		selected := results[idx]
+		debugf("selected: %s (ID: %s, type: %s)", selected.Title, selected.ID, selected.Type)
+
+		// Show details and confirm
+		detail, err := p.GetDetails(selected.ID)
+		if err != nil {
+			debugf("could not fetch details: %v", err)
+		} else {
+			printDetail(selected, detail)
+		}
+
+		ok, err := ui.Confirm("Play this?")
+		if err != nil {
+			return err
+		}
+		if ok {
+			return resolveAndPlay(p, selected, 0, 0)
+		}
+		// User declined — loop back to selection
+		fmt.Fprintln(os.Stderr)
 	}
+}
 
-	selected := results[idx]
-	debugf("selected: %s (ID: %s, type: %s)", selected.Title, selected.ID, selected.Type)
+// printDetail displays content metadata to stderr.
+func printDetail(r media.SearchResult, d *media.ContentDetail) {
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintf(os.Stderr, "  %s", r.Title)
+	if r.Year != "" {
+		fmt.Fprintf(os.Stderr, " (%s)", r.Year)
+	}
+	fmt.Fprintln(os.Stderr)
 
-	return resolveAndPlay(p, selected, 0, 0)
+	if d.Rating != "" {
+		fmt.Fprintf(os.Stderr, "  Rating:   %s\n", d.Rating)
+	}
+	if d.Duration != "" {
+		fmt.Fprintf(os.Stderr, "  Duration: %s\n", d.Duration)
+	} else if r.Duration != "" {
+		fmt.Fprintf(os.Stderr, "  Duration: %s\n", r.Duration)
+	}
+	if r.Type == media.TV && r.Seasons > 0 {
+		fmt.Fprintf(os.Stderr, "  Seasons:  %d (%d episodes)\n", r.Seasons, r.Episodes)
+	}
+	if len(d.Genre) > 0 {
+		fmt.Fprintf(os.Stderr, "  Genre:    %s\n", strings.Join(d.Genre, ", "))
+	}
+	if d.Description != "" {
+		fmt.Fprintf(os.Stderr, "\n  %s\n", d.Description)
+	}
+	fmt.Fprintln(os.Stderr)
 }
 
 // resolveAndPlay handles season/episode selection for TV and then plays.

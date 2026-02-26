@@ -26,9 +26,21 @@ type SearchResult struct {
 	Title    string    // Display title
 	Type     MediaType // Movie or TV
 	Year     string    // Release year
+	Duration string    // Duration string (e.g., "121m" for movies, "EPS 18" for TV)
 	Seasons  int       // Number of seasons (TV only)
 	Episodes int       // Total episodes (TV only)
 	URL      string    // Full URL to the content page
+}
+
+// ContentDetail contains detailed metadata fetched from a content's detail page.
+type ContentDetail struct {
+	Description string   // Synopsis/overview
+	Rating      string   // Rating score (e.g., "8.6")
+	Duration    string   // Duration (e.g., "121 min")
+	Genre       []string // Genre list
+	Released    string   // Release date
+	Country     string   // Country of origin
+	Casts       []string // Cast members
 }
 
 // Season represents a TV show season.

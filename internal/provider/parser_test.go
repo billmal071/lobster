@@ -41,6 +41,9 @@ func TestParseSearchResults(t *testing.T) {
 	if results[0].Year != "1973" {
 		t.Errorf("result[0].Year = %q, want '1973'", results[0].Year)
 	}
+	if results[0].Duration != "122m" {
+		t.Errorf("result[0].Duration = %q, want '122m'", results[0].Duration)
+	}
 	if results[0].ID != "movie/free-the-exorcist-hd-75043" {
 		t.Errorf("result[0].ID = %q, want 'movie/free-the-exorcist-hd-75043'", results[0].ID)
 	}
@@ -51,6 +54,12 @@ func TestParseSearchResults(t *testing.T) {
 	}
 	if results[1].Type != media.TV {
 		t.Errorf("result[1].Type = %v, want TV", results[1].Type)
+	}
+	if results[1].Seasons != 5 {
+		t.Errorf("result[1].Seasons = %d, want 5", results[1].Seasons)
+	}
+	if results[1].Episodes != 62 {
+		t.Errorf("result[1].Episodes = %d, want 62", results[1].Episodes)
 	}
 }
 
@@ -156,15 +165,18 @@ func TestParseTrendingResultsTV(t *testing.T) {
 	if results[0].Type != media.TV {
 		t.Errorf("result[0].Type = %v, want TV", results[0].Type)
 	}
-	if results[0].Year != "2023" {
-		t.Errorf("result[0].Year = %q, want '2023'", results[0].Year)
+	if results[0].Seasons != 2 {
+		t.Errorf("result[0].Seasons = %d, want 2", results[0].Seasons)
+	}
+	if results[0].Episodes != 12 {
+		t.Errorf("result[0].Episodes = %d, want 12", results[0].Episodes)
 	}
 
 	if results[1].Title != "Shogun" {
 		t.Errorf("result[1].Title = %q, want 'Shogun'", results[1].Title)
 	}
-	if results[1].Year != "2024" {
-		t.Errorf("result[1].Year = %q, want '2024'", results[1].Year)
+	if results[1].Seasons != 1 {
+		t.Errorf("result[1].Seasons = %d, want 1", results[1].Seasons)
 	}
 }
 
@@ -185,12 +197,22 @@ func TestFormatDisplayTitle(t *testing.T) {
 		expected string
 	}{
 		{
-			"movie with year",
+			"movie with year and duration",
+			media.SearchResult{Title: "Inception", Year: "2010", Type: media.Movie, Duration: "148m"},
+			"Inception (2010) [Movie 148m]",
+		},
+		{
+			"movie with year no duration",
 			media.SearchResult{Title: "Inception", Year: "2010", Type: media.Movie},
 			"Inception (2010) [Movie]",
 		},
 		{
-			"tv without year",
+			"tv with seasons and episodes",
+			media.SearchResult{Title: "Breaking Bad", Type: media.TV, Seasons: 5, Episodes: 62},
+			"Breaking Bad [TV S:5 Ep:62]",
+		},
+		{
+			"tv without metadata",
 			media.SearchResult{Title: "Breaking Bad", Type: media.TV},
 			"Breaking Bad [TV]",
 		},

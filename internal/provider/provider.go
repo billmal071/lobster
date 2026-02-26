@@ -11,6 +11,9 @@ type Provider interface {
 	// Search returns matching results for a query.
 	Search(query string) ([]media.SearchResult, error)
 
+	// GetDetails returns detailed metadata for a content item.
+	GetDetails(id string) (*media.ContentDetail, error)
+
 	// GetSeasons returns available seasons for a TV show.
 	GetSeasons(id string) ([]media.Season, error)
 

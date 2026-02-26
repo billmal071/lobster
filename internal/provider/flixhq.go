@@ -75,6 +75,21 @@ func (f *FlixHQ) Search(query string) ([]media.SearchResult, error) {
 	return results, nil
 }
 
+// GetDetails returns detailed metadata for a content item.
+func (f *FlixHQ) GetDetails(id string) (*media.ContentDetail, error) {
+	if err := httputil.ValidateID(id); err != nil {
+		return nil, fmt.Errorf("invalid content ID: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/%s", f.baseURL(), id)
+	doc, err := f.fetchDocument(url)
+	if err != nil {
+		return nil, fmt.Errorf("getting details: %w", err)
+	}
+
+	return parseDetailPage(doc), nil
+}
+
 // GetSeasons returns available seasons for a TV show.
 func (f *FlixHQ) GetSeasons(id string) ([]media.Season, error) {
 	if err := httputil.ValidateID(id); err != nil {
