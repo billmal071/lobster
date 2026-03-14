@@ -37,9 +37,15 @@ func Download(stream *media.Stream, title string, outputDir string, subFile stri
 		return "", fmt.Errorf("invalid output path: %w", err)
 	}
 
+	// Skip if file already exists and has content
+	if info, err := os.Stat(outputPath); err == nil && info.Size() > 0 {
+		fmt.Fprintf(os.Stderr, "Already exists, skipping: %s\n", outputPath)
+		return outputPath, nil
+	}
+
 	// Build ffmpeg args as explicit slice
 	args := []string{
-		"-y", // Overwrite output
+		"-y", // Overwrite output (for partial/empty files)
 		"-i", stream.URL,
 	}
 
