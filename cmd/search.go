@@ -176,9 +176,44 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 					episodeItems[i] = fmt.Sprintf("Episode %d", ep.Number)
 				}
 			}
+
+			// In download mode, offer batch options
+			if flagDownload != "" {
+				batchItems := []string{"Download all episodes", "Download range (e.g., 1-5)"}
+				episodeItems = append(batchItems, episodeItems...)
+			}
+
 			episodeIdx, err = ui.Select("Episode", episodeItems)
 			if err != nil {
 				return err
+			}
+
+			// Handle batch options
+			if flagDownload != "" {
+				if episodeIdx == 0 {
+					// Download all episodes
+					return batchDownload(p, selected, episodes, selectedSeason)
+				} else if episodeIdx == 1 {
+					// Download range
+					for {
+						rangeInput, err := ui.Input("Episode range")
+						if err != nil {
+							return err
+						}
+						matched, err := parseEpisodeRange(rangeInput, episodes)
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "Invalid range: %v\n", err)
+							continue
+						}
+						if len(matched) == 0 {
+							fmt.Fprintln(os.Stderr, "No episodes matched the range.")
+							continue
+						}
+						return batchDownload(p, selected, matched, selectedSeason)
+					}
+				}
+				// Offset index by 2 for injected batch options
+				episodeIdx -= 2
 			}
 		}
 
@@ -260,15 +295,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 
 	// Download mode
 	if flagDownload != "" {
-		dir := flagDownload
-		if dir == "" {
-			var err error
-			dir, err = cfg.ExpandDownloadDir()
-			if err != nil {
-				return fmt.Errorf("resolving download dir: %w", err)
-			}
-		}
-		outputPath, err := download.Download(stream, title, dir, subFile)
+		outputPath, err := download.Download(stream, title, flagDownload, subFile)
 		if err != nil {
 			return err
 		}
