@@ -236,30 +236,32 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		return fmt.Errorf("no servers found")
 	}
 
-	// Find preferred server
-	serverIdx := 0
-	for i, s := range servers {
-		if strings.EqualFold(s.Name, cfg.Provider) {
-			serverIdx = i
-			break
+	// Try servers in order: preferred first, then fallbacks
+	ordered := orderServers(servers, cfg.Provider)
+	var stream *media.Stream
+	for _, srv := range ordered {
+		debugf("trying server: %s (ID: %s)", srv.Name, srv.ID)
+
+		embedURL, err := p.GetEmbedURL(srv.ID)
+		if err != nil {
+			debugf("server %s embed failed: %v", srv.Name, err)
+			continue
 		}
-	}
-	debugf("using server: %s (ID: %s)", servers[serverIdx].Name, servers[serverIdx].ID)
+		debugf("embed URL: %s", embedURL)
 
-	// Get embed URL
-	embedURL, err := p.GetEmbedURL(servers[serverIdx].ID)
-	if err != nil {
-		return fmt.Errorf("getting embed URL: %w", err)
+		ext := extract.New()
+		stream, err = ext.Extract(embedURL, cfg.Quality)
+		if err != nil {
+			debugf("server %s extract failed: %v", srv.Name, err)
+			fmt.Fprintf(os.Stderr, "Server %s failed, trying next...\n", srv.Name)
+			continue
+		}
+		debugf("stream URL: %s (server: %s)", stream.URL, srv.Name)
+		break
 	}
-	debugf("embed URL: %s", embedURL)
-
-	// Extract stream from embed URL
-	ext := extract.New()
-	stream, err := ext.Extract(embedURL, cfg.Quality)
-	if err != nil {
-		return fmt.Errorf("decrypting stream: %w", err)
+	if stream == nil {
+		return fmt.Errorf("all servers failed for %s", title)
 	}
-	debugf("stream URL: %s", stream.URL)
 
 	// JSON output mode
 	if flagJSON {

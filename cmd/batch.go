@@ -152,7 +152,7 @@ func batchDownload(p provider.Provider, selected media.SearchResult, episodes []
 	return nil
 }
 
-// downloadSingleEpisode resolves and downloads one episode.
+// downloadSingleEpisode resolves and downloads one episode, trying fallback servers on failure.
 func downloadSingleEpisode(p provider.Provider, selected media.SearchResult, ep media.Episode, outputDir, title string) error {
 	// Get servers
 	servers, err := p.GetServers(selected.ID, ep.ID)
@@ -163,18 +163,31 @@ func downloadSingleEpisode(p provider.Provider, selected media.SearchResult, ep 
 		return fmt.Errorf("no servers found")
 	}
 
-	// Find preferred server
-	serverIdx := 0
-	for i, s := range servers {
-		if strings.EqualFold(s.Name, cfg.Provider) {
-			serverIdx = i
-			break
+	// Order servers: preferred first, then the rest as fallbacks
+	ordered := orderServers(servers, cfg.Provider)
+
+	var lastErr error
+	for _, srv := range ordered {
+		debugf("trying server: %s (ID: %s)", srv.Name, srv.ID)
+
+		err := tryDownloadFromServer(p, srv, title, outputDir)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		debugf("server %s failed: %v", srv.Name, err)
+		if len(ordered) > 1 {
+			fmt.Fprintf(os.Stderr, "  Server %s failed, trying next...\n", srv.Name)
 		}
 	}
-	debugf("using server: %s (ID: %s)", servers[serverIdx].Name, servers[serverIdx].ID)
 
+	return lastErr
+}
+
+// tryDownloadFromServer attempts to resolve and download from a single server.
+func tryDownloadFromServer(p provider.Provider, srv media.Server, title, outputDir string) error {
 	// Get embed URL
-	embedURL, err := p.GetEmbedURL(servers[serverIdx].ID)
+	embedURL, err := p.GetEmbedURL(srv.ID)
 	if err != nil {
 		return fmt.Errorf("getting embed URL: %w", err)
 	}
@@ -212,6 +225,22 @@ func downloadSingleEpisode(p provider.Provider, selected media.SearchResult, ep 
 	}
 
 	return dlErr
+}
+
+// orderServers returns servers with the preferred one first, rest as fallbacks.
+func orderServers(servers []media.Server, preferred string) []media.Server {
+	ordered := make([]media.Server, 0, len(servers))
+	var rest []media.Server
+
+	for _, s := range servers {
+		if strings.EqualFold(s.Name, preferred) {
+			ordered = append([]media.Server{s}, ordered...)
+		} else {
+			rest = append(rest, s)
+		}
+	}
+
+	return append(ordered, rest...)
 }
 
 // formatEpisodeLabel creates a display label like "E01 - The Duel" or "E01".
