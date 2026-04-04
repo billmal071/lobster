@@ -9,6 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
+
+	"golang.org/x/term"
 )
 
 // Select presents items to the user via fzf and returns the selected item's index.
@@ -116,4 +119,67 @@ func Input(prompt string) (string, error) {
 	}
 
 	return query, nil
+}
+
+// SelectWithTimeout presents a countdown prompt. If the user does not press
+// any key within the timeout, it returns defaultIdx. If the user presses any
+// key, it falls through to a normal fzf Select with the given items.
+// Pressing 'q' cancels and returns an error.
+func SelectWithTimeout(prompt string, items []string, defaultIdx int, timeout time.Duration) (int, error) {
+	if len(items) == 0 {
+		return -1, fmt.Errorf("no items to select from")
+	}
+	if defaultIdx < 0 || defaultIdx >= len(items) {
+		return -1, fmt.Errorf("default index %d out of range", defaultIdx)
+	}
+
+	// Put terminal into raw mode to catch single keypress
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		// Fallback: can't do raw mode, just show the menu
+		return Select(prompt, items)
+	}
+
+	fmt.Fprintf(os.Stderr, "\n  %s: %s\n", prompt, items[defaultIdx])
+
+	// Channel for keypress
+	keyCh := make(chan byte, 1)
+	go func() {
+		buf := make([]byte, 1)
+		n, _ := os.Stdin.Read(buf)
+		if n > 0 {
+			keyCh <- buf[0]
+		}
+	}()
+
+	// Countdown with 1-second ticks
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	deadline := time.After(timeout)
+	remaining := int(timeout.Seconds())
+
+	fmt.Fprintf(os.Stderr, "\r  Playing in %ds — press Enter for menu, q to quit...", remaining)
+
+	for {
+		select {
+		case key := <-keyCh:
+			term.Restore(int(os.Stdin.Fd()), oldState)
+			fmt.Fprintf(os.Stderr, "\r\033[K")
+			if key == 'q' || key == 'Q' {
+				return -1, fmt.Errorf("selection cancelled")
+			}
+			return Select(prompt, items)
+
+		case <-ticker.C:
+			remaining--
+			if remaining > 0 {
+				fmt.Fprintf(os.Stderr, "\r  Playing in %ds — press Enter for menu, q to quit...", remaining)
+			}
+
+		case <-deadline:
+			term.Restore(int(os.Stdin.Fd()), oldState)
+			fmt.Fprintf(os.Stderr, "\r\033[K")
+			return defaultIdx, nil
+		}
+	}
 }
