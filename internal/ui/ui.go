@@ -158,7 +158,7 @@ func SelectWithTimeout(prompt string, items []string, defaultIdx int, timeout ti
 	deadline := time.After(timeout)
 	remaining := int(timeout.Seconds())
 
-	fmt.Fprintf(os.Stderr, "\r  Playing in %ds — press Enter for menu, q to quit...", remaining)
+	fmt.Fprintf(os.Stderr, "\r  Playing in %ds — press any key for menu, q to quit...", remaining)
 
 	for {
 		select {
@@ -173,12 +173,18 @@ func SelectWithTimeout(prompt string, items []string, defaultIdx int, timeout ti
 		case <-ticker.C:
 			remaining--
 			if remaining > 0 {
-				fmt.Fprintf(os.Stderr, "\r  Playing in %ds — press Enter for menu, q to quit...", remaining)
+				fmt.Fprintf(os.Stderr, "\r  Playing in %ds — press any key for menu, q to quit...", remaining)
 			}
 
 		case <-deadline:
 			term.Restore(int(os.Stdin.Fd()), oldState)
 			fmt.Fprintf(os.Stderr, "\r\033[K")
+			// Drain any byte the goroutine may have read to prevent
+			// it from corrupting the next stdin read.
+			select {
+			case <-keyCh:
+			default:
+			}
 			return defaultIdx, nil
 		}
 	}
