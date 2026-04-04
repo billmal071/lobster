@@ -20,6 +20,7 @@ type Config struct {
 	SubsLanguage string `toml:"subs_language"`
 	Quality      string `toml:"quality"`
 	History      bool   `toml:"history"`
+	AutoNext     bool   `toml:"auto_next"`
 	DownloadDir  string `toml:"download_dir"`
 	Debug        bool   `toml:"debug"`
 }
@@ -33,6 +34,7 @@ func Default() *Config {
 		SubsLanguage: "english",
 		Quality:      "1080",
 		History:      true,
+		AutoNext:     true,
 		DownloadDir:  "~/Videos/lobster",
 		Debug:        false,
 	}
