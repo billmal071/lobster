@@ -21,11 +21,15 @@ Lobster is a security-hardened Go rewrite of [lobster.sh](https://github.com/jus
 - 🔍 Search movies and TV shows by name
 - 🔥 Browse trending and recently added content
 - 🎬 Stream in mpv, vlc, iina, or celluloid
+- 🔄 Continuous playback — auto-plays next episode with 10s countdown
+- 🧭 Episode navigation — next, previous, replay, episode list, cross-season
 - ⬇ Download with ffmpeg for offline viewing
 - 🌍 Subtitles with automatic language matching
 - ▶ Watch history with resume support (`--continue`)
-- 🎞 Quality selection — 360p, 480p, 720p, 1080p
+- 🎞 Quality selection — 360p, 480p, 720p, 1080p (HLS variant matching)
 - 📦 JSON output mode for scripting and piping
+
+See [GUIDE.md](GUIDE.md) for detailed usage instructions.
 
 ---
 
@@ -85,6 +89,7 @@ lobster/
 ├── cmd/                    # CLI commands (Cobra)
 │   ├── root.go             # Root command, config loading, global flags
 │   ├── search.go           # Search → select → play flow
+│   ├── session.go          # Continuous playback loop and episode menu
 │   ├── trending.go         # trending and recent commands
 │   ├── history.go          # Watch history resume
 │   └── version.go          # version command
@@ -96,6 +101,7 @@ lobster/
 │   ├── httputil/           # Hardened HTTP client, input sanitisation
 │   ├── media/              # Shared types (Stream, SearchResult, etc.)
 │   ├── player/             # Player backends (mpv, vlc, iina, celluloid)
+│   ├── playlist/           # Episode navigation and session state
 │   ├── provider/           # FlixHQ scraper and HTML parser
 │   ├── subtitle/           # Subtitle download and language matching
 │   └── ui/                 # fzf-based terminal UI
