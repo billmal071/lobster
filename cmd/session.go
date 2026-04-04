@@ -161,7 +161,7 @@ func episodeListMenu(sess *playlist.Session) error {
 		return err
 	}
 
-	sess.EpisodeIdx = idx
+	sess.SetEpisodes(sess.Episodes, sess.SeasonIdx, idx)
 	debugf("selected: %s", sess.Title())
 	return nil
 }
