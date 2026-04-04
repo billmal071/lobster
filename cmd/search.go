@@ -13,6 +13,7 @@ import (
 	"lobster/internal/history"
 	"lobster/internal/media"
 	"lobster/internal/player"
+	"lobster/internal/playlist"
 	"lobster/internal/provider"
 	"lobster/internal/subtitle"
 	"lobster/internal/ui"
@@ -218,13 +219,15 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		}
 
 		selectedEpisode := episodes[episodeIdx]
-		episodeID = selectedEpisode.ID
-		title = fmt.Sprintf("%s S%02dE%02d", selected.Title, selectedSeason.Number, selectedEpisode.Number)
-		season = selectedSeason.Number
-		episode = selectedEpisode.Number
+		debugf("episode: %d (ID: %s)", selectedEpisode.Number, selectedEpisode.ID)
 
-		debugf("episode: %d (ID: %s)", selectedEpisode.Number, episodeID)
+		// Create a playlist session for continuous playback
+		sess := playlist.New(p, selected, seasons, episodes, seasonIdx, episodeIdx)
+		cachedServer = nil // start fresh
+		return runPlaybackLoop(sess)
 	}
+
+	// --- Movie path (unchanged below) ---
 
 	// Get servers
 	servers, err := p.GetServers(selected.ID, episodeID)
