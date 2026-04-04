@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -128,11 +129,20 @@ func (m *MegaCloudExtractor) Extract(embedURL string, preferredQuality string) (
 	}
 
 	// Step 6: Select best source URL
+	// First, check if any source URL directly contains the quality string
 	streamURL := sources[0].File
 	for _, s := range sources {
 		if strings.Contains(s.File, preferredQuality) {
 			streamURL = s.File
 			break
+		}
+	}
+
+	// If the source is an HLS master playlist, try to select the variant
+	// matching the preferred quality (e.g., 1080p, 720p)
+	if strings.HasSuffix(streamURL, ".m3u8") || strings.Contains(streamURL, ".m3u8") {
+		if variantURL, err := m.selectHLSVariant(streamURL, preferredQuality, embedURL); err == nil && variantURL != "" {
+			streamURL = variantURL
 		}
 	}
 
@@ -154,6 +164,116 @@ func (m *MegaCloudExtractor) Extract(embedURL string, preferredQuality string) (
 		Subtitles: subtitles,
 		Quality:   preferredQuality,
 	}, nil
+}
+
+// selectHLSVariant fetches a master m3u8 playlist and returns the variant URL
+// that best matches the preferred quality (by resolution height).
+// Returns empty string if the playlist can't be parsed or no match is found.
+func (m *MegaCloudExtractor) selectHLSVariant(masterURL, preferredQuality, referer string) (string, error) {
+	req, err := http.NewRequest(http.MethodGet, masterURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/121.0")
+	if referer != "" {
+		req.Header.Set("Referer", referer)
+	}
+
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
+	if err != nil {
+		return "", err
+	}
+
+	content := string(body)
+	if !strings.Contains(content, "#EXTM3U") {
+		return "", fmt.Errorf("not an m3u8 playlist")
+	}
+
+	// Parse RESOLUTION from EXT-X-STREAM-INF lines
+	// Format: #EXT-X-STREAM-INF:...,RESOLUTION=1920x1080,...
+	resolutionRe := regexp.MustCompile(`RESOLUTION=\d+x(\d+)`)
+	lines := strings.Split(content, "\n")
+
+	type variant struct {
+		height int
+		url    string
+	}
+	var variants []variant
+
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "#EXT-X-STREAM-INF") {
+			continue
+		}
+		matches := resolutionRe.FindStringSubmatch(line)
+		if len(matches) < 2 {
+			continue
+		}
+		height, err := strconv.Atoi(matches[1])
+		if err != nil {
+			continue
+		}
+		// Next non-empty, non-comment line is the variant URL
+		for j := i + 1; j < len(lines); j++ {
+			variantLine := strings.TrimSpace(lines[j])
+			if variantLine == "" || strings.HasPrefix(variantLine, "#") {
+				continue
+			}
+			variantURL := variantLine
+			// Handle relative URLs
+			if !strings.HasPrefix(variantURL, "http") {
+				base := masterURL[:strings.LastIndex(masterURL, "/")+1]
+				variantURL = base + variantURL
+			}
+			variants = append(variants, variant{height: height, url: variantURL})
+			break
+		}
+	}
+
+	if len(variants) == 0 {
+		return "", fmt.Errorf("no variants found")
+	}
+
+	// Find the variant matching preferred quality
+	targetHeight, err := strconv.Atoi(preferredQuality)
+	if err != nil {
+		return "", fmt.Errorf("invalid quality %q", preferredQuality)
+	}
+
+	// Exact match first
+	for _, v := range variants {
+		if v.height == targetHeight {
+			return v.url, nil
+		}
+	}
+
+	// Closest match not exceeding preferred quality
+	var best *variant
+	for i := range variants {
+		v := &variants[i]
+		if v.height <= targetHeight {
+			if best == nil || v.height > best.height {
+				best = v
+			}
+		}
+	}
+	if best != nil {
+		return best.url, nil
+	}
+
+	// If all variants exceed preferred quality, pick the lowest available
+	lowest := &variants[0]
+	for i := range variants {
+		if variants[i].height < lowest.height {
+			lowest = &variants[i]
+		}
+	}
+	return lowest.url, nil
 }
 
 // parseEmbedURL extracts domain, embed prefix, and source ID from an embed URL.
