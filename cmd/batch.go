@@ -243,6 +243,25 @@ func orderServers(servers []media.Server, preferred string) []media.Server {
 	return append(ordered, rest...)
 }
 
+// orderServersWithCache orders servers: cached name first, then preferred, then rest.
+func orderServersWithCache(servers []media.Server, preferred, cached string) []media.Server {
+	if cached == "" {
+		return orderServers(servers, preferred)
+	}
+	ordered := make([]media.Server, 0, len(servers))
+	var rest []media.Server
+	for _, s := range servers {
+		if strings.EqualFold(s.Name, cached) {
+			ordered = append([]media.Server{s}, ordered...)
+		} else if strings.EqualFold(s.Name, preferred) {
+			ordered = append(ordered, s)
+		} else {
+			rest = append(rest, s)
+		}
+	}
+	return append(ordered, rest...)
+}
+
 // formatEpisodeLabel creates a display label like "E01 - The Duel" or "E01".
 func formatEpisodeLabel(ep media.Episode) string {
 	if ep.Title != "" {
