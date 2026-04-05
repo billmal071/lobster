@@ -223,7 +223,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 
 		// Create a playlist session for continuous playback
 		sess := playlist.New(p, selected, seasons, episodes, seasonIdx, episodeIdx)
-		cachedServer = nil // start fresh
+		cachedServerName = ""
 		return runPlaybackLoop(sess)
 	}
 

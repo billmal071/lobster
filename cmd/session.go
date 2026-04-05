@@ -16,8 +16,8 @@ import (
 	"lobster/internal/ui"
 )
 
-// cachedServer holds the last working server to reuse across episodes.
-var cachedServer *media.Server
+// cachedServerName is the last working server name, preferred for the next episode.
+var cachedServerName string
 
 // runPlaybackLoop plays the current episode and then loops with a
 // countdown/menu for continuous playback.
@@ -166,32 +166,30 @@ func episodeListMenu(sess *playlist.Session) error {
 	return nil
 }
 
-// resolveStream gets a playable stream, trying the cached server first.
-func resolveStream(sess *playlist.Session) (*media.Stream, error) {
+// resolveStream fetches servers for the current episode and tries them in order.
+// excludeNames lists server names to skip (e.g., servers whose streams failed during playback).
+// If a server worked previously (cachedServerName), it's tried first.
+// Returns the stream and the server name that provided it.
+func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media.Stream, string, error) {
 	episodeID := sess.Current().ID
 
-	// Try cached server first
-	if cachedServer != nil {
-		debugf("trying cached server: %s", cachedServer.Name)
-		stream, err := tryServer(sess, cachedServer)
-		if err == nil {
-			return stream, nil
-		}
-		debugf("cached server failed: %v", err)
-		cachedServer = nil
-	}
-
-	// Full resolution: get all servers and try in order
+	// Always fetch fresh servers — IDs are episode-specific
 	servers, err := sess.Provider.GetServers(sess.Content.ID, episodeID)
 	if err != nil {
-		return nil, fmt.Errorf("getting servers: %w", err)
+		return nil, "", fmt.Errorf("getting servers: %w", err)
 	}
 	if len(servers) == 0 {
-		return nil, fmt.Errorf("no servers found for %s", sess.Title())
+		return nil, "", fmt.Errorf("no servers found for %s", sess.Title())
 	}
 
-	ordered := orderServers(servers, cfg.Provider)
+	// Order servers: prefer cached server name, then user-configured provider, then rest
+	ordered := orderServersWithCache(servers, cfg.Provider, cachedServerName)
+
 	for _, srv := range ordered {
+		if excludeNames[srv.Name] {
+			debugf("skipping excluded server: %s (ID: %s)", srv.Name, srv.ID)
+			continue
+		}
 		debugf("trying server: %s (ID: %s)", srv.Name, srv.ID)
 		stream, err := tryServer(sess, &srv)
 		if err != nil {
@@ -199,11 +197,11 @@ func resolveStream(sess *playlist.Session) (*media.Stream, error) {
 			fmt.Fprintf(os.Stderr, "Server %s failed, trying next...\n", srv.Name)
 			continue
 		}
-		cachedServer = &srv
-		return stream, nil
+		cachedServerName = srv.Name
+		return stream, srv.Name, nil
 	}
 
-	return nil, fmt.Errorf("all servers failed for %s", sess.Title())
+	return nil, "", fmt.Errorf("all servers failed for %s", sess.Title())
 }
 
 // tryServer attempts to extract a stream from a single server.
@@ -224,34 +222,34 @@ func tryServer(sess *playlist.Session, srv *media.Server) (*media.Stream, error)
 }
 
 // playCurrentEpisode resolves the stream and plays the current episode.
+// If playback fails mid-stream, it retries with a different source.
 func playCurrentEpisode(sess *playlist.Session) error {
 	title := sess.Title()
+	excludeNames := make(map[string]bool)
 
-	// JSON output mode — play once and return
+	// JSON output mode — no retry needed
 	if flagJSON {
-		stream, err := resolveStream(sess)
+		stream, _, err := resolveStream(sess, excludeNames)
 		if err != nil {
 			return err
 		}
 		return outputJSON(stream, title)
 	}
 
-	// Download mode — download once and return
+	// Download mode — no retry needed
 	if flagDownload != "" {
-		stream, err := resolveStream(sess)
+		stream, _, err := resolveStream(sess, excludeNames)
 		if err != nil {
 			return err
 		}
 		return downloadEpisode(stream, title)
 	}
 
-	// Normal playback
-	stream, err := resolveStream(sess)
-	if err != nil {
-		return err
+	// Normal playback with retry on failure
+	p := player.New(cfg.Player)
+	if !p.Available() {
+		return fmt.Errorf("player %q not found in PATH", cfg.Player)
 	}
-
-	subFile := resolveSubtitles(stream)
 
 	var startPos float64
 	if flagContinue && cfg.History {
@@ -267,18 +265,32 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		}
 	}
 
-	p := player.New(cfg.Player)
-	if !p.Available() {
-		return fmt.Errorf("player %q not found in PATH", cfg.Player)
-	}
+	for {
+		stream, serverName, err := resolveStream(sess, excludeNames)
+		if err != nil {
+			return err
+		}
 
-	lastPos, err := p.Play(stream, title, startPos, subFile)
-	if err != nil {
-		return fmt.Errorf("playback failed: %w", err)
-	}
+		subFile := resolveSubtitles(stream)
 
-	sess.LastPosition = lastPos
-	return nil
+		lastPos, playErr := p.Play(stream, title, startPos, subFile)
+		if playErr == nil {
+			sess.LastPosition = lastPos
+			return nil
+		}
+
+		// Playback failed — if user watched some of it, resume from there
+		if lastPos > 0 {
+			startPos = lastPos
+			debugf("playback stopped at %.0fs, will resume from there", lastPos)
+		}
+
+		// Exclude this server and try the next one
+		excludeNames[serverName] = true
+		cachedServerName = ""
+		fmt.Fprintf(os.Stderr, "Playback stopped, trying another source...\n")
+		debugf("playback error: %v (server %s excluded)", playErr, serverName)
+	}
 }
 
 // resolveSubtitles downloads the best-match subtitle file.
