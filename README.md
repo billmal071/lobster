@@ -44,12 +44,23 @@ See [GUIDE.md](GUIDE.md) for detailed usage instructions.
 
 ## Installation
 
+### Quick Install (Linux & macOS)
+
+You can easily install Lobster system-wide by running our automatic installation script. It automatically detects your OS and architecture, and downloads the appropriate system package (`.deb`, `.rpm`, or `.tar.gz`) to install dependencies like `fzf`.
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/billmal071/lobster/main/install.sh | sh
+```
+
+### From Source (macOS / Linux)
+
 ```bash
 brew install go fzf mpv
 
 git clone https://github.com/billmal071/lobster && cd lobster
 
 go build -o lobster .
+sudo make install # installs to /usr/local/bin
 ```
 
 ---
