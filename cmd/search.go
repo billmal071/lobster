@@ -16,6 +16,7 @@ import (
 	"lobster/internal/playlist"
 	"lobster/internal/provider"
 	"lobster/internal/subtitle"
+	"lobster/internal/tui"
 	"lobster/internal/ui"
 )
 
@@ -23,25 +24,31 @@ import (
 func searchRun(cmd *cobra.Command, args []string) error {
 	query := strings.Join(args, " ")
 
+	p := provider.NewFlixHQ(cfg.Base)
+
 	if query == "" {
-		// Prompt for query via fzf
-		var err error
-		query, err = ui.Input("Search")
+		// Launch the rich TUI Dashboard
+		selected, err := tui.StartApp(p, cfg)
 		if err != nil {
-			return fmt.Errorf("no search query provided")
+			return err
 		}
+		if selected != nil {
+			return resolveAndPlay(p, *selected, 0, 0)
+		}
+		return nil
 	}
 
 	debugf("searching for: %s", query)
 
-	p := provider.NewFlixHQ(cfg.Base)
 	return playFlow(p, query)
 }
 
 // playFlow handles the full search -> select -> play flow.
 func playFlow(p provider.Provider, query string) error {
 	// Search
+	stop := ui.StartSpinner(fmt.Sprintf("Searching for %q...", query))
 	results, err := p.Search(query)
+	stop()
 	if err != nil {
 		return fmt.Errorf("search failed: %w", err)
 	}
@@ -117,7 +124,9 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 
 	if selected.Type == media.TV {
 		// Get seasons
+		stopSeasons := ui.StartSpinner("Fetching seasons...")
 		seasons, err := p.GetSeasons(selected.ID)
+		stopSeasons()
 		if err != nil {
 			return fmt.Errorf("getting seasons: %w", err)
 		}
@@ -150,7 +159,9 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		debugf("season: %d (ID: %s)", selectedSeason.Number, selectedSeason.ID)
 
 		// Get episodes
+		stopEps := ui.StartSpinner("Fetching episodes...")
 		episodes, err := p.GetEpisodes(selected.ID, selectedSeason.ID)
+		stopEps()
 		if err != nil {
 			return fmt.Errorf("getting episodes: %w", err)
 		}
@@ -227,10 +238,12 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		return runPlaybackLoop(sess)
 	}
 
-	// --- Movie path (unchanged below) ---
+
 
 	// Get servers
+	stopServer := ui.StartSpinner("Negotiating stream servers...")
 	servers, err := p.GetServers(selected.ID, episodeID)
+	stopServer()
 	if err != nil {
 		return fmt.Errorf("getting servers: %w", err)
 	}
@@ -240,6 +253,9 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	}
 
 	// Try servers in order: preferred first, then fallbacks
+	stopExt := ui.StartSpinner(fmt.Sprintf("Extracting %s media stream...", title))
+	defer stopExt() // Just defer to be safe when it breaks or returns
+
 	ordered := orderServers(servers, cfg.Provider)
 	var stream *media.Stream
 	for _, srv := range ordered {
@@ -265,6 +281,9 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	if stream == nil {
 		return fmt.Errorf("all servers failed for %s", title)
 	}
+	
+	// Stop extraction spinner before printing/playing
+	stopExt()
 
 	// JSON output mode
 	if flagJSON {
