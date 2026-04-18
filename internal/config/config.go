@@ -40,17 +40,7 @@ func Default() *Config {
 	}
 }
 
-// configDir returns the XDG-compliant config directory.
-func configDir() (string, error) {
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "lobster"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("getting home directory: %w", err)
-	}
-	return filepath.Join(home, ".config", "lobster"), nil
-}
+// configDir is defined in paths_unix.go / paths_windows.go.
 
 // ConfigPath returns the path to the config file.
 func ConfigPath() (string, error) {
@@ -123,7 +113,7 @@ func (c *Config) Validate() error {
 // ExpandDownloadDir resolves ~ in the download directory path.
 func (c *Config) ExpandDownloadDir() (string, error) {
 	dir := c.DownloadDir
-	if strings.HasPrefix(dir, "~/") {
+	if strings.HasPrefix(dir, "~/") || strings.HasPrefix(dir, `~\`) {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("expanding home dir: %w", err)
@@ -135,13 +125,9 @@ func (c *Config) ExpandDownloadDir() (string, error) {
 
 // HistoryPath returns the path to the history file.
 func HistoryPath() (string, error) {
-	dataDir := os.Getenv("XDG_DATA_HOME")
-	if dataDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("getting home directory: %w", err)
-		}
-		dataDir = filepath.Join(home, ".local", "share")
+	dir, err := dataDir()
+	if err != nil {
+		return "", err
 	}
-	return filepath.Join(dataDir, "lobster", "history.tsv"), nil
+	return filepath.Join(dir, "history.tsv"), nil
 }

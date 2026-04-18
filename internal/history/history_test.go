@@ -3,14 +3,25 @@ package history
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"lobster/internal/media"
 )
 
+// setDataHome sets the platform-specific env var so dataDir() resolves to tmpDir.
+func setDataHome(t *testing.T, tmpDir string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Setenv("LOCALAPPDATA", tmpDir)
+	} else {
+		t.Setenv("XDG_DATA_HOME", tmpDir)
+	}
+}
+
 func TestSaveAndLoad(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
+	setDataHome(t, tmpDir)
 
 	// Create the lobster data dir
 	dataDir := filepath.Join(tmpDir, "lobster")
@@ -53,7 +64,7 @@ func TestSaveAndLoad(t *testing.T) {
 
 func TestSaveUpdatesExisting(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
+	setDataHome(t, tmpDir)
 	os.MkdirAll(filepath.Join(tmpDir, "lobster"), 0700)
 
 	entry := media.HistoryEntry{
@@ -79,7 +90,7 @@ func TestSaveUpdatesExisting(t *testing.T) {
 
 func TestRemove(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
+	setDataHome(t, tmpDir)
 	os.MkdirAll(filepath.Join(tmpDir, "lobster"), 0700)
 
 	Save(media.HistoryEntry{ID: "a", Title: "A", Type: media.Movie})

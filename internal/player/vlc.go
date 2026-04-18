@@ -14,7 +14,12 @@ type VLC struct{}
 func (v *VLC) Name() string { return "vlc" }
 
 func (v *VLC) Available() bool {
-	_, err := exec.LookPath("vlc")
+	bin := vlcBinaryName()
+	_, err := exec.LookPath(bin)
+	if err != nil {
+		// vlcBinaryName may return a full path on Windows
+		_, err = os.Stat(bin)
+	}
 	return err == nil
 }
 
@@ -35,7 +40,7 @@ func (v *VLC) Play(stream *media.Stream, title string, startPos float64, subFile
 		args = append(args, "--sub-file", subFile)
 	}
 
-	cmd := exec.Command("vlc", args...)
+	cmd := exec.Command(vlcBinaryName(), args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin

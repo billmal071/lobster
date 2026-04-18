@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -65,8 +66,12 @@ history = false
 		t.Fatal(err)
 	}
 
-	// Override config dir for testing
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	// Override config dir for testing (platform-specific)
+	if runtime.GOOS == "windows" {
+		t.Setenv("APPDATA", tmpDir)
+	} else {
+		t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	}
 
 	// Create the lobster subdir and move the config
 	lobsterDir := filepath.Join(tmpDir, "lobster")
@@ -96,7 +101,12 @@ history = false
 }
 
 func TestLoadMissingFile(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	tmp := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Setenv("APPDATA", tmp)
+	} else {
+		t.Setenv("XDG_CONFIG_HOME", tmp)
+	}
 
 	cfg, err := Load()
 	if err != nil {
@@ -108,14 +118,16 @@ func TestLoadMissingFile(t *testing.T) {
 }
 
 func TestExpandDownloadDir(t *testing.T) {
+	tmpDir := t.TempDir()
 	cfg := Default()
-	cfg.DownloadDir = "/tmp/test-downloads"
+	cfg.DownloadDir = tmpDir
 
 	dir, err := cfg.ExpandDownloadDir()
 	if err != nil {
 		t.Fatalf("ExpandDownloadDir() error: %v", err)
 	}
-	if dir != "/tmp/test-downloads" {
-		t.Errorf("got %q, want /tmp/test-downloads", dir)
+	want, _ := filepath.Abs(tmpDir)
+	if dir != want {
+		t.Errorf("got %q, want %q", dir, want)
 	}
 }

@@ -1,6 +1,7 @@
 package httputil
 
 import (
+	"runtime"
 	"testing"
 )
 
@@ -87,6 +88,16 @@ func TestValidateNumericID(t *testing.T) {
 	}
 }
 
+// backslashTraversalExpected returns the expected result for backslash traversal test.
+// On Windows, filepath.Base treats \ as separator, so "..\\..\\windows\\system32" → "system32".
+// On Unix, \ is not a separator, so the entire string is the base name and gets sanitized.
+func backslashTraversalExpected() string {
+	if runtime.GOOS == "windows" {
+		return "system32"
+	}
+	return "____windows_system32"
+}
+
 func TestSanitizeFilename(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -103,7 +114,7 @@ func TestSanitizeFilename(t *testing.T) {
 		{"empty string", "", "untitled"},
 		{"just dots", "..", "_"},                                                      // filepath.Base("..") = "..", replacer makes "_"
 		{"just dot", ".", "untitled"},
-		{"backslash traversal", "..\\..\\windows\\system32", "____windows_system32"}, // on linux, backslash isn't path sep
+		{"backslash traversal", "..\\..\\windows\\system32", backslashTraversalExpected()},
 		{"XSS payload", "<script>alert(1)</script>.mkv", "script_.mkv"},              // filepath.Base handles angle brackets
 	}
 

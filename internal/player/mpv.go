@@ -4,10 +4,8 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -29,20 +27,18 @@ func (m *MPV) Available() bool {
 
 // Play launches mpv with the given stream and returns the final playback position.
 func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile string) (float64, error) {
-	// Create randomized IPC socket path (prevents symlink attacks)
-	socketDir, err := os.MkdirTemp("", "lobster-mpv-*")
+	// Create randomized IPC path (Unix socket on Unix, named pipe on Windows)
+	ipc, err := newIPCSocket()
 	if err != nil {
-		return 0, fmt.Errorf("creating temp dir for mpv socket: %w", err)
+		return 0, err
 	}
-	defer os.RemoveAll(socketDir)
-
-	socketPath := filepath.Join(socketDir, "socket")
+	defer ipc.cleanup()
 
 	// Build args as explicit slice — each arg is separate, no shell interpretation
 	args := []string{
 		stream.URL,
 		"--force-media-title=" + title,
-		"--input-ipc-server=" + socketPath,
+		"--input-ipc-server=" + ipc.path,
 		"--really-quiet",
 	}
 
@@ -74,7 +70,7 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 	// Wait briefly for IPC socket to become available
 	var lastPos float64
 	go func() {
-		lastPos = m.trackPosition(socketPath)
+		lastPos = m.trackPosition(ipc)
 	}()
 
 	if err := cmd.Wait(); err != nil {
@@ -87,19 +83,14 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 	return lastPos, nil
 }
 
-// trackPosition polls mpv's IPC socket for the current playback position.
-func (m *MPV) trackPosition(socketPath string) float64 {
+// trackPosition polls mpv's IPC for the current playback position.
+func (m *MPV) trackPosition(ipc *ipcSocket) float64 {
 	var lastPos float64
 
-	// Wait for socket to appear
-	for i := 0; i < 50; i++ {
-		if _, err := os.Stat(socketPath); err == nil {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	// Wait for IPC to become available
+	time.Sleep(500 * time.Millisecond)
 
-	conn, err := net.Dial("unix", socketPath)
+	conn, err := ipc.dial()
 	if err != nil {
 		return 0
 	}
