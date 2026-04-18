@@ -8,7 +8,7 @@
 ![IINA](https://img.shields.io/badge/IINA-supported-lightgrey?style=flat)
 ![ffmpeg](https://img.shields.io/badge/ffmpeg-download-red?style=flat)
 ![Security](https://img.shields.io/badge/security-hardened-green?style=flat)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey?style=flat)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat)
 
 > **Search in your terminal. Stream instantly in your media player.**
 
@@ -62,6 +62,18 @@ git clone https://github.com/billmal071/lobster && cd lobster
 go build -o lobster .
 sudo make install # installs to /usr/local/bin
 ```
+
+### Windows
+
+Install [Go](https://go.dev/dl/), [fzf](https://github.com/junegunn/fzf#windows), [mpv](https://mpv.io/installation/) (or [VLC](https://www.videolan.org/)), and optionally [ffmpeg](https://ffmpeg.org/download.html). Ensure they are in your PATH.
+
+```powershell
+git clone https://github.com/billmal071/lobster && cd lobster
+
+go build -o lobster.exe .
+```
+
+Config is stored in `%APPDATA%\lobster\config.toml` and history in `%LOCALAPPDATA%\lobster\history.tsv`.
 
 ---
 
