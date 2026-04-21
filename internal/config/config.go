@@ -15,6 +15,7 @@ import (
 // Config holds all application configuration.
 type Config struct {
 	Base         string `toml:"base"`
+	APIURL       string `toml:"api_url"`
 	Player       string `toml:"player"`
 	Provider     string `toml:"provider"`
 	SubsLanguage string `toml:"subs_language"`
