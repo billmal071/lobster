@@ -24,7 +24,7 @@ import (
 func searchRun(cmd *cobra.Command, args []string) error {
 	query := strings.Join(args, " ")
 
-	p := provider.NewFlixHQ(cfg.Base)
+	p := newProvider()
 
 	if query == "" {
 		// Launch the rich TUI Dashboard
@@ -239,6 +239,40 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	}
 
 
+	// If provider supports direct streaming (consumet API), skip embed+extract step.
+	if sp, ok := p.(provider.StreamProvider); ok {
+		stopStream := ui.StartSpinner("Negotiating stream servers...")
+		servers, err := p.GetServers(selected.ID, episodeID)
+		stopStream()
+		if err != nil {
+			return fmt.Errorf("getting servers: %w", err)
+		}
+		if len(servers) == 0 {
+			return fmt.Errorf("no servers found")
+		}
+
+		stopWatch := ui.StartSpinner(fmt.Sprintf("Fetching %s media stream...", title))
+		defer stopWatch()
+
+		ordered := orderServers(servers, cfg.Provider)
+		var stream *media.Stream
+		for _, srv := range ordered {
+			debugf("trying server (watch): %s (ID: %s)", srv.Name, srv.ID)
+			stream, err = sp.Watch(selected.ID, episodeID, srv.Name, cfg.Quality)
+			if err != nil {
+				debugf("server %s watch failed: %v", srv.Name, err)
+				fmt.Fprintf(os.Stderr, "Server %s failed, trying next...\n", srv.Name)
+				continue
+			}
+			debugf("stream URL: %s (server: %s)", stream.URL, srv.Name)
+			break
+		}
+		if stream == nil {
+			return fmt.Errorf("all servers failed for %s", title)
+		}
+		stopWatch()
+		return playStream(stream, title, selected, season, episode)
+	}
 
 	// Get servers
 	stopServer := ui.StartSpinner("Negotiating stream servers...")
@@ -281,10 +315,16 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	if stream == nil {
 		return fmt.Errorf("all servers failed for %s", title)
 	}
-	
+
 	// Stop extraction spinner before printing/playing
 	stopExt()
 
+	return playStream(stream, title, selected, season, episode)
+}
+
+// playStream handles all post-stream-resolution logic: JSON output, subtitle
+// download, download mode, playback, and history saving.
+func playStream(stream *media.Stream, title string, selected media.SearchResult, season, episode int) error {
 	// JSON output mode
 	if flagJSON {
 		out := map[string]interface{}{
