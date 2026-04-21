@@ -184,19 +184,116 @@ func (c *Consumet) GetEpisodes(id string, seasonID string) ([]media.Episode, err
 	return episodes, nil
 }
 
-// GetServers is not yet implemented.
+// consumetServerResponse is an item in the servers list.
+type consumetServerResponse struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+	ID   string `json:"id"`
+}
+
+// GetServers returns available streaming servers for content.
 func (c *Consumet) GetServers(id string, episodeID string) ([]media.Server, error) {
-	return nil, fmt.Errorf("not implemented")
+	endpoint := fmt.Sprintf("%s/movies/flixhq/servers?episodeId=%s&mediaId=%s",
+		c.baseURL, url.QueryEscape(episodeID), url.QueryEscape(id))
+
+	body, err := c.fetchJSON(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("consumet servers: %w", err)
+	}
+
+	var raw []consumetServerResponse
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("consumet servers: parsing response: %w", err)
+	}
+
+	servers := make([]media.Server, 0, len(raw))
+	for _, s := range raw {
+		servers = append(servers, media.Server{
+			Name: s.Name,
+			ID:   s.ID,
+		})
+	}
+
+	return servers, nil
 }
 
-// GetEmbedURL is not yet implemented.
+// GetEmbedURL is not used with the Consumet provider — streaming goes through Watch.
 func (c *Consumet) GetEmbedURL(serverID string) (string, error) {
-	return "", fmt.Errorf("not implemented")
+	return "", fmt.Errorf("GetEmbedURL not supported by consumet provider; use Watch instead")
 }
 
-// Watch is not yet implemented.
+// consumetWatchResponse is the JSON structure returned by the watch endpoint.
+type consumetWatchResponse struct {
+	Sources   []consumetSource   `json:"sources"`
+	Subtitles []consumetSubtitle `json:"subtitles"`
+}
+
+type consumetSource struct {
+	URL     string `json:"url"`
+	Quality string `json:"quality"`
+	IsM3U8  bool   `json:"isM3U8"`
+}
+
+type consumetSubtitle struct {
+	URL  string `json:"url"`
+	Lang string `json:"lang"`
+}
+
+// Watch resolves a stream for the given media/episode/server/quality combination.
 func (c *Consumet) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
-	return nil, fmt.Errorf("not implemented")
+	endpoint := fmt.Sprintf("%s/movies/flixhq/watch?episodeId=%s&mediaId=%s&server=%s",
+		c.baseURL, url.QueryEscape(episodeID), url.QueryEscape(mediaID), url.QueryEscape(server))
+
+	body, err := c.fetchJSON(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("consumet watch: %w", err)
+	}
+
+	var resp consumetWatchResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("consumet watch: parsing response: %w", err)
+	}
+
+	if len(resp.Sources) == 0 {
+		return nil, fmt.Errorf("consumet watch: no sources returned")
+	}
+
+	// Pick source matching the requested quality; fall back to first.
+	chosen := resp.Sources[0]
+	for _, s := range resp.Sources {
+		if containsStr(s.Quality, quality) {
+			chosen = s
+			break
+		}
+	}
+
+	subtitles := make([]media.Subtitle, 0, len(resp.Subtitles))
+	for _, sub := range resp.Subtitles {
+		subtitles = append(subtitles, media.Subtitle{
+			Language: sub.Lang,
+			Label:    sub.Lang,
+			URL:      sub.URL,
+		})
+	}
+
+	return &media.Stream{
+		URL:       chosen.URL,
+		Quality:   chosen.Quality,
+		Subtitles: subtitles,
+	}, nil
+}
+
+// containsStr reports whether s contains substr.
+func containsStr(s, substr string) bool {
+	if substr == "" {
+		return false
+	}
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 // Trending is not yet implemented.

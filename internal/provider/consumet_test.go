@@ -28,20 +28,43 @@ const infoJSON = `{
   ]
 }`
 
-// newTestServer creates an httptest.Server that routes based on path/query.
+// newTestServer creates an httptest.Server routing all consumet endpoints.
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 
-	// Search and info share the /movies/flixhq/ prefix.
+	// Servers endpoint (must be registered before the catch-all below)
+	mux.HandleFunc("/movies/flixhq/servers", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]map[string]string{
+			{"name": "vidcloud", "url": "https://example.com/vidcloud", "id": "vc1"},
+			{"name": "upcloud", "url": "https://example.com/upcloud", "id": "uc1"},
+		})
+	})
+
+	// Watch endpoint
+	mux.HandleFunc("/movies/flixhq/watch", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"sources": []map[string]interface{}{
+				{"url": "https://example.com/1080.m3u8", "quality": "1080p", "isM3U8": true},
+				{"url": "https://example.com/720.m3u8", "quality": "720p", "isM3U8": true},
+			},
+			"subtitles": []map[string]string{
+				{"url": "https://example.com/en.vtt", "lang": "English"},
+			},
+		})
+	})
+
+	// Search and info share the /movies/flixhq/ catch-all prefix.
 	mux.HandleFunc("/movies/flixhq/", func(w http.ResponseWriter, r *http.Request) {
-		// Distinguish info (has ?id=...) vs search.
 		if r.URL.Query().Get("id") != "" {
+			// Info endpoint
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(infoJSON))
 			return
 		}
-		// Search response.
+		// Search response
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"currentPage": 1,
@@ -81,7 +104,6 @@ func TestConsumetSearch(t *testing.T) {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
 
-	// First result: movie
 	if results[0].Type != media.Movie {
 		t.Errorf("expected Movie for %q, got %v", results[0].Title, results[0].Type)
 	}
@@ -91,8 +113,6 @@ func TestConsumetSearch(t *testing.T) {
 	if results[0].ID != "movie/watch-batman-19913" {
 		t.Errorf("unexpected ID: %q", results[0].ID)
 	}
-
-	// Second result: TV
 	if results[1].Type != media.TV {
 		t.Errorf("expected TV for %q, got %v", results[1].Title, results[1].Type)
 	}
@@ -173,7 +193,6 @@ func TestConsumetGetEpisodes(t *testing.T) {
 		t.Errorf("unexpected episode 1: %+v", episodes[1])
 	}
 
-	// Season 2 filter
 	epS2, err := c.GetEpisodes("tv/watch-breaking-bad-39506", "2")
 	if err != nil {
 		t.Fatalf("GetEpisodes season 2 error: %v", err)
@@ -181,4 +200,72 @@ func TestConsumetGetEpisodes(t *testing.T) {
 	if len(epS2) != 1 || epS2[0].ID != "2001" {
 		t.Errorf("unexpected season 2 episodes: %+v", epS2)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 4: GetServers, Watch, StreamProvider interface
+// ---------------------------------------------------------------------------
+
+func TestConsumetGetServers(t *testing.T) {
+	srv := newTestServer(t)
+	c := newConsumetForTest(srv)
+
+	servers, err := c.GetServers("tv/watch-breaking-bad-39506", "1001")
+	if err != nil {
+		t.Fatalf("GetServers returned error: %v", err)
+	}
+
+	if len(servers) != 2 {
+		t.Fatalf("expected 2 servers, got %d", len(servers))
+	}
+	if servers[0].Name != "vidcloud" || servers[0].ID != "vc1" {
+		t.Errorf("unexpected server 0: %+v", servers[0])
+	}
+}
+
+func TestConsumetWatch_QualityMatch(t *testing.T) {
+	srv := newTestServer(t)
+	c := newConsumetForTest(srv)
+
+	stream, err := c.Watch("tv/watch-breaking-bad-39506", "1001", "vidcloud", "1080")
+	if err != nil {
+		t.Fatalf("Watch returned error: %v", err)
+	}
+
+	if stream.URL != "https://example.com/1080.m3u8" {
+		t.Errorf("expected 1080 stream URL, got %q", stream.URL)
+	}
+	if stream.Quality != "1080p" {
+		t.Errorf("expected quality '1080p', got %q", stream.Quality)
+	}
+	if len(stream.Subtitles) != 1 || stream.Subtitles[0].Language != "English" {
+		t.Errorf("unexpected subtitles: %+v", stream.Subtitles)
+	}
+}
+
+func TestConsumetWatch_FallbackToFirst(t *testing.T) {
+	srv := newTestServer(t)
+	c := newConsumetForTest(srv)
+
+	stream, err := c.Watch("tv/watch-breaking-bad-39506", "1001", "vidcloud", "4k")
+	if err != nil {
+		t.Fatalf("Watch returned error: %v", err)
+	}
+
+	// No 4k source → falls back to first (1080p)
+	if stream.URL != "https://example.com/1080.m3u8" {
+		t.Errorf("expected fallback to first source, got %q", stream.URL)
+	}
+}
+
+func TestConsumetGetEmbedURL_NotSupported(t *testing.T) {
+	c := NewConsumet("https://example.com")
+	_, err := c.GetEmbedURL("someID")
+	if err == nil {
+		t.Fatal("expected error from GetEmbedURL")
+	}
+}
+
+func TestConsumetImplementsStreamProvider(t *testing.T) {
+	var _ StreamProvider = (*Consumet)(nil)
 }
