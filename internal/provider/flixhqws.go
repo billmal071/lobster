@@ -3,6 +3,7 @@ package provider
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -37,7 +38,8 @@ func (f *FlixHQWS) baseURL() string {
 
 // Search returns matching results for a query, fetching multiple pages.
 func (f *FlixHQWS) Search(query string) ([]media.SearchResult, error) {
-	encoded := httputil.EncodeQuery(query)
+	// flixhq.ws uses space-encoded queries (%20), not dash-separated like flixhq.to
+	encoded := url.PathEscape(query)
 	baseSearchURL := fmt.Sprintf("%s/search/%s/", f.baseURL(), encoded)
 
 	doc, err := f.fetchDocument(baseSearchURL)
