@@ -296,12 +296,12 @@ func containsStr(s, substr string) bool {
 	return false
 }
 
-// Trending is not yet implemented.
+// Trending is not supported by the Consumet API provider.
 func (c *Consumet) Trending(mediaType media.MediaType) ([]media.SearchResult, error) {
-	return nil, fmt.Errorf("not implemented")
+	return nil, fmt.Errorf("trending not supported by consumet API provider")
 }
 
-// Recent is not yet implemented.
+// Recent is not supported by the Consumet API provider.
 func (c *Consumet) Recent(mediaType media.MediaType) ([]media.SearchResult, error) {
-	return nil, fmt.Errorf("not implemented")
+	return nil, fmt.Errorf("recent not supported by consumet API provider")
 }

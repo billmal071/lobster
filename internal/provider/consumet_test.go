@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"lobster/internal/media"
@@ -268,4 +269,30 @@ func TestConsumetGetEmbedURL_NotSupported(t *testing.T) {
 
 func TestConsumetImplementsStreamProvider(t *testing.T) {
 	var _ StreamProvider = (*Consumet)(nil)
+}
+
+// ---------------------------------------------------------------------------
+// Task 5: Trending / Recent not supported
+// ---------------------------------------------------------------------------
+
+func TestConsumetTrending_NotSupported(t *testing.T) {
+	c := NewConsumet("https://example.com")
+	_, err := c.Trending(media.Movie)
+	if err == nil {
+		t.Fatal("expected error from Trending")
+	}
+	if !strings.Contains(err.Error(), "not supported") {
+		t.Errorf("error should mention 'not supported', got: %v", err)
+	}
+}
+
+func TestConsumetRecent_NotSupported(t *testing.T) {
+	c := NewConsumet("https://example.com")
+	_, err := c.Recent(media.TV)
+	if err == nil {
+		t.Fatal("expected error from Recent")
+	}
+	if !strings.Contains(err.Error(), "not supported") {
+		t.Errorf("error should mention 'not supported', got: %v", err)
+	}
 }
