@@ -33,3 +33,11 @@ type Provider interface {
 	// Recent returns recently added content.
 	Recent(mediaType media.MediaType) ([]media.SearchResult, error)
 }
+
+// StreamProvider extends Provider with a direct stream-resolution method.
+// Providers that talk to a streaming API (like Consumet) implement this
+// instead of relying on GetEmbedURL.
+type StreamProvider interface {
+	Provider
+	Watch(mediaID, episodeID, server, quality string) (*media.Stream, error)
+}
