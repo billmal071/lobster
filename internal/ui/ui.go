@@ -22,9 +22,9 @@ func Select(prompt string, items []string) (int, error) {
 	}
 
 	// Check if fzf is available
-	fzfPath, err := exec.LookPath("fzf")
+	fzfPath, err := fzfBinary()
 	if err != nil {
-		return -1, fmt.Errorf("fzf not found in PATH: %w", err)
+		return -1, fmt.Errorf("fzf not found: %w", err)
 	}
 
 	// Prepare numbered items for reliable index extraction
@@ -91,9 +91,9 @@ func Confirm(prompt string) (bool, error) {
 
 // Input prompts the user for free-text input via fzf's --print-query.
 func Input(prompt string) (string, error) {
-	fzfPath, err := exec.LookPath("fzf")
+	fzfPath, err := fzfBinary()
 	if err != nil {
-		return "", fmt.Errorf("fzf not found in PATH: %w", err)
+		return "", fmt.Errorf("fzf not found: %w", err)
 	}
 
 	cmd := exec.Command(fzfPath,
