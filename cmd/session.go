@@ -253,7 +253,7 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		if err != nil {
 			return err
 		}
-		return downloadEpisode(stream, title)
+		return downloadEpisode(stream, sess, title)
 	}
 
 	// Normal playback with retry on failure
@@ -282,7 +282,7 @@ func playCurrentEpisode(sess *playlist.Session) error {
 			return err
 		}
 
-		subFile := resolveSubtitles(stream)
+		subFile := resolveSubtitles(stream, sess.Content.Title, sess.CurrentSeason().Number, sess.Current().Number)
 
 		lastPos, playErr := p.Play(stream, title, startPos, subFile)
 		if playErr == nil {
@@ -305,12 +305,30 @@ func playCurrentEpisode(sess *playlist.Session) error {
 }
 
 // resolveSubtitles downloads the best-match subtitle file.
-func resolveSubtitles(stream *media.Stream) string {
-	if flagNoSubs || len(stream.Subtitles) == 0 {
+// Falls back to OpenSubtitles if the stream has no embedded subtitles.
+func resolveSubtitles(stream *media.Stream, title string, season, episode int) string {
+	if flagNoSubs {
 		return ""
 	}
 
-	best := subtitle.BestMatch(stream.Subtitles, cfg.SubsLanguage)
+	subs := stream.Subtitles
+	if len(subs) == 0 && cfg.OSAPIKey != "" {
+		debugf("no embedded subtitles, trying OpenSubtitles...")
+		osSubs, err := subtitle.NewOpenSubtitles(cfg.OSAPIKey).Search(
+			title, cfg.SubsLanguage, season, episode,
+		)
+		if err != nil {
+			debugf("OpenSubtitles search failed: %v", err)
+		} else {
+			subs = osSubs
+		}
+	}
+
+	if len(subs) == 0 {
+		return ""
+	}
+
+	best := subtitle.BestMatch(subs, cfg.SubsLanguage)
 	if best == nil {
 		return ""
 	}
@@ -321,7 +339,7 @@ func resolveSubtitles(stream *media.Stream) string {
 	}
 	// Note: tmpDir cleanup happens when process exits; acceptable for a session
 
-	subFile, err := tmpDir.Download(*best)
+	subFile, err := resolveAndDownloadSub(tmpDir, *best)
 	if err != nil {
 		debugf("subtitle download failed: %v", err)
 		return ""
@@ -331,8 +349,8 @@ func resolveSubtitles(stream *media.Stream) string {
 }
 
 // downloadEpisode handles the download path.
-func downloadEpisode(stream *media.Stream, title string) error {
-	subFile := resolveSubtitles(stream)
+func downloadEpisode(stream *media.Stream, sess *playlist.Session, title string) error {
+	subFile := resolveSubtitles(stream, sess.Content.Title, sess.CurrentSeason().Number, sess.Current().Number)
 	outputPath, err := download.Download(stream, title, flagDownload, subFile)
 	if err != nil {
 		return err
