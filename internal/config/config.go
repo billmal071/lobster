@@ -23,6 +23,7 @@ type Config struct {
 	History      bool   `toml:"history"`
 	AutoNext     bool   `toml:"auto_next"`
 	DownloadDir  string `toml:"download_dir"`
+	OSAPIKey     string `toml:"opensubtitles_api_key"`
 	Debug        bool   `toml:"debug"`
 }
 

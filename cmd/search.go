@@ -338,20 +338,33 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		return enc.Encode(out)
 	}
 
-	// Handle subtitles
+	// Handle subtitles — fall back to OpenSubtitles if stream has none
 	var subFile string
-	if !flagNoSubs && len(stream.Subtitles) > 0 {
-		best := subtitle.BestMatch(stream.Subtitles, cfg.SubsLanguage)
-		if best != nil {
-			tmpDir, err := subtitle.NewTempDir()
-			if err == nil {
-				defer tmpDir.Cleanup()
-				subFile, err = tmpDir.Download(*best)
-				if err != nil {
-					debugf("subtitle download failed: %v", err)
-					subFile = "" // Continue without subs
-				} else {
-					debugf("subtitle file: %s", subFile)
+	if !flagNoSubs {
+		subs := stream.Subtitles
+		if len(subs) == 0 && cfg.OSAPIKey != "" {
+			debugf("no embedded subtitles, trying OpenSubtitles...")
+			osSubs, err := subtitle.NewOpenSubtitles(cfg.OSAPIKey).Search(
+				selected.Title, cfg.SubsLanguage, season, episode,
+			)
+			if err != nil {
+				debugf("OpenSubtitles search failed: %v", err)
+			} else {
+				subs = osSubs
+			}
+		}
+		if len(subs) > 0 {
+			best := subtitle.BestMatch(subs, cfg.SubsLanguage)
+			if best != nil {
+				tmpDir, err := subtitle.NewTempDir()
+				if err == nil {
+					defer tmpDir.Cleanup()
+					subFile, err = resolveAndDownloadSub(tmpDir, *best)
+					if err != nil {
+						debugf("subtitle download failed: %v", err)
+					} else {
+						debugf("subtitle file: %s", subFile)
+					}
 				}
 			}
 		}
@@ -406,4 +419,20 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	}
 
 	return nil
+}
+
+// resolveAndDownloadSub handles downloading a subtitle, resolving OpenSubtitles
+// file IDs to actual download URLs when needed.
+func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle) (string, error) {
+	if strings.HasPrefix(sub.URL, "opensubtitles:") {
+		var fileID int
+		fmt.Sscanf(sub.URL, "opensubtitles:%d", &fileID)
+		osClient := subtitle.NewOpenSubtitles(cfg.OSAPIKey)
+		downloadURL, err := osClient.ResolveDownloadURL(fileID)
+		if err != nil {
+			return "", fmt.Errorf("resolving OpenSubtitles download: %w", err)
+		}
+		sub.URL = downloadURL
+	}
+	return tmpDir.Download(sub)
 }
