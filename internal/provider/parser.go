@@ -236,11 +236,20 @@ func parseLastPage(doc *goquery.Document) int {
 	return lastPage
 }
 
-// extractID extracts the content ID from a URL path.
+// extractID extracts the content ID from a URL or path.
 // e.g., "/movie/free-the-exorcist-hd-75043" -> "movie/free-the-exorcist-hd-75043"
+// e.g., "https://flixhq.ws/series/south-park-80749/" -> "series/south-park-80749"
 func extractID(urlPath string) string {
-	// Remove leading slash
-	id := strings.TrimPrefix(urlPath, "/")
+	// Strip full URL prefix if present (flixhq.ws returns absolute URLs)
+	if idx := strings.Index(urlPath, "://"); idx != -1 {
+		// Find the first / after the host
+		rest := urlPath[idx+3:]
+		if slashIdx := strings.Index(rest, "/"); slashIdx != -1 {
+			urlPath = rest[slashIdx:]
+		}
+	}
+	// Remove leading/trailing slashes
+	id := strings.Trim(urlPath, "/")
 	// Remove any query parameters
 	if idx := strings.Index(id, "?"); idx != -1 {
 		id = id[:idx]
