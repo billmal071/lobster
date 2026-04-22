@@ -22,6 +22,7 @@ var (
 	flagProvider string
 	flagQuality  string
 	flagPlayer   string
+	flagBase     string
 	flagContinue bool
 	flagJSON     bool
 	flagDebug    bool
@@ -56,6 +57,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagPlayer, "player", "", "Media player: mpv | vlc | iina | celluloid")
 	rootCmd.PersistentFlags().BoolVarP(&flagContinue, "continue", "c", false, "Auto-resume from history")
 	rootCmd.PersistentFlags().BoolVarP(&flagJSON, "json", "j", false, "Output stream metadata as JSON")
+	rootCmd.PersistentFlags().StringVar(&flagBase, "base", "", "Content source: flixhq.to | flixhq.ws")
 	rootCmd.PersistentFlags().BoolVarP(&flagDebug, "debug", "x", false, "Debug logging to stderr")
 
 	rootCmd.AddCommand(historyCmd)
@@ -84,6 +86,9 @@ func loadConfig(cmd *cobra.Command, args []string) error {
 	}
 	if flagLanguage != "" {
 		cfg.SubsLanguage = flagLanguage
+	}
+	if flagBase != "" {
+		cfg.Base = flagBase
 	}
 	if flagDebug {
 		cfg.Debug = true

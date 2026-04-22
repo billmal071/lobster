@@ -202,8 +202,10 @@ func (f *FlixHQWS) GetServers(id string, episodeID string) ([]media.Server, erro
 	var pageURL string
 
 	if episodeID != "" {
-		// TV episode: episodeID is the episode page path (e.g., /series/batman-19660/1-3/)
-		if strings.HasPrefix(episodeID, "/") {
+		// TV episode: episodeID is the episode page URL or path
+		if strings.HasPrefix(episodeID, "http") {
+			pageURL = episodeID
+		} else if strings.HasPrefix(episodeID, "/") {
 			pageURL = f.baseURL() + episodeID
 		} else {
 			pageURL = fmt.Sprintf("%s/%s", f.baseURL(), episodeID)
