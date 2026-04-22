@@ -170,7 +170,7 @@ func downloadSingleEpisode(p provider.Provider, selected media.SearchResult, ep 
 	for _, srv := range ordered {
 		debugf("trying server: %s (ID: %s)", srv.Name, srv.ID)
 
-		err := tryDownloadFromServer(p, srv, title, outputDir)
+		err := tryDownloadFromServer(p, srv, selected.ID, ep.ID, title, outputDir)
 		if err == nil {
 			return nil
 		}
@@ -185,18 +185,29 @@ func downloadSingleEpisode(p provider.Provider, selected media.SearchResult, ep 
 }
 
 // tryDownloadFromServer attempts to resolve and download from a single server.
-func tryDownloadFromServer(p provider.Provider, srv media.Server, title, outputDir string) error {
-	// Get embed URL
-	embedURL, err := p.GetEmbedURL(srv.ID)
-	if err != nil {
-		return fmt.Errorf("getting embed URL: %w", err)
-	}
+func tryDownloadFromServer(p provider.Provider, srv media.Server, mediaID, episodeID, title, outputDir string) error {
+	var stream *media.Stream
+	var err error
 
-	// Extract stream
-	ext := extract.New()
-	stream, err := ext.Extract(embedURL, cfg.Quality)
-	if err != nil {
-		return fmt.Errorf("extracting stream: %w", err)
+	// StreamProvider (consumet) can resolve streams directly
+	if sp, ok := p.(provider.StreamProvider); ok {
+		stream, err = sp.Watch(mediaID, episodeID, srv.Name, cfg.Quality)
+		if err != nil {
+			return fmt.Errorf("watch failed: %w", err)
+		}
+	} else {
+		// Get embed URL
+		embedURL, err := p.GetEmbedURL(srv.ID)
+		if err != nil {
+			return fmt.Errorf("getting embed URL: %w", err)
+		}
+
+		// Extract stream
+		ext := extract.New()
+		stream, err = ext.Extract(embedURL, cfg.Quality)
+		if err != nil {
+			return fmt.Errorf("extracting stream: %w", err)
+		}
 	}
 
 	// Handle subtitles (explicit cleanup, no defer in loop)
