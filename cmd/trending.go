@@ -21,7 +21,7 @@ var trendingCmd = &cobra.Command{
 func trendingRun(cmd *cobra.Command, args []string) error {
 	mediaType := parseMediaTypeArg(args)
 
-	p := provider.NewFlixHQ(cfg.Base)
+	p := newProvider()
 	results, err := p.Trending(mediaType)
 	if err != nil {
 		return fmt.Errorf("getting trending: %w", err)
@@ -55,7 +55,7 @@ var recentCmd = &cobra.Command{
 func recentRun(cmd *cobra.Command, args []string) error {
 	mediaType := parseMediaTypeArg(args)
 
-	p := provider.NewFlixHQ(cfg.Base)
+	p := newProvider()
 	results, err := p.Recent(mediaType)
 	if err != nil {
 		return fmt.Errorf("getting recent: %w", err)

@@ -12,6 +12,7 @@ import (
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/playlist"
+	"lobster/internal/provider"
 	"lobster/internal/subtitle"
 	"lobster/internal/ui"
 )
@@ -206,6 +207,16 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 
 // tryServer attempts to extract a stream from a single server.
 func tryServer(sess *playlist.Session, srv *media.Server) (*media.Stream, error) {
+	// StreamProvider (consumet) can resolve streams directly
+	if sp, ok := sess.Provider.(provider.StreamProvider); ok {
+		stream, err := sp.Watch(sess.Content.ID, sess.Current().ID, srv.Name, cfg.Quality)
+		if err != nil {
+			return nil, fmt.Errorf("watch failed: %w", err)
+		}
+		debugf("stream URL: %s (server: %s)", stream.URL, srv.Name)
+		return stream, nil
+	}
+
 	embedURL, err := sess.Provider.GetEmbedURL(srv.ID)
 	if err != nil {
 		return nil, fmt.Errorf("embed failed: %w", err)

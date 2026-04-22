@@ -15,6 +15,7 @@ import (
 // Config holds all application configuration.
 type Config struct {
 	Base         string `toml:"base"`
+	APIURL       string `toml:"api_url"`
 	Player       string `toml:"player"`
 	Provider     string `toml:"provider"`
 	SubsLanguage string `toml:"subs_language"`
@@ -28,7 +29,7 @@ type Config struct {
 // Default returns the default configuration.
 func Default() *Config {
 	return &Config{
-		Base:         "flixhq.to",
+		Base:         "flixhq.ws",
 		Player:       "mpv",
 		Provider:     "Vidcloud",
 		SubsLanguage: "english",

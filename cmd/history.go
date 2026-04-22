@@ -6,7 +6,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"lobster/internal/history"
-	"lobster/internal/provider"
 	"lobster/internal/ui"
 )
 
@@ -38,7 +37,7 @@ func historyRun(cmd *cobra.Command, args []string) error {
 	debugf("resuming: %s (ID: %s)", selected.Title, selected.ID)
 
 	// Re-resolve and play from the saved position
-	p := provider.NewFlixHQ(cfg.Base)
+	p := newProvider()
 
 	// Search for the title to get fresh results
 	results, err := p.Search(selected.Title)

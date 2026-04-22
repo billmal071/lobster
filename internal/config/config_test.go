@@ -117,6 +117,40 @@ func TestLoadMissingFile(t *testing.T) {
 	}
 }
 
+func TestLoadAPIURL(t *testing.T) {
+	tmpDir := t.TempDir()
+	lobsterDir := filepath.Join(tmpDir, "lobster")
+	if err := os.MkdirAll(lobsterDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := `
+base = "flixhq.to"
+player = "mpv"
+provider = "Vidcloud"
+quality = "1080"
+api_url = "https://my-consumet.example.com"
+`
+	if err := os.WriteFile(filepath.Join(lobsterDir, "config.toml"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if runtime.GOOS == "windows" {
+		t.Setenv("APPDATA", tmpDir)
+	} else {
+		t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.APIURL != "https://my-consumet.example.com" {
+		t.Errorf("APIURL = %q, want %q", cfg.APIURL, "https://my-consumet.example.com")
+	}
+}
+
 func TestExpandDownloadDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := Default()

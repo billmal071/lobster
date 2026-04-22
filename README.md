@@ -104,6 +104,30 @@ Config is stored in `%APPDATA%\lobster\config.toml` and history in `%LOCALAPPDAT
 
 ---
 
+## Configuration
+
+Config file location:
+- **Linux/macOS:** `~/.config/lobster/config.toml`
+- **Windows:** `%APPDATA%\lobster\config.toml`
+
+```toml
+base = "flixhq.to"
+player = "mpv"
+provider = "Vidcloud"
+subs_language = "english"
+quality = "1080"
+history = true
+auto_next = true
+download_dir = "~/Videos/lobster"
+
+# Optional: use a consumet API backend instead of the built-in scraper.
+# Self-host from: https://github.com/consumet/api.consumet.org
+# When set, lobster uses this API for search, streaming, etc.
+# api_url = "https://your-consumet-instance.example.com"
+```
+
+---
+
 ## Project Structure
 
 ```
@@ -125,7 +149,7 @@ lobster/
 │   ├── media/              # Shared types (Stream, SearchResult, etc.)
 │   ├── player/             # Player backends (mpv, vlc, iina, celluloid)
 │   ├── playlist/           # Episode navigation and session state
-│   ├── provider/           # FlixHQ scraper and HTML parser
+│   ├── provider/           # Content providers (FlixHQ scraper, Consumet API)
 │   ├── subtitle/           # Subtitle download and language matching
 │   └── ui/                 # fzf-based terminal UI
 ├── Makefile

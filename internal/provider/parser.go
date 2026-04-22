@@ -28,7 +28,7 @@ func parseSearchResults(doc *goquery.Document) []media.SearchResult {
 		}
 
 		// Determine type from URL path or class
-		if strings.Contains(href, "/tv/") {
+		if strings.Contains(href, "/tv/") || strings.Contains(href, "/series/") {
 			result.Type = media.TV
 		} else {
 			result.Type = media.Movie
@@ -288,7 +288,7 @@ func parseTrendingResults(doc *goquery.Document, mediaType media.MediaType) []me
 			result.ID = extractID(href)
 		}
 
-		if strings.Contains(href, "/tv/") {
+		if strings.Contains(href, "/tv/") || strings.Contains(href, "/series/") {
 			result.Type = media.TV
 		} else {
 			result.Type = media.Movie
