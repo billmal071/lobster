@@ -203,7 +203,7 @@ func tryDownloadFromServer(p provider.Provider, srv media.Server, mediaID, episo
 		}
 
 		// Extract stream
-		ext := extract.New()
+		ext := extract.NewForURL(embedURL)
 		stream, err = ext.Extract(embedURL, cfg.Quality)
 		if err != nil {
 			return fmt.Errorf("extracting stream: %w", err)

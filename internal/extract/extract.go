@@ -1,8 +1,12 @@
 // Package extract resolves embed URLs into playable stream URLs
-// by communicating directly with MegaCloud/VidCloud endpoints.
+// by communicating with MegaCloud/VidCloud or Byse endpoints.
 package extract
 
-import "lobster/internal/media"
+import (
+	"strings"
+
+	"lobster/internal/media"
+)
 
 // Extractor resolves embed URLs into playable streams.
 type Extractor interface {
@@ -11,5 +15,13 @@ type Extractor interface {
 
 // New returns the appropriate extractor for the given embed URL.
 func New() Extractor {
+	return NewMegaCloud()
+}
+
+// NewForURL returns the appropriate extractor based on the embed URL.
+func NewForURL(embedURL string) Extractor {
+	if strings.Contains(embedURL, "vidcdn.co") || strings.Contains(embedURL, "weneverbeenfree.com") {
+		return NewByse()
+	}
 	return NewMegaCloud()
 }

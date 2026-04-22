@@ -223,7 +223,7 @@ func tryServer(sess *playlist.Session, srv *media.Server) (*media.Stream, error)
 	}
 	debugf("embed URL: %s", embedURL)
 
-	ext := extract.New()
+	ext := extract.NewForURL(embedURL)
 	stream, err := ext.Extract(embedURL, cfg.Quality)
 	if err != nil {
 		return nil, fmt.Errorf("extract failed: %w", err)
