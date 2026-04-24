@@ -32,6 +32,10 @@ func (v *VLC) Play(stream *media.Stream, title string, startPos float64, subFile
 		"--play-and-exit",
 	}
 
+	if stream.Referer != "" {
+		args = append(args, "--http-referrer", stream.Referer)
+	}
+
 	if startPos > 0 {
 		args = append(args, fmt.Sprintf("--start-time=%.0f", startPos))
 	}

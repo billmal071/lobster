@@ -202,7 +202,22 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 		return stream, srv.Name, nil
 	}
 
-	return nil, "", fmt.Errorf("all servers failed for %s", sess.Title())
+	// Try fallback providers before giving up
+	fmt.Fprintf(os.Stderr, "Primary provider failed, trying fallback...\n")
+	debugf("attempting fallback for %s", sess.Title())
+	stream, err := tryFallbackStream(
+		sess.Provider,
+		sess.Content.Title,
+		sess.Content.Type,
+		sess.CurrentSeason().Number,
+		sess.Current().Number,
+	)
+	if err != nil {
+		debugf("fallback failed: %v", err)
+		return nil, "", fmt.Errorf("all servers failed for %s", sess.Title())
+	}
+	debugf("fallback stream: %s", stream.URL)
+	return stream, "Fallback", nil
 }
 
 // tryServer attempts to extract a stream from a single server.
@@ -294,6 +309,11 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		if lastPos > 0 {
 			startPos = lastPos
 			debugf("playback stopped at %.0fs, will resume from there", lastPos)
+		}
+
+		// If the fallback stream also failed, don't retry endlessly
+		if serverName == "Fallback" {
+			return fmt.Errorf("playback failed: %w", playErr)
 		}
 
 		// Exclude this server and try the next one

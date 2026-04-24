@@ -67,6 +67,7 @@ type Stream struct {
 	URL       string     // m3u8 or direct video URL
 	Subtitles []Subtitle // Available subtitle tracks
 	Quality   string     // Resolved quality
+	Referer   string     // Referer header required by the CDN (if any)
 }
 
 // Subtitle represents a subtitle track.

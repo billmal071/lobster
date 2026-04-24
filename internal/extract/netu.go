@@ -41,9 +41,10 @@ func (n *NetuExtractor) Extract(embedURL string, preferredQuality string) (*medi
 		pageURL = resolved
 	}
 
-	// Step 2: If the page redirects to /e/ path, follow that too
-	if strings.Contains(pageURL, "strcdn.org") && !strings.Contains(pageURL, "/e/") {
-		// Direct URL, use as-is
+	// Step 2: The /f/ path is a full page that JS-redirects to /e/ in iframes.
+	// Convert /f/ to /e/ directly to get the embed page with m3u8 URLs.
+	if strings.Contains(pageURL, "/f/") {
+		pageURL = strings.Replace(pageURL, "/f/", "/e/", 1)
 	}
 
 	// Fetch the embed page (follow redirects)

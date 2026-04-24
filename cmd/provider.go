@@ -15,6 +15,12 @@ func newProvider() provider.Provider {
 	if cfg.APIURL != "" {
 		return provider.NewConsumet(cfg.APIURL)
 	}
+	if strings.Contains(cfg.Base, "soap2day") {
+		return provider.NewSoap2Day()
+	}
+	if strings.Contains(cfg.Base, "kimcartoon") {
+		return provider.NewKimCartoon(cfg.Base)
+	}
 	if strings.Contains(cfg.Base, "flixhq.ws") {
 		return provider.NewFlixHQWS(cfg.Base)
 	}

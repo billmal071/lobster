@@ -40,6 +40,14 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 		"--force-media-title=" + title,
 		"--input-ipc-server=" + ipc.path,
 		"--really-quiet",
+		"--network-timeout=15",
+	}
+
+	if stream.Referer != "" {
+		args = append(args, "--http-header-fields=Referer: "+stream.Referer)
+		// Propagate referer to ffmpeg's HLS demuxer for segment requests
+		args = append(args, "--demuxer-lavf-o=headers=Referer: "+stream.Referer+"\r\n")
+		args = append(args, "--tls-verify=no")
 	}
 
 	if startPos > 0 {
@@ -69,15 +77,26 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 
 	// Wait briefly for IPC socket to become available
 	var lastPos float64
+	startTime := time.Now()
 	go func() {
 		lastPos = m.trackPosition(ipc)
 	}()
 
-	if err := cmd.Wait(); err != nil {
-		// mpv returns non-zero on user quit, which is normal
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 4 {
+	waitErr := cmd.Wait()
+	elapsed := time.Since(startTime)
+
+	if waitErr != nil {
+		// mpv returns non-zero on user quit (code 4), which is normal
+		if exitErr, ok := waitErr.(*exec.ExitError); ok && exitErr.ExitCode() == 4 {
 			return lastPos, nil
 		}
+		return lastPos, fmt.Errorf("mpv exited: %w", waitErr)
+	}
+
+	// If mpv exited almost instantly with no playback progress,
+	// the stream likely failed to load (e.g., CDN unreachable).
+	if lastPos == 0 && elapsed < 5*time.Second {
+		return 0, fmt.Errorf("stream failed to load (mpv exited in %s with no playback)", elapsed.Round(time.Millisecond))
 	}
 
 	return lastPos, nil
