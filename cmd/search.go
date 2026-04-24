@@ -302,8 +302,8 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		}
 		debugf("embed URL: %s", embedURL)
 
-		ext := extract.NewForURL(embedURL)
-		stream, err = ext.Extract(embedURL, cfg.Quality)
+		ext, resolvedURL := extract.ResolveForURL(embedURL)
+		stream, err = ext.Extract(resolvedURL, cfg.Quality)
 		if err != nil {
 			debugf("server %s extract failed: %v", srv.Name, err)
 			fmt.Fprintf(os.Stderr, "Server %s failed, trying next...\n", srv.Name)

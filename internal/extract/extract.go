@@ -18,10 +18,24 @@ func New() Extractor {
 	return NewMegaCloud()
 }
 
-// NewForURL returns the appropriate extractor based on the embed URL.
-func NewForURL(embedURL string) Extractor {
-	if strings.Contains(embedURL, "vidcdn.co") || strings.Contains(embedURL, "weneverbeenfree.com") {
-		return NewByse()
+// ResolveForURL follows vidcdn.co redirects and returns the appropriate
+// extractor and resolved embed URL for the actual backend.
+func ResolveForURL(embedURL string) (Extractor, string) {
+	target := embedURL
+
+	// Resolve vidcdn.co redirect to find the actual backend
+	if strings.Contains(embedURL, "vidcdn.co") {
+		if resolved, err := followRedirect(embedURL); err == nil {
+			target = resolved
+		}
 	}
-	return NewMegaCloud()
+
+	switch {
+	case strings.Contains(target, "weneverbeenfree.com"):
+		return NewByse(), target
+	case strings.Contains(target, "strcdn.org") || strings.Contains(target, "netu"):
+		return NewNetu(), target
+	default:
+		return NewMegaCloud(), target
+	}
 }
