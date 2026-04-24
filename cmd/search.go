@@ -268,9 +268,17 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			break
 		}
 		if stream == nil {
-			return fmt.Errorf("all servers failed for %s", title)
+			stopWatch()
+			// Try fallback providers
+			fmt.Fprintf(os.Stderr, "Primary provider failed, trying fallback...\n")
+			fbStream, err := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
+			if err != nil {
+				return fmt.Errorf("all servers failed for %s", title)
+			}
+			stream = fbStream
+		} else {
+			stopWatch()
 		}
-		stopWatch()
 		return playStream(stream, title, selected, season, episode)
 	}
 
@@ -313,11 +321,20 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		break
 	}
 	if stream == nil {
-		return fmt.Errorf("all servers failed for %s", title)
+		stopExt()
+		// Try fallback providers
+		fmt.Fprintf(os.Stderr, "Primary provider failed, trying fallback...\n")
+		debugf("attempting fallback for %s", title)
+		fbStream, err := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
+		if err != nil {
+			debugf("fallback failed: %v", err)
+			return fmt.Errorf("all servers failed for %s", title)
+		}
+		stream = fbStream
+		debugf("fallback stream: %s", stream.URL)
+	} else {
+		stopExt()
 	}
-
-	// Stop extraction spinner before printing/playing
-	stopExt()
 
 	return playStream(stream, title, selected, season, episode)
 }

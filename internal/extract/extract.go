@@ -35,6 +35,8 @@ func ResolveForURL(embedURL string) (Extractor, string) {
 		return NewByse(), target
 	case strings.Contains(target, "strcdn.org") || strings.Contains(target, "netu"):
 		return NewNetu(), target
+	case strings.Contains(target, "vidwish.live"):
+		return NewVidWish(), target
 	default:
 		return NewMegaCloud(), target
 	}
