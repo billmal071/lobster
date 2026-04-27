@@ -244,11 +244,20 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		stopStream := ui.StartSpinner("Negotiating stream servers...")
 		servers, err := p.GetServers(selected.ID, episodeID)
 		stopStream()
-		if err != nil {
-			return fmt.Errorf("getting servers: %w", err)
-		}
-		if len(servers) == 0 {
-			return fmt.Errorf("no servers found")
+		if err != nil || len(servers) == 0 {
+			if err != nil {
+				debugf("GetServers failed: %v", err)
+			}
+			// Try fallback immediately
+			fmt.Fprintf(os.Stderr, "Primary provider failed, trying fallback...\n")
+			fbStream, fbErr := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
+			if fbErr != nil {
+				if err != nil {
+					return fmt.Errorf("getting servers: %w", err)
+				}
+				return fmt.Errorf("no servers found")
+			}
+			return playStream(fbStream, title, selected, season, episode)
 		}
 
 		stopWatch := ui.StartSpinner(fmt.Sprintf("Fetching %s media stream...", title))
@@ -286,12 +295,20 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	stopServer := ui.StartSpinner("Negotiating stream servers...")
 	servers, err := p.GetServers(selected.ID, episodeID)
 	stopServer()
-	if err != nil {
-		return fmt.Errorf("getting servers: %w", err)
-	}
-
-	if len(servers) == 0 {
-		return fmt.Errorf("no servers found")
+	if err != nil || len(servers) == 0 {
+		if err != nil {
+			debugf("GetServers failed: %v", err)
+		}
+		// Try fallback immediately
+		fmt.Fprintf(os.Stderr, "Primary provider failed, trying fallback...\n")
+		fbStream, fbErr := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
+		if fbErr != nil {
+			if err != nil {
+				return fmt.Errorf("getting servers: %w", err)
+			}
+			return fmt.Errorf("no servers found")
+		}
+		return playStream(fbStream, title, selected, season, episode)
 	}
 
 	// Try servers in order: preferred first, then fallbacks
