@@ -119,7 +119,7 @@ func batchDownload(p provider.Provider, selected media.SearchResult, episodes []
 		epLabel := formatEpisodeLabel(ep)
 		fmt.Fprintf(os.Stderr, "[%d/%d] Downloading %s...\n", i+1, total, epLabel)
 
-		if err := downloadSingleEpisode(p, selected, ep, outputDir, epLabel); err != nil {
+		if err := downloadSingleEpisode(p, selected, ep, season.Number, outputDir, epLabel); err != nil {
 			fmt.Fprintf(os.Stderr, "  Failed: %v\n", err)
 			failed = append(failed, ep)
 		}
@@ -140,7 +140,7 @@ func batchDownload(p provider.Provider, selected media.SearchResult, episodes []
 			epLabel := formatEpisodeLabel(ep)
 			fmt.Fprintf(os.Stderr, "[%d/%d] Retrying %s...\n", i+1, len(retrying), epLabel)
 
-			if err := downloadSingleEpisode(p, selected, ep, outputDir, epLabel); err != nil {
+			if err := downloadSingleEpisode(p, selected, ep, season.Number, outputDir, epLabel); err != nil {
 				fmt.Fprintf(os.Stderr, "  Failed: %v\n", err)
 				failed = append(failed, ep)
 			}
@@ -153,14 +153,24 @@ func batchDownload(p provider.Provider, selected media.SearchResult, episodes []
 }
 
 // downloadSingleEpisode resolves and downloads one episode, trying fallback servers on failure.
-func downloadSingleEpisode(p provider.Provider, selected media.SearchResult, ep media.Episode, outputDir, title string) error {
+func downloadSingleEpisode(p provider.Provider, selected media.SearchResult, ep media.Episode, seasonNum int, outputDir, title string) error {
 	// Get servers
 	servers, err := p.GetServers(selected.ID, ep.ID)
-	if err != nil {
-		return fmt.Errorf("getting servers: %w", err)
-	}
-	if len(servers) == 0 {
-		return fmt.Errorf("no servers found")
+	if err != nil || len(servers) == 0 {
+		if err != nil {
+			debugf("GetServers failed: %v", err)
+		}
+		// Try fallback before giving up
+		fmt.Fprintf(os.Stderr, "  Primary provider failed, trying fallback...\n")
+		fbStream, fbErr := tryFallbackStream(p, selected.Title, selected.Type, seasonNum, ep.Number)
+		if fbErr != nil {
+			if err != nil {
+				return fmt.Errorf("getting servers: %w", err)
+			}
+			return fmt.Errorf("no servers found")
+		}
+		_, dlErr := download.Download(fbStream, title, outputDir, "")
+		return dlErr
 	}
 
 	// Order servers: preferred first, then the rest as fallbacks

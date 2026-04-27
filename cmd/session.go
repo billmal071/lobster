@@ -176,11 +176,28 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 
 	// Always fetch fresh servers — IDs are episode-specific
 	servers, err := sess.Provider.GetServers(sess.Content.ID, episodeID)
-	if err != nil {
-		return nil, "", fmt.Errorf("getting servers: %w", err)
-	}
-	if len(servers) == 0 {
-		return nil, "", fmt.Errorf("no servers found for %s", sess.Title())
+	if err != nil || len(servers) == 0 {
+		if err != nil {
+			debugf("GetServers failed: %v", err)
+		} else {
+			debugf("no servers found for %s", sess.Title())
+		}
+		// Try fallback before giving up
+		fmt.Fprintf(os.Stderr, "Primary provider failed, trying fallback...\n")
+		stream, fbErr := tryFallbackStream(
+			sess.Provider,
+			sess.Content.Title,
+			sess.Content.Type,
+			sess.CurrentSeason().Number,
+			sess.Current().Number,
+		)
+		if fbErr != nil {
+			if err != nil {
+				return nil, "", fmt.Errorf("getting servers: %w", err)
+			}
+			return nil, "", fmt.Errorf("no servers found for %s", sess.Title())
+		}
+		return stream, "Fallback", nil
 	}
 
 	// Order servers: prefer cached server name, then user-configured provider, then rest
