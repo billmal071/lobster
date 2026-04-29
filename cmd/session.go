@@ -349,16 +349,8 @@ func resolveSubtitles(stream *media.Stream, title string, season, episode int) s
 	}
 
 	subs := stream.Subtitles
-	if len(subs) == 0 && cfg.OSAPIKey != "" {
-		debugf("no embedded subtitles, trying OpenSubtitles...")
-		osSubs, err := subtitle.NewOpenSubtitles(cfg.OSAPIKey).Search(
-			title, cfg.SubsLanguage, season, episode,
-		)
-		if err != nil {
-			debugf("OpenSubtitles search failed: %v", err)
-		} else {
-			subs = osSubs
-		}
+	if len(subs) == 0 {
+		subs = searchExternalSubs(title, season, episode)
 	}
 
 	if len(subs) == 0 {
