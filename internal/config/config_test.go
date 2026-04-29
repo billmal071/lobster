@@ -37,6 +37,10 @@ func TestValidate(t *testing.T) {
 		{"valid vlc", func(c *Config) { c.Player = "vlc" }, false},
 		{"valid upcloud", func(c *Config) { c.Provider = "UpCloud" }, false},
 		{"valid 720", func(c *Config) { c.Quality = "720" }, false},
+		{"max_concurrent_downloads 0", func(c *Config) { c.MaxConcurrentDownloads = 0 }, true},
+		{"max_concurrent_downloads 6", func(c *Config) { c.MaxConcurrentDownloads = 6 }, true},
+		{"max_concurrent_downloads 1", func(c *Config) { c.MaxConcurrentDownloads = 1 }, false},
+		{"max_concurrent_downloads 5", func(c *Config) { c.MaxConcurrentDownloads = 5 }, false},
 	}
 
 	for _, tt := range tests {
