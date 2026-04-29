@@ -91,6 +91,11 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
+	// For in-memory databases, we must limit to one connection because
+	// each connection to ":memory:" creates a separate database.
+	// For file-backed databases, this is still safe with WAL mode.
+	db.SetMaxOpenConns(1)
+
 	// Enable WAL mode for better concurrent read/write performance.
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		db.Close()
@@ -402,5 +407,50 @@ func (s *Store) NextQueued() (*Download, error) {
 	if err != nil {
 		return nil, fmt.Errorf("getting next queued: %w", err)
 	}
+	return d, nil
+}
+
+// ClaimNextQueued atomically finds the oldest queued download and sets its
+// status to "downloading", returning it. Returns nil if no queued work exists.
+func (s *Store) ClaimNextQueued() (*Download, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	d := &Download{}
+	err = tx.QueryRow(`
+		SELECT id, title, media_title, media_type, season, episode,
+			media_id, episode_id, stream_url, stream_type, referer,
+			output_path, subtitle_url, status, error,
+			total_bytes, done_bytes, total_segments, done_segments,
+			created_at, updated_at
+		FROM downloads WHERE status = 'queued'
+		ORDER BY created_at ASC LIMIT 1`,
+	).Scan(
+		&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Season, &d.Episode,
+		&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer,
+		&d.OutputPath, &d.SubtitleURL, &d.Status, &d.Error,
+		&d.TotalBytes, &d.DoneBytes, &d.TotalSegments, &d.DoneSegments,
+		&d.CreatedAt, &d.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("claiming next queued: %w", err)
+	}
+
+	_, err = tx.Exec(`UPDATE downloads SET status = 'downloading', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, d.ID)
+	if err != nil {
+		return nil, fmt.Errorf("updating claimed download: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing claim: %w", err)
+	}
+
+	d.Status = "downloading"
 	return d, nil
 }
