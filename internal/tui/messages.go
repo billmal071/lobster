@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"lobster/internal/dlmanager"
 	"lobster/internal/media"
 )
 
@@ -33,3 +34,21 @@ type serverFlowFinishedMsg struct {
 	// If it fails
 	err error
 }
+
+// downloadQueuedMsg is sent when a download is added to the queue.
+type downloadQueuedMsg struct {
+	downloadID int
+	title      string
+}
+
+// downloadBatchQueuedMsg is sent when multiple downloads are queued.
+type downloadBatchQueuedMsg struct {
+	count int
+	title string
+}
+
+// downloadProgressMsg relays progress from the download manager.
+type downloadProgressMsg dlmanager.ProgressUpdate
+
+// downloadListUpdatedMsg signals the downloads list should refresh from store.
+type downloadListUpdatedMsg struct{}
