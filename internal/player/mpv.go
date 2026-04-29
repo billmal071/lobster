@@ -21,7 +21,12 @@ type MPV struct{}
 func (m *MPV) Name() string { return "mpv" }
 
 func (m *MPV) Available() bool {
-	_, err := exec.LookPath("mpv")
+	bin := mpvBinaryName()
+	_, err := exec.LookPath(bin)
+	if err != nil {
+		// mpvBinaryName may return a full path on Windows
+		_, err = os.Stat(bin)
+	}
 	return err == nil
 }
 
@@ -66,7 +71,7 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 		}
 	}
 
-	cmd := exec.Command("mpv", args...)
+	cmd := exec.Command(mpvBinaryName(), args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin

@@ -34,13 +34,14 @@ func newIPCSocket() (*ipcSocket, error) {
 func (s *ipcSocket) dial() (io.ReadWriteCloser, error) {
 	var f *os.File
 	var err error
-	// Retry briefly as mpv may not have created the pipe yet
-	for i := 0; i < 10; i++ {
+	// Retry as mpv may not have created the pipe yet.
+	// Use a longer timeout on Windows where antivirus and slower I/O can delay pipe creation.
+	for i := 0; i < 30; i++ {
 		f, err = os.OpenFile(s.path, os.O_RDWR, 0)
 		if err == nil {
 			return f, nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
 	return nil, fmt.Errorf("opening named pipe %s: %w", s.path, err)
 }

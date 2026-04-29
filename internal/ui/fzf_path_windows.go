@@ -40,5 +40,5 @@ func fzfBinary() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("fzf not found — install with: winget install junegunn.fzf")
+	return "", fmt.Errorf("fzf not found — install with one of:\n  winget install junegunn.fzf\n  scoop install fzf\n  choco install fzf")
 }

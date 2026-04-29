@@ -421,7 +421,7 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 
 	p2 := player.New(cfg.Player)
 	if !p2.Available() {
-		return fmt.Errorf("player %q not found in PATH", cfg.Player)
+		return player.NotFoundError(cfg.Player)
 	}
 
 	lastPos, err := p2.Play(stream, title, startPos, subFile)

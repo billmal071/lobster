@@ -291,7 +291,7 @@ func playCurrentEpisode(sess *playlist.Session) error {
 	// Normal playback with retry on failure
 	p := player.New(cfg.Player)
 	if !p.Available() {
-		return fmt.Errorf("player %q not found in PATH", cfg.Player)
+		return player.NotFoundError(cfg.Player)
 	}
 
 	var startPos float64

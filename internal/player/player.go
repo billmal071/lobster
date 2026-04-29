@@ -4,6 +4,9 @@
 package player
 
 import (
+	"fmt"
+	"runtime"
+
 	"lobster/internal/media"
 )
 
@@ -17,6 +20,21 @@ type Player interface {
 
 	// Available checks if the player binary exists in PATH.
 	Available() bool
+}
+
+// NotFoundError returns a helpful error message when a player binary is missing.
+func NotFoundError(name string) error {
+	if runtime.GOOS == "windows" {
+		switch name {
+		case "mpv":
+			return fmt.Errorf("mpv not found — install with one of:\n  winget install mpv\n  scoop install mpv\n  choco install mpv\nMake sure mpv is in your PATH, or installed in a standard location")
+		case "vlc":
+			return fmt.Errorf("vlc not found — install with one of:\n  winget install VideoLAN.VLC\n  scoop install vlc\n  choco install vlc")
+		default:
+			return fmt.Errorf("player %q not found in PATH", name)
+		}
+	}
+	return fmt.Errorf("player %q not found in PATH", name)
 }
 
 // New creates a player by name.
