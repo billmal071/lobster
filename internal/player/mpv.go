@@ -8,7 +8,9 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
+	"math"
 
 	"lobster/internal/media"
 )
@@ -80,15 +82,17 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 		return 0, fmt.Errorf("starting mpv: %w", err)
 	}
 
-	// Wait briefly for IPC socket to become available
-	var lastPos float64
+	// Track position from IPC in a goroutine, using atomic to avoid data race
+	var posBits atomic.Uint64
 	startTime := time.Now()
 	go func() {
-		lastPos = m.trackPosition(ipc)
+		pos := m.trackPosition(ipc)
+		posBits.Store(math.Float64bits(pos))
 	}()
 
 	waitErr := cmd.Wait()
 	elapsed := time.Since(startTime)
+	lastPos := math.Float64frombits(posBits.Load())
 
 	if waitErr != nil {
 		// mpv returns non-zero on user quit (code 4), which is normal
