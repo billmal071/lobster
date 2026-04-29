@@ -28,7 +28,7 @@ func searchRun(cmd *cobra.Command, args []string) error {
 
 	if query == "" {
 		// Launch the rich TUI Dashboard
-		selected, err := tui.StartApp(p, cfg)
+		selected, err := tui.StartApp(p, cfg, nil)
 		if err != nil {
 			return err
 		}
