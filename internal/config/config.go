@@ -25,7 +25,8 @@ type Config struct {
 	DownloadDir  string `toml:"download_dir"`
 	OSAPIKey     string `toml:"opensubtitles_api_key"`
 	SubDLAPIKey  string `toml:"subdl_api_key"`
-	Debug        bool   `toml:"debug"`
+	Debug                  bool `toml:"debug"`
+	MaxConcurrentDownloads int  `toml:"max_concurrent_downloads"`
 }
 
 // Default returns the default configuration.
@@ -38,8 +39,9 @@ func Default() *Config {
 		Quality:      "1080",
 		History:      true,
 		AutoNext:     true,
-		DownloadDir:  "~/Videos/lobster",
-		Debug:        false,
+		DownloadDir:            "~/Videos/lobster",
+		Debug:                  false,
+		MaxConcurrentDownloads: 2,
 	}
 }
 
@@ -110,6 +112,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("base URL cannot be empty")
 	}
 
+	if c.MaxConcurrentDownloads < 1 || c.MaxConcurrentDownloads > 5 {
+		return fmt.Errorf("max_concurrent_downloads must be 1-5, got %d", c.MaxConcurrentDownloads)
+	}
+
 	return nil
 }
 
@@ -133,4 +139,16 @@ func HistoryPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "history.tsv"), nil
+}
+
+// DownloadsDBPath returns the path to the downloads SQLite database.
+func DownloadsDBPath() (string, error) {
+	dir, err := dataDir()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("creating data directory: %w", err)
+	}
+	return filepath.Join(dir, "downloads.db"), nil
 }

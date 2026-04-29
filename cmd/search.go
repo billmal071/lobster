@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,9 +9,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"lobster/internal/config"
+	"lobster/internal/dlmanager"
+	"lobster/internal/dlmanager/engine"
+	"lobster/internal/dlmanager/store"
 	"lobster/internal/download"
 	"lobster/internal/extract"
 	"lobster/internal/history"
+	"lobster/internal/httputil"
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/playlist"
@@ -27,8 +33,16 @@ func searchRun(cmd *cobra.Command, args []string) error {
 	p := newProvider()
 
 	if query == "" {
-		// Launch the rich TUI Dashboard
-		selected, err := tui.StartApp(p, cfg)
+		// Launch the rich TUI Dashboard with download manager.
+		mgr, cleanup, err := initDownloadManager(cfg)
+		if err != nil {
+			debugf("download manager init failed (continuing without): %v", err)
+		}
+		if cleanup != nil {
+			defer cleanup()
+		}
+
+		selected, err := tui.StartApp(p, cfg, mgr)
 		if err != nil {
 			return err
 		}
@@ -493,4 +507,38 @@ func searchExternalSubs(title string, season, episode int) []media.Subtitle {
 		}
 	}
 	return nil
+}
+
+// initDownloadManager sets up the download manager with SQLite store and engines.
+// Returns a cleanup function that must be called on exit.
+func initDownloadManager(c *config.Config) (*dlmanager.Manager, func(), error) {
+	dbPath, err := config.DownloadsDBPath()
+	if err != nil {
+		return nil, nil, fmt.Errorf("getting db path: %w", err)
+	}
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("opening downloads db: %w", err)
+	}
+
+	client := httputil.NewClient()
+	httpEng := &engine.HTTPEngine{Client: client}
+	hlsEng := &engine.HLSEngine{Client: client, Store: s}
+
+	workers := c.MaxConcurrentDownloads
+	if workers < 1 {
+		workers = 2
+	}
+
+	mgr := dlmanager.New(s, httpEng, hlsEng, workers)
+	ctx := context.Background()
+	mgr.Start(ctx)
+
+	cleanup := func() {
+		mgr.Stop()
+		s.Close()
+	}
+
+	return mgr, cleanup, nil
 }

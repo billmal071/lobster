@@ -11,8 +11,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"lobster/internal/config"
+	"lobster/internal/dlmanager"
+	"lobster/internal/dlmanager/store"
 	"lobster/internal/media"
 	"lobster/internal/provider"
+	"lobster/internal/tui/downloads"
 )
 
 // State enumerated type
@@ -24,26 +27,40 @@ const (
 	statePlaying
 )
 
+// tab identifies the active tab.
+type tab int
+
+const (
+	tabBrowse tab = iota
+	tabDownloads
+)
+
 // AppModel struct holding state
 type AppModel struct {
 	state          state
 	provider       provider.Provider
 	config         *config.Config
-	
+
 	list           list.Model
 	searchInput    textinput.Model
 	loader         spinner.Model
 	results        []media.SearchResult
-	
+
 	width          int
 	height         int
-	
+
 	currentItem    *media.SearchResult
 	currentDetail  *media.ContentDetail
-	
+
 	err            error
 	isSearching    bool
 	selectedResult *media.SearchResult
+
+	// Tab and download manager state
+	activeTab      tab
+	downloadsModel downloads.Model
+	dlManager      *dlmanager.Manager
+	toast          string // transient notification
 }
 
 // item adapter for list.Model
@@ -68,7 +85,8 @@ var (
 	detailLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
 )
 
-func StartApp(p provider.Provider, cfg *config.Config) (*media.SearchResult, error) {
+// StartApp launches the TUI. If mgr is nil, download features are disabled.
+func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager) (*media.SearchResult, error) {
 	ti := textinput.New()
 	ti.Placeholder = "Search for a movie or TV show..."
 	ti.CharLimit = 156
@@ -92,6 +110,11 @@ func StartApp(p provider.Provider, cfg *config.Config) (*media.SearchResult, err
 		list:        l,
 		searchInput: ti,
 		loader:      sp,
+		dlManager:   mgr,
+	}
+
+	if mgr != nil {
+		m.downloadsModel = downloads.New(mgr.Store(), mgr)
 	}
 
 	p2 := tea.NewProgram(m, tea.WithAltScreen())
@@ -104,12 +127,19 @@ func StartApp(p provider.Provider, cfg *config.Config) (*media.SearchResult, err
 }
 
 func (m AppModel) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		fetchTrendingCmd(m.provider),
 		textinput.Blink,
 		m.loader.Tick,
 		m.list.StartSpinner(),
-	)
+	}
+
+	if m.dlManager != nil {
+		cmds = append(cmds, listenProgressCmd(m.dlManager))
+		cmds = append(cmds, m.downloadsModel.Init())
+	}
+
+	return tea.Batch(cmds...)
 }
 
 func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -137,9 +167,41 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		// Global keybindings (work on both tabs).
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
+		case "tab":
+			if m.activeTab == tabBrowse {
+				m.activeTab = tabDownloads
+				m.downloadsModel.SetFocused(true)
+			} else {
+				m.activeTab = tabBrowse
+				m.downloadsModel.SetFocused(false)
+			}
+			return m, m.downloadsModel.Init()
+		case "1":
+			m.activeTab = tabBrowse
+			m.downloadsModel.SetFocused(false)
+			return m, nil
+		case "2":
+			if m.dlManager != nil {
+				m.activeTab = tabDownloads
+				m.downloadsModel.SetFocused(true)
+				return m, m.downloadsModel.Init()
+			}
+			return m, nil
+		}
+
+		// Route to active tab.
+		if m.activeTab == tabDownloads {
+			var cmd tea.Cmd
+			m.downloadsModel, cmd = m.downloadsModel.Update(msg)
+			return m, cmd
+		}
+
+		// Browse tab keybindings.
+		switch msg.String() {
 		case "s", "/":
 			m.isSearching = true
 			m.searchInput.Focus()
@@ -151,12 +213,21 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			return m, nil
+		case "d":
+			if m.dlManager != nil && m.currentItem != nil {
+				return m, m.queueCurrentDownload()
+			}
 		}
 
 	case tea.WindowSizeMsg:
 		h, v := docStyle.GetFrameSize()
 		m.width = msg.Width - h
 		m.height = msg.Height - v
+		mainHeight := m.height - 10 // approximate header + footer
+		if mainHeight < 0 {
+			mainHeight = 0
+		}
+		m.downloadsModel.SetSize(m.width, mainHeight)
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -168,7 +239,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.StopSpinner()
 
 	case resultsFetchedMsg:
-		m.err = nil // Clear error on success
+		m.err = nil
 		m.results = msg
 		items := make([]list.Item, len(msg))
 		for i, v := range msg {
@@ -176,33 +247,86 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.list.SetItems(items)
 		m.list.StopSpinner()
-		
 		if len(msg) > 0 {
 			m.currentItem = &msg[0]
 			cmds = append(cmds, fetchDetailCmd(m.provider, msg[0].ID))
 		}
 
 	case detailFetchedMsg:
-		m.err = nil // Clear error on success
+		m.err = nil
 		if m.currentItem != nil && m.currentItem.ID == msg.id {
 			m.currentDetail = msg.detail
 		}
+
+	case downloadProgressMsg:
+		p := dlmanager.ProgressUpdate(msg)
+		cmd := m.downloadsModel.UpdateProgress(p)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		// Re-subscribe to progress.
+		if m.dlManager != nil {
+			cmds = append(cmds, listenProgressCmd(m.dlManager))
+		}
+
+	case downloadQueuedMsg:
+		m.toast = fmt.Sprintf("Queued: %s", msg.title)
+		cmds = append(cmds, m.downloadsModel.Init())
+
+	case downloadBatchQueuedMsg:
+		m.toast = fmt.Sprintf("Queued %d episodes: %s", msg.count, msg.title)
+		cmds = append(cmds, m.downloadsModel.Init())
 	}
 
-	// Make sure we update list and handle item change to fetch details
-	var listCmd tea.Cmd
-	var prevIndex = m.list.Index()
-	m.list, listCmd = m.list.Update(msg)
-	
-	if !m.isSearching && len(m.results) > 0 && m.list.Index() != prevIndex {
-		m.currentItem = &m.results[m.list.Index()]
-		m.currentDetail = nil // Clear while fetching
-		m.err = nil // Reset error state on new fetch
-		cmds = append(cmds, fetchDetailCmd(m.provider, m.currentItem.ID))
+	// Update browse list and handle item change.
+	if m.activeTab == tabBrowse {
+		var listCmd tea.Cmd
+		prevIndex := m.list.Index()
+		m.list, listCmd = m.list.Update(msg)
+		if !m.isSearching && len(m.results) > 0 && m.list.Index() != prevIndex {
+			m.currentItem = &m.results[m.list.Index()]
+			m.currentDetail = nil
+			m.err = nil
+			cmds = append(cmds, fetchDetailCmd(m.provider, m.currentItem.ID))
+		}
+		cmds = append(cmds, listCmd)
 	}
 
-	cmds = append(cmds, listCmd)
 	return m, tea.Batch(cmds...)
+}
+
+// queueCurrentDownload queues the currently selected item for download.
+func (m *AppModel) queueCurrentDownload() tea.Cmd {
+	if m.currentItem == nil || m.dlManager == nil {
+		return nil
+	}
+	item := *m.currentItem
+	mgr := m.dlManager
+	cfg := m.config
+
+	return func() tea.Msg {
+		outputDir, err := cfg.ExpandDownloadDir()
+		if err != nil {
+			return errMsg{err}
+		}
+
+		// For now, queue with metadata. Stream resolution happens at download time.
+		d := &store.Download{
+			Title:      item.Title,
+			MediaTitle: item.Title,
+			MediaType:  item.Type.String(),
+			MediaID:    item.ID,
+			OutputPath: outputDir + "/" + item.Title + ".mkv",
+			Status:     "queued",
+			StreamType: "hls", // Default; will be resolved by worker.
+		}
+
+		id, err := mgr.Queue(d)
+		if err != nil {
+			return errMsg{err}
+		}
+		return downloadQueuedMsg{downloadID: id, title: item.Title}
+	}
 }
 
 func (m AppModel) View() string {
@@ -211,24 +335,92 @@ func (m AppModel) View() string {
 	}
 
 	headerASCII := `
-    __    ____  ____  __________________ 
+    __    ____  ____  __________________
    / /   / __ \/ __ )/ ___/_  __/ ____/ __
   / /   / / / / __  |\__ \ / / / __/   / /
- / /___/ /_/ / /_/ /___/ // / / /___  /_/ 
+ / /___/ /_/ / /_/ /___/ // / / /___  /_/
 /_____/\____/_____//____//_/ /_____/ (_) `
 
 	header := headerStyle.Render(strings.TrimPrefix(headerASCII, "\n") + "\n  Terminal Media Streamer  \u2022  Search, Play, Download\n")
 
+	// Tab bar
+	tabBar := m.renderTabBar()
+
 	// Dynamically calculate the main content area bounds
-	mainHeight := m.height - lipgloss.Height(header) - 3
+	mainHeight := m.height - lipgloss.Height(header) - lipgloss.Height(tabBar) - 3
 	if mainHeight < 0 {
 		mainHeight = 0
 	}
+
+	var mainContent string
+	if m.activeTab == tabDownloads {
+		m.downloadsModel.SetSize(m.width, mainHeight)
+		mainContent = m.downloadsModel.View()
+	} else {
+		mainContent = m.renderBrowseContent(mainHeight)
+	}
+
+	footerStyle := lipgloss.NewStyle().
+		MarginTop(1).
+		Foreground(lipgloss.Color("#6272A4")).
+		Background(lipgloss.Color("#282A36")).
+		Padding(0, 2)
+
+	var footer string
+	if m.toast != "" {
+		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Render(m.toast)
+	} else if m.err != nil {
+		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555")).Render(fmt.Sprintf("Error: %v", m.err))
+	} else if m.activeTab == tabDownloads {
+		footer = footerStyle.Render("[P] Pause/Resume  [X] Cancel  [R] Retry  [BS] Remove  [C] Clear  [TAB] Browse")
+	} else {
+		dlHint := ""
+		if m.dlManager != nil {
+			dlHint = "  [D] Download  "
+		}
+		footer = footerStyle.Render("[ENTER] Play" + dlHint + "[S] Search  [TAB] Downloads  [Q] Quit")
+	}
+
+	return docStyle.Render(lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		tabBar,
+		mainContent,
+		footer,
+	))
+}
+
+func (m AppModel) renderTabBar() string {
+	activeStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Background(lipgloss.Color("#FF0055")).
+		Padding(0, 2)
+
+	inactiveStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888")).
+		Padding(0, 2)
+
+	browseLabel := "1 Browse"
+	dlLabel := "2 Downloads"
+
+	var browseTab, dlTab string
+	if m.activeTab == tabBrowse {
+		browseTab = activeStyle.Render(browseLabel)
+		dlTab = inactiveStyle.Render(dlLabel)
+	} else {
+		browseTab = inactiveStyle.Render(browseLabel)
+		dlTab = activeStyle.Render(dlLabel)
+	}
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, browseTab, "  ", dlTab)
+}
+
+func (m AppModel) renderBrowseContent(mainHeight int) string {
 	m.list.SetSize(m.width/3, mainHeight)
 
 	var leftPane string
 	if m.isSearching {
-		leftPane = lipgloss.JoinVertical(lipgloss.Left, 
+		leftPane = lipgloss.JoinVertical(lipgloss.Left,
 			lipgloss.NewStyle().Foreground(lipgloss.Color("#FF79C6")).Bold(true).Render(" Search Query:"),
 			m.searchInput.View(),
 			"",
@@ -238,29 +430,26 @@ func (m AppModel) View() string {
 		leftPane = m.list.View()
 	}
 
-	// Add border to left pane container so it separates nicely from the right pane
 	leftPaneStyle := lipgloss.NewStyle().
 		Width(m.width/3).
 		Height(mainHeight).
-		Border(lipgloss.RoundedBorder(), false, true, false, false). // Right border only
+		Border(lipgloss.RoundedBorder(), false, true, false, false).
 		BorderForeground(lipgloss.Color("#444444")).
 		PaddingRight(2)
 
 	leftPane = leftPaneStyle.Render(leftPane)
 
-	// Render Right Pane
 	var rightPane string
 	if m.currentItem != nil {
-		
 		titleStr := detailTitleStyle.Render(fmt.Sprintf("%s (%s)", m.currentItem.Title, m.currentItem.Year))
-		
+
 		var typeStr string
 		if m.currentItem.Type == media.TV {
-			typeStr = fmt.Sprintf("📺 TV Series \u2022 %d Seasons \u2022 %d Eps", m.currentItem.Seasons, m.currentItem.Episodes)
+			typeStr = fmt.Sprintf("TV Series \u2022 %d Seasons \u2022 %d Eps", m.currentItem.Seasons, m.currentItem.Episodes)
 		} else {
-			typeStr = "🎬 Movie \u2022 " + m.currentItem.Duration
+			typeStr = "Movie \u2022 " + m.currentItem.Duration
 		}
-		
+
 		var extDetails string
 		if m.currentDetail != nil {
 			plotBox := lipgloss.NewStyle().
@@ -270,21 +459,21 @@ func (m AppModel) View() string {
 				MarginTop(1).
 				Render(m.currentDetail.Description)
 
-			extDetails = fmt.Sprintf("\n%s\n%s\n%s\n%s", 
-				detailLabelStyle.Render("⭐ Rating: ")+lipgloss.NewStyle().Foreground(lipgloss.Color("#F1FA8C")).Render(m.currentDetail.Rating),
-				detailLabelStyle.Render("🎭 Genre:  ")+m.currentDetail.Genre[0], // Simplified preview
-				detailLabelStyle.Render("🎬 Cast:   ")+strings.Join(m.currentDetail.Casts, ", "),
+			extDetails = fmt.Sprintf("\n%s\n%s\n%s\n%s",
+				detailLabelStyle.Render("Rating: ")+lipgloss.NewStyle().Foreground(lipgloss.Color("#F1FA8C")).Render(m.currentDetail.Rating),
+				detailLabelStyle.Render("Genre:  ")+m.currentDetail.Genre[0],
+				detailLabelStyle.Render("Cast:   ")+strings.Join(m.currentDetail.Casts, ", "),
 				plotBox,
 			)
 		} else {
 			if m.err != nil {
 				extDetails = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555")).MarginTop(2).Render(
-					"⚠️  Failed to load details from provider.\n" +
-					"    Server might be rate-limiting or down.\n" +
-					"    Scroll up/down to retry.",
+					"Failed to load details from provider.\n" +
+						"    Server might be rate-limiting or down.\n" +
+						"    Scroll up/down to retry.",
 				)
 			} else {
-				extDetails = "\n\n  ⏳ Loading details from server..."
+				extDetails = "\n\n  Loading details from server..."
 			}
 		}
 
@@ -293,12 +482,12 @@ func (m AppModel) View() string {
 			lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).MarginBottom(1).Render(typeStr),
 			extDetails,
 		)
-		
+
 		rightPaneStyle := lipgloss.NewStyle().
 			Width(m.width - m.width/3 - 4).
 			Height(mainHeight).
 			Padding(0, 2)
-			
+
 		rightPane = rightPaneStyle.Render(rightPaneContent)
 	} else {
 		if len(m.results) == 0 && m.err == nil {
@@ -309,22 +498,5 @@ func (m AppModel) View() string {
 		}
 	}
 
-	mainContent := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
-	
-	footerStyle := lipgloss.NewStyle().
-		MarginTop(1).
-		Foreground(lipgloss.Color("#6272A4")).
-		Background(lipgloss.Color("#282A36")).
-		Padding(0, 2)
-		
-	footer := footerStyle.Render("[ENTER] Play Item    [S] / [/] Search    [Q] Quit")
-	if m.err != nil {
-		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555")).Render(fmt.Sprintf("Error: %v", m.err))
-	}
-
-	return docStyle.Render(lipgloss.JoinVertical(lipgloss.Left,
-		header,
-		mainContent,
-		footer,
-	))
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
 }
