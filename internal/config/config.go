@@ -24,6 +24,7 @@ type Config struct {
 	AutoNext     bool   `toml:"auto_next"`
 	DownloadDir  string `toml:"download_dir"`
 	OSAPIKey     string `toml:"opensubtitles_api_key"`
+	SubDLAPIKey  string `toml:"subdl_api_key"`
 	Debug        bool   `toml:"debug"`
 }
 

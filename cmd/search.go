@@ -376,16 +376,8 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	var subFile string
 	if !flagNoSubs {
 		subs := stream.Subtitles
-		if len(subs) == 0 && cfg.OSAPIKey != "" {
-			debugf("no embedded subtitles, trying OpenSubtitles...")
-			osSubs, err := subtitle.NewOpenSubtitles(cfg.OSAPIKey).Search(
-				selected.Title, cfg.SubsLanguage, season, episode,
-			)
-			if err != nil {
-				debugf("OpenSubtitles search failed: %v", err)
-			} else {
-				subs = osSubs
-			}
+		if len(subs) == 0 {
+			subs = searchExternalSubs(selected.Title, season, episode)
 		}
 		if len(subs) > 0 {
 			best := subtitle.BestMatch(subs, cfg.SubsLanguage)
@@ -455,9 +447,14 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	return nil
 }
 
-// resolveAndDownloadSub handles downloading a subtitle, resolving OpenSubtitles
-// file IDs to actual download URLs when needed.
+// resolveAndDownloadSub handles downloading a subtitle, resolving provider-specific
+// URL schemes (opensubtitles:, subdl:) to actual files.
 func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle) (string, error) {
+	if strings.HasPrefix(sub.URL, "subdl:") {
+		zipURL := strings.TrimPrefix(sub.URL, "subdl:")
+		client := subtitle.NewSubDL(cfg.SubDLAPIKey)
+		return client.DownloadAndExtract(zipURL, tmpDir)
+	}
 	if strings.HasPrefix(sub.URL, "opensubtitles:") {
 		var fileID int
 		fmt.Sscanf(sub.URL, "opensubtitles:%d", &fileID)
@@ -469,4 +466,31 @@ func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle) (string
 		sub.URL = downloadURL
 	}
 	return tmpDir.Download(sub)
+}
+
+// searchExternalSubs tries SubDL first, then OpenSubtitles as fallback.
+func searchExternalSubs(title string, season, episode int) []media.Subtitle {
+	if cfg.SubDLAPIKey != "" {
+		debugf("no embedded subtitles, trying SubDL...")
+		subs, err := subtitle.NewSubDL(cfg.SubDLAPIKey).Search(
+			title, cfg.SubsLanguage, season, episode,
+		)
+		if err != nil {
+			debugf("SubDL search failed: %v", err)
+		} else if len(subs) > 0 {
+			return subs
+		}
+	}
+	if cfg.OSAPIKey != "" {
+		debugf("trying OpenSubtitles fallback...")
+		subs, err := subtitle.NewOpenSubtitles(cfg.OSAPIKey).Search(
+			title, cfg.SubsLanguage, season, episode,
+		)
+		if err != nil {
+			debugf("OpenSubtitles search failed: %v", err)
+		} else if len(subs) > 0 {
+			return subs
+		}
+	}
+	return nil
 }
