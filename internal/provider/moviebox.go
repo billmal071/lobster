@@ -1,0 +1,551 @@
+package provider
+
+import (
+	"crypto/hmac"
+	"crypto/md5"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"lobster/internal/media"
+)
+
+// MovieBox implements the StreamProvider interface using the MovieBox V3 mobile API.
+type MovieBox struct {
+	baseURLs []string
+	client   *http.Client
+	token    string // bearer token from x-user header
+	pos      int    // current host index
+}
+
+// NewMovieBox creates a new MovieBox provider.
+func NewMovieBox() *MovieBox {
+	return &MovieBox{
+		baseURLs: []string{
+			"https://api3.aoneroom.com",
+			"https://api4.aoneroom.com",
+			"https://api5.aoneroom.com",
+			"https://api6.aoneroom.com",
+		},
+		client: &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+// baseURL returns the current API base URL.
+func (m *MovieBox) baseURL() string {
+	return m.baseURLs[m.pos%len(m.baseURLs)]
+}
+
+// rotateHost advances to the next host.
+func (m *MovieBox) rotateHost() {
+	m.pos++
+}
+
+const (
+	hmacKey1 = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
+	hmacKey2 = "Xqn2nnO41/L92o1iuXhSLHTbXvY4Z5ZZ62m8mSLA"
+)
+
+// sign signs a request with HMAC-MD5 and returns the required headers.
+func (m *MovieBox) sign(method, path, body string) (clientToken, signature string) {
+	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
+
+	// X-Client-Token: {ts},{md5(reverse(ts))}
+	rev := reverseString(ts)
+	h := md5.Sum([]byte(rev))
+	clientToken = ts + "," + hex.EncodeToString(h[:])
+
+	// x-tr-signature
+	bodyMD5 := md5.Sum([]byte(body))
+	queryPath := path
+	if idx := strings.IndexByte(path, '?'); idx != -1 {
+		queryPath = path[:idx] + path[idx:]
+	}
+	canonical := fmt.Sprintf("%s\n%s\n%s\n%d\n%s\n%s\n%s",
+		method,
+		"application/json",
+		"application/json",
+		len(body),
+		ts,
+		hex.EncodeToString(bodyMD5[:]),
+		queryPath,
+	)
+
+	key, _ := base64.StdEncoding.DecodeString(hmacKey1)
+	mac := hmac.New(md5.New, key)
+	mac.Write([]byte(canonical))
+	sig := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	signature = ts + "|2|" + sig
+
+	return
+}
+
+// request makes an HTTP request with MovieBox signing and returns the response body.
+func (m *MovieBox) request(method, path string, body []byte) ([]byte, error) {
+	var lastErr error
+
+	for i := 0; i < len(m.baseURLs); i++ {
+		url := m.baseURL() + path
+
+		req, err := http.NewRequest(method, url, strings.NewReader(string(body)))
+		if err != nil {
+			return nil, fmt.Errorf("creating request: %w", err)
+		}
+
+		clientToken, signature := m.sign(method, path, string(body))
+		req.Header.Set("X-Client-Token", clientToken)
+		req.Header.Set("x-tr-signature", signature)
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Content-Type", "application/json")
+
+		if m.token != "" {
+			req.Header.Set("Authorization", "Bearer "+m.token)
+		}
+
+		resp, err := m.client.Do(req)
+		if err != nil {
+			lastErr = err
+			m.rotateHost()
+			continue
+		}
+
+		if resp.StatusCode >= 500 && i < len(m.baseURLs)-1 {
+			resp.Body.Close()
+			m.rotateHost()
+			continue
+		}
+
+		// Capture bearer token from x-user header
+		if token := resp.Header.Get("x-user"); token != "" && m.token == "" {
+			m.token = token
+		}
+
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, url)
+		}
+
+		body2, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+		if err != nil {
+			return nil, fmt.Errorf("reading response: %w", err)
+		}
+
+		return body2, nil
+	}
+
+	return nil, fmt.Errorf("all hosts failed, last error: %w", lastErr)
+}
+
+// reverseString reverses a string.
+func reverseString(s string) string {
+	r := []rune(s)
+	for i, j := 0, len(r)-1; i < j; i, j = i+1, j-1 {
+		r[i], r[j] = r[j], r[i]
+	}
+	return string(r)
+}
+
+// --- Response types ---
+
+type mbSearchResponse struct {
+	List  []mbSearchItem `json:"list"`
+	Total int            `json:"total"`
+}
+
+type mbSearchItem struct {
+	SubjectID   int64  `json:"subjectId"`
+	DetailPath  string `json:"detailPath"`
+	Name        string `json:"name"`
+	SubjectType int    `json:"subjectType"`
+	ReleaseYear int    `json:"releaseYear"`
+	SeasonNum   int    `json:"seasonNum"`
+	EpisodeNum  int    `json:"episodeNum"`
+}
+
+type mbDetailResponse struct {
+	SubjectID         int64          `json:"subjectId"`
+	Name              string         `json:"name"`
+	Description       string         `json:"description"`
+	SubjectType       int            `json:"subjectType"`
+	ReleaseYear       int            `json:"releaseYear"`
+	Score             string         `json:"score"`
+	Area              string         `json:"area"`
+	TagNames          []string       `json:"tagNames"`
+	Actors            []string       `json:"actors"`
+	Duration          string         `json:"duration"`
+	SeasonList        []mbSeasonInfo `json:"seasonList"`
+	RecommendList     []mbRecommend  `json:"recommendList"`
+	RecommendResponse []mbRecommend  `json:"recommendResponse"`
+}
+
+type mbSeasonInfo struct {
+	SeasonID   int64  `json:"seasonId"`
+	SeasonNum  int    `json:"seasonNum"`
+	SeasonName string `json:"seasonName"`
+	EpisodeNum int    `json:"episodeNum"`
+}
+
+type mbRecommend struct {
+	SubjectID   int64  `json:"subjectId"`
+	DetailPath  string `json:"detailPath"`
+	Name        string `json:"name"`
+	SubjectType int    `json:"subjectType"`
+}
+
+type mbSeasonDetailResponse struct {
+	SeasonID    int64          `json:"seasonId"`
+	SeasonNum   int            `json:"seasonNum"`
+	EpisodeList []mbEpisodeInfo `json:"episodeList"`
+}
+
+type mbEpisodeInfo struct {
+	EpisodeID   int64  `json:"episodeId"`
+	EpisodeNum  int    `json:"episodeNum"`
+	EpisodeName string `json:"episodeName"`
+}
+
+type mbPlayInfoResponse struct {
+	HLS         []mbHLSEntry   `json:"hls"`
+	Streams     []mbStreamEntry `json:"streams"`
+	HasResource bool            `json:"hasResource"`
+}
+
+type mbHLSEntry struct {
+	ID      string `json:"id"`
+	URL     string `json:"url"`
+	Quality string `json:"quality"`
+}
+
+type mbStreamEntry struct {
+	ID      string `json:"id"`
+	URL     string `json:"url"`
+	Quality string `json:"quality"`
+}
+
+type mbCaption struct {
+	CaptionID   int64  `json:"captionId"`
+	CaptionName string `json:"captionName"`
+	Language    string `json:"language"`
+	URL         string `json:"url"`
+}
+
+type mbCaptionsResponse struct {
+	Captions []mbCaption `json:"captions"`
+}
+
+// --- Provider interface ---
+
+// Search searches for content.
+func (m *MovieBox) Search(query string) ([]media.SearchResult, error) {
+	reqBody := fmt.Sprintf(`{"keyword":"%s","page":1,"perPage":20}`, query)
+	body, err := m.request("POST", "/wefeed-mobile-bff/subject-api/search/v2", []byte(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("moviebox search: %w", err)
+	}
+
+	var resp mbSearchResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("moviebox search: parsing response: %w", err)
+	}
+
+	results := make([]media.SearchResult, 0, len(resp.List))
+	for _, item := range resp.List {
+		mt := mediaTypeFromSubjectType(item.SubjectType)
+		results = append(results, media.SearchResult{
+			ID:       strconv.FormatInt(item.SubjectID, 10),
+			Title:    item.Name,
+			Type:     mt,
+			Year:     strconv.Itoa(item.ReleaseYear),
+			Seasons:  item.SeasonNum,
+			Episodes: item.EpisodeNum,
+		})
+	}
+
+	return results, nil
+}
+
+// GetDetails returns detailed metadata for content.
+func (m *MovieBox) GetDetails(id string) (*media.ContentDetail, error) {
+	body, err := m.request("GET", "/wefeed-mobile-bff/subject-api/get?subjectId="+id, nil)
+	if err != nil {
+		return nil, fmt.Errorf("moviebox details: %w", err)
+	}
+
+	var resp mbDetailResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("moviebox details: parsing response: %w", err)
+	}
+
+	return &media.ContentDetail{
+		Description: resp.Description,
+		Rating:      resp.Score,
+		Duration:    resp.Duration,
+		Genre:       resp.TagNames,
+		Released:    strconv.Itoa(resp.ReleaseYear),
+		Country:     resp.Area,
+		Casts:       resp.Actors,
+	}, nil
+}
+
+// GetSeasons returns available seasons for a TV show.
+func (m *MovieBox) GetSeasons(id string) ([]media.Season, error) {
+	body, err := m.request("GET", "/wefeed-mobile-bff/subject-api/season-info?subjectId="+id, nil)
+	if err != nil {
+		return nil, fmt.Errorf("moviebox seasons: %w", err)
+	}
+
+	var resp mbDetailResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("moviebox seasons: parsing response: %w", err)
+	}
+
+	seasons := make([]media.Season, 0, len(resp.SeasonList))
+	for _, s := range resp.SeasonList {
+		seasons = append(seasons, media.Season{
+			Number: s.SeasonNum,
+			ID:     strconv.FormatInt(s.SeasonID, 10),
+		})
+	}
+
+	return seasons, nil
+}
+
+// GetEpisodes returns episodes for a given season.
+func (m *MovieBox) GetEpisodes(id string, seasonID string) ([]media.Episode, error) {
+	body, err := m.request("GET", "/wefeed-mobile-bff/subject-api/season-info?subjectId="+id, nil)
+	if err != nil {
+		return nil, fmt.Errorf("moviebox episodes: %w", err)
+	}
+
+	var resp mbDetailResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("moviebox episodes: parsing response: %w", err)
+	}
+
+	// Find the matching season
+	var seasonNum int
+	seasonIDInt, _ := strconv.ParseInt(seasonID, 10, 64)
+	var episodeList []mbEpisodeInfo
+
+	for _, s := range resp.SeasonList {
+		if s.SeasonID == seasonIDInt {
+			seasonNum = s.SeasonNum
+			break
+		}
+	}
+
+	// Fetch season detail for episode list
+	detailBody, err := m.request("GET", fmt.Sprintf("/wefeed-mobile-bff/subject-api/season-info?subjectId=%s&seasonId=%s", id, seasonID), nil)
+	if err == nil {
+		var detail mbSeasonDetailResponse
+		if json.Unmarshal(detailBody, &detail) == nil {
+			episodeList = detail.EpisodeList
+		}
+	}
+
+	// If we couldn't get episode list, create from season data
+	if len(episodeList) == 0 {
+		for _, s := range resp.SeasonList {
+			if s.SeasonID == seasonIDInt && s.EpisodeNum > 0 {
+				for i := 1; i <= s.EpisodeNum; i++ {
+					episodeList = append(episodeList, mbEpisodeInfo{
+						EpisodeNum:  i,
+						EpisodeName: fmt.Sprintf("Episode %d", i),
+					})
+				}
+				break
+			}
+		}
+	}
+
+	episodes := make([]media.Episode, 0, len(episodeList))
+	for _, e := range episodeList {
+		episodes = append(episodes, media.Episode{
+			Number: e.EpisodeNum,
+			Title:  e.EpisodeName,
+			ID:     strconv.FormatInt(e.EpisodeID, 10),
+		})
+	}
+
+	_ = seasonNum
+	return episodes, nil
+}
+
+// GetServers returns a synthetic server for direct streaming.
+func (m *MovieBox) GetServers(id string, episodeID string) ([]media.Server, error) {
+	return []media.Server{{Name: "MovieBox", ID: "default"}}, nil
+}
+
+// GetEmbedURL is not used for MovieBox (uses Watch instead).
+func (m *MovieBox) GetEmbedURL(serverID string) (string, error) {
+	return "", fmt.Errorf("GetEmbedURL not supported by moviebox provider; use Watch instead")
+}
+
+// Trending returns trending content.
+func (m *MovieBox) Trending(mediaType media.MediaType) ([]media.SearchResult, error) {
+	tabID := "movie"
+	if mediaType == media.TV {
+		tabID = "tv"
+	}
+	return m.fetchTabContent(tabID)
+}
+
+// Recent returns recently added content.
+func (m *MovieBox) Recent(mediaType media.MediaType) ([]media.SearchResult, error) {
+	tabID := "movie"
+	if mediaType == media.TV {
+		tabID = "tv"
+	}
+	return m.fetchTabContent(tabID + "_new")
+}
+
+func (m *MovieBox) fetchTabContent(tabID string) ([]media.SearchResult, error) {
+	body, err := m.request("GET", fmt.Sprintf("/wefeed-mobile-bff/tab-operating?page=1&tabId=%s&version=1", tabID), nil)
+	if err != nil {
+		return nil, fmt.Errorf("moviebox tab: %w", err)
+	}
+
+	var resp struct {
+		List []mbSearchItem `json:"list"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("moviebox tab: parsing response: %w", err)
+	}
+
+	results := make([]media.SearchResult, 0, len(resp.List))
+	for _, item := range resp.List {
+		results = append(results, media.SearchResult{
+			ID:       strconv.FormatInt(item.SubjectID, 10),
+			Title:    item.Name,
+			Type:     mediaTypeFromSubjectType(item.SubjectType),
+			Year:     strconv.Itoa(item.ReleaseYear),
+			Seasons:  item.SeasonNum,
+			Episodes: item.EpisodeNum,
+		})
+	}
+
+	return results, nil
+}
+
+// --- StreamProvider interface ---
+
+// Watch resolves a direct stream URL.
+func (m *MovieBox) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+	se, ep := 0, 0
+
+	if episodeID != "" {
+		// episodeID is season.episode e.g. "1.5" or just episode number
+		if strings.Contains(episodeID, ".") {
+			parts := strings.Split(episodeID, ".")
+			if len(parts) == 2 {
+				se, _ = strconv.Atoi(parts[0])
+				ep, _ = strconv.Atoi(parts[1])
+			}
+		} else {
+			ep, _ = strconv.Atoi(episodeID)
+		}
+	}
+
+	path := fmt.Sprintf("/wefeed-mobile-bff/subject-api/play-info?subjectId=%s&se=%d&ep=%d", mediaID, se, ep)
+	body, err := m.request("GET", path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("moviebox watch: %w", err)
+	}
+
+	var resp mbPlayInfoResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("moviebox watch: parsing response: %w", err)
+	}
+
+	if !resp.HasResource {
+		return nil, fmt.Errorf("moviebox watch: no streams available (geo-restricted or unavailable)")
+	}
+
+	// Prefer HLS streams, fall back to MP4 streams
+	var streamURL, streamQuality string
+	if len(resp.HLS) > 0 {
+		sort.Slice(resp.HLS, func(i, j int) bool {
+			return streamQualityRank(resp.HLS[i].Quality) > streamQualityRank(resp.HLS[j].Quality)
+		})
+		streamURL = resp.HLS[0].URL
+		streamQuality = resp.HLS[0].Quality
+	} else if len(resp.Streams) > 0 {
+		sort.Slice(resp.Streams, func(i, j int) bool {
+			return streamQualityRank(resp.Streams[i].Quality) > streamQualityRank(resp.Streams[j].Quality)
+		})
+		streamURL = resp.Streams[0].URL
+		streamQuality = resp.Streams[0].Quality
+	} else {
+		return nil, fmt.Errorf("moviebox watch: no stream URLs found")
+	}
+
+	// Fetch subtitles if available
+	subtitles := m.fetchSubtitles(mediaID)
+
+	return &media.Stream{
+		URL:       streamURL,
+		Quality:   streamQuality,
+		Subtitles: subtitles,
+	}, nil
+}
+
+func (m *MovieBox) fetchSubtitles(mediaID string) []media.Subtitle {
+	body, err := m.request("GET", "/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId="+mediaID, nil)
+	if err != nil {
+		return nil
+	}
+
+	var resp mbCaptionsResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil
+	}
+
+	subtitles := make([]media.Subtitle, 0, len(resp.Captions))
+	for _, c := range resp.Captions {
+		subtitles = append(subtitles, media.Subtitle{
+			Language: c.Language,
+			Label:    c.CaptionName,
+			URL:      c.URL,
+		})
+	}
+
+	return subtitles
+}
+
+// streamQualityRank returns a rank for quality sorting (higher = better).
+func streamQualityRank(q string) int {
+	switch {
+	case strings.HasPrefix(q, "4k"):
+		return 5
+	case strings.HasPrefix(q, "1080"):
+		return 4
+	case strings.HasPrefix(q, "720"):
+		return 3
+	case strings.HasPrefix(q, "480"):
+		return 2
+	case strings.HasPrefix(q, "360"):
+		return 1
+	default:
+		return 0
+	}
+}
+
+// mediaTypeFromSubjectType converts MovieBox subjectType to media.MediaType.
+func mediaTypeFromSubjectType(st int) media.MediaType {
+	switch st {
+	case 1:
+		return media.Movie
+	case 2, 3:
+		return media.TV
+	default:
+		return media.Movie
+	}
+}
