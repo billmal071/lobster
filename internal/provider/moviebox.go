@@ -442,8 +442,17 @@ func (m *MovieBox) Watch(mediaID, episodeID, server, quality string) (*media.Str
 	se, ep := 0, 0
 
 	if episodeID != "" {
-		// episodeID is season.episode e.g. "1.5" or just episode number
-		if strings.Contains(episodeID, ".") {
+		// Supports multiple formats:
+		//   "season.episode" e.g. "1.5"
+		//   "id:season:episode" e.g. "123:1:5" (fallback path)
+		//   plain episode number e.g. "5"
+		if strings.Contains(episodeID, ":") {
+			parts := strings.Split(episodeID, ":")
+			if len(parts) >= 3 {
+				se, _ = strconv.Atoi(parts[len(parts)-2])
+				ep, _ = strconv.Atoi(parts[len(parts)-1])
+			}
+		} else if strings.Contains(episodeID, ".") {
 			parts := strings.Split(episodeID, ".")
 			if len(parts) == 2 {
 				se, _ = strconv.Atoi(parts[0])
