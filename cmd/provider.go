@@ -21,6 +21,9 @@ func newProvider() provider.Provider {
 	if strings.Contains(cfg.Base, "kimcartoon") {
 		return provider.NewKimCartoon(cfg.Base)
 	}
+	if strings.Contains(cfg.Base, "moviebox") {
+		return provider.NewMovieBox()
+	}
 	if strings.Contains(cfg.Base, "flixhq.ws") {
 		return provider.NewFlixHQWS(cfg.Base)
 	}
