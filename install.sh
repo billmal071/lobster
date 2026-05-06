@@ -83,12 +83,20 @@ fi
 echo "✅ Lobster $LATEST_RELEASE installed successfully!"
 lobster version 2>/dev/null || true
 
-# Check for old config that may override new defaults
-CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/lobster/config.toml"
-if [ -f "$CONFIG_FILE" ] && grep -q 'base.*=.*"flixhq' "$CONFIG_FILE" 2>/dev/null; then
-    echo ""
-    echo "⚠️  Your config ($CONFIG_FILE) uses an old provider."
-    echo "   Remove the 'base' line or set base = \"soap2day\" for the new default."
+# Migrate old config that overrides new defaults
+if [ "$OS_LOWER" = "darwin" ]; then
+    CONFIG_FILE="$HOME/Library/Application Support/lobster/config.toml"
+else
+    CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/lobster/config.toml"
+fi
+
+if [ -f "$CONFIG_FILE" ]; then
+    # Remove old base setting so new default (soap2day) takes effect
+    if grep -q 'base.*=.*"flixhq' "$CONFIG_FILE" 2>/dev/null; then
+        sed -i.bak '/^base.*=.*"flixhq/d' "$CONFIG_FILE" 2>/dev/null || \
+        sed -i '' '/^base.*=.*"flixhq/d' "$CONFIG_FILE" 2>/dev/null
+        echo "🔄 Migrated config: removed old flixhq provider (now using soap2day)"
+    fi
 fi
 
 echo "Run 'lobster' in your terminal to get started."
