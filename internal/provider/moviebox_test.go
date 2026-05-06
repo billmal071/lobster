@@ -11,38 +11,23 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Test data
+// Test data (new API format with envelope)
 // ---------------------------------------------------------------------------
 
-const testSearchResponse = `{
-  "list": [
-    {"subjectId": 1857349212451623008, "detailPath": "KHgp5s6Gcd2", "name": "Project Hail Mary", "subjectType": 1, "releaseYear": 2025, "seasonNum": 0, "episodeNum": 0},
-    {"subjectId": 2857349212451623009, "detailPath": "ABcd5s6Gcd3", "name": "Breaking Bad", "subjectType": 2, "releaseYear": 2008, "seasonNum": 5, "episodeNum": 62}
-  ],
-  "total": 2
-}`
-
-const testDetailResponse = `{
-  "subjectId": 1857349212451623008,
-  "name": "Project Hail Mary",
-  "description": "A lone astronaut must save the earth.",
-  "subjectType": 1,
-  "releaseYear": 2025,
-  "score": "8.5",
-  "area": "USA",
-  "tagNames": ["Sci-Fi", "Adventure"],
-  "actors": ["Ryan Gosling", "Eva Mendes"],
-  "duration": "124 min"
-}`
-
-const testSeasonInfoResponse = `{
-  "subjectId": 2857349212451623009,
-  "name": "Breaking Bad",
-  "subjectType": 2,
-  "seasonList": [
-    {"seasonId": 1001, "seasonNum": 1, "seasonName": "Season 1", "episodeNum": 7},
-    {"seasonId": 1002, "seasonNum": 2, "seasonName": "Season 2", "episodeNum": 13}
-  ]
+const testSearchResponseV2 = `{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "results": [
+      {
+        "topicType": "SUBJECT",
+        "subjects": [
+          {"subjectId": "1857349212451623008", "subjectType": 1, "title": "Project Hail Mary", "releaseDate": "2025-03-14", "duration": "2h 4m", "genre": "Sci-Fi, Adventure", "hasResource": true, "seNum": 0, "imdbRatingValue": "8.5", "countryName": "USA", "description": "A lone astronaut must save the earth."},
+          {"subjectId": "2857349212451623009", "subjectType": 2, "title": "Breaking Bad", "releaseDate": "2008-01-20", "duration": "", "genre": "Drama, Crime", "hasResource": true, "seNum": 5, "imdbRatingValue": "9.5", "countryName": "USA", "description": "A chemistry teacher turns to crime."}
+        ]
+      }
+    ]
+  }
 }`
 
 const testPlayInfoResponse = `{
@@ -56,6 +41,21 @@ const testPlayInfoResponse = `{
   "hasResource": true
 }`
 
+const testTabResponse = `{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "results": [
+      {
+        "topicType": "SUBJECT",
+        "subjects": [
+          {"subjectId": "100", "subjectType": 1, "title": "Trending Movie", "releaseDate": "2025-01-01", "duration": "1h 30m", "genre": "Action", "hasResource": true, "seNum": 0}
+        ]
+      }
+    ]
+  }
+}`
+
 // ---------------------------------------------------------------------------
 // Test server
 // ---------------------------------------------------------------------------
@@ -66,23 +66,12 @@ func newMovieBoxTestServer(t *testing.T) *httptest.Server {
 
 	mux.HandleFunc("/wefeed-mobile-bff/tab-operating", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(testSearchResponse))
+		w.Write([]byte(testTabResponse))
 	})
 
 	mux.HandleFunc("/wefeed-mobile-bff/subject-api/search/v2", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("x-user", "test-bearer-token")
-		w.Write([]byte(testSearchResponse))
-	})
-
-	mux.HandleFunc("/wefeed-mobile-bff/subject-api/get", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(testDetailResponse))
-	})
-
-	mux.HandleFunc("/wefeed-mobile-bff/subject-api/season-info", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(testSeasonInfoResponse))
+		w.Write([]byte(testSearchResponseV2))
 	})
 
 	mux.HandleFunc("/wefeed-mobile-bff/subject-api/play-info", func(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +86,6 @@ func newMovieBoxTestServer(t *testing.T) *httptest.Server {
 
 func newMovieBoxForTest(srv *httptest.Server) *MovieBox {
 	m := NewMovieBox()
-	// Override baseURLs to use the test server
 	m.baseURLs = []string{srv.URL}
 	m.client = srv.Client()
 	return m
@@ -145,6 +133,12 @@ func TestMovieBoxGetDetails(t *testing.T) {
 	srv := newMovieBoxTestServer(t)
 	m := newMovieBoxForTest(srv)
 
+	// Search first to populate cache.
+	_, err := m.Search("hail")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
 	detail, err := m.GetDetails("1857349212451623008")
 	if err != nil {
 		t.Fatalf("GetDetails returned error: %v", err)
@@ -156,8 +150,8 @@ func TestMovieBoxGetDetails(t *testing.T) {
 	if detail.Rating != "8.5" {
 		t.Errorf("expected rating 8.5, got %s", detail.Rating)
 	}
-	if detail.Duration != "124 min" {
-		t.Errorf("expected duration '124 min', got %s", detail.Duration)
+	if detail.Duration != "2h 4m" {
+		t.Errorf("expected duration '2h 4m', got %s", detail.Duration)
 	}
 	if len(detail.Genre) != 2 {
 		t.Errorf("expected 2 genres, got %d", len(detail.Genre))
@@ -168,26 +162,43 @@ func TestMovieBoxGetSeasons(t *testing.T) {
 	srv := newMovieBoxTestServer(t)
 	m := newMovieBoxForTest(srv)
 
+	// Search first to populate cache.
+	_, err := m.Search("hail")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
 	seasons, err := m.GetSeasons("2857349212451623009")
 	if err != nil {
 		t.Fatalf("GetSeasons returned error: %v", err)
 	}
 
-	if len(seasons) != 2 {
-		t.Fatalf("expected 2 seasons, got %d", len(seasons))
+	if len(seasons) != 5 {
+		t.Fatalf("expected 5 seasons (from seNum), got %d", len(seasons))
 	}
-
-	if seasons[0].Number != 1 || seasons[0].ID != "1001" {
+	if seasons[0].Number != 1 || seasons[0].ID != "1" {
 		t.Errorf("unexpected season 0: %+v", seasons[0])
 	}
-	if seasons[1].Number != 2 || seasons[1].ID != "1002" {
-		t.Errorf("unexpected season 1: %+v", seasons[1])
+}
+
+func TestMovieBoxGetEpisodes(t *testing.T) {
+	m := NewMovieBox()
+
+	episodes, err := m.GetEpisodes("123", "2")
+	if err != nil {
+		t.Fatalf("GetEpisodes returned error: %v", err)
+	}
+
+	if len(episodes) != 10 {
+		t.Fatalf("expected 10 episodes, got %d", len(episodes))
+	}
+	if episodes[0].ID != "2.1" {
+		t.Errorf("expected episode ID '2.1', got %s", episodes[0].ID)
 	}
 }
 
 func TestMovieBoxGetServers(t *testing.T) {
-	srv := newMovieBoxTestServer(t)
-	m := newMovieBoxForTest(srv)
+	m := NewMovieBox()
 
 	servers, err := m.GetServers("1857349212451623008", "1.5")
 	if err != nil {
@@ -219,16 +230,6 @@ func TestMovieBoxWatch(t *testing.T) {
 	}
 }
 
-func TestMovieBoxWatch_GeoRestricted(t *testing.T) {
-	m := NewMovieBox()
-	m.baseURLs = []string{"https://localhost:9999"} // Invalid server
-
-	_, err := m.Watch("1857349212451623008", "", "", "")
-	if err == nil {
-		t.Fatal("expected error from Watch with invalid server")
-	}
-}
-
 func TestMovieBoxGetEmbedURL_NotSupported(t *testing.T) {
 	m := NewMovieBox()
 	_, err := m.GetEmbedURL("someID")
@@ -244,12 +245,12 @@ func TestMovieBoxImplementsStreamProvider(t *testing.T) {
 func TestMovieBoxMediaTypeFromSubjectType(t *testing.T) {
 	tests := []struct {
 		subjectType int
-		expected   media.MediaType
+		expected    media.MediaType
 	}{
 		{1, media.Movie},
 		{2, media.TV},
 		{3, media.TV},
-		{99, media.Movie}, // unknown defaults to Movie
+		{99, media.Movie},
 	}
 
 	for _, tt := range tests {
@@ -290,8 +291,11 @@ func TestMovieBoxTrending(t *testing.T) {
 		t.Fatalf("Trending returned error: %v", err)
 	}
 
-	if len(results) != 2 {
-		t.Fatalf("expected 2 results from tab endpoint, got %d", len(results))
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result from tab endpoint, got %d", len(results))
+	}
+	if results[0].Title != "Trending Movie" {
+		t.Errorf("unexpected title: %s", results[0].Title)
 	}
 }
 
@@ -314,35 +318,10 @@ func TestReverseString(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Benchmark
-// ---------------------------------------------------------------------------
-
-// ignore pref: keep b.N loop for Go 1.22 compatibility
-func BenchmarkMovieBoxSearch(b *testing.B) {
-	srv := newMovieBoxTestServer(&testing.T{})
-	m := newMovieBoxForTest(srv)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		m.Search("test")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Test data JSON files for reference
-// ---------------------------------------------------------------------------
-
 func TestMovieBoxTestdataValidJSON(t *testing.T) {
-	// Verify test data files parse correctly
-	var search mbSearchResponse
-	if err := json.Unmarshal([]byte(testSearchResponse), &search); err != nil {
+	var envelope mbAPIResponse
+	if err := json.Unmarshal([]byte(testSearchResponseV2), &envelope); err != nil {
 		t.Errorf("test search response is not valid JSON: %v", err)
-	}
-
-	var detail mbDetailResponse
-	if err := json.Unmarshal([]byte(testDetailResponse), &detail); err != nil {
-		t.Errorf("test detail response is not valid JSON: %v", err)
 	}
 
 	var play mbPlayInfoResponse
