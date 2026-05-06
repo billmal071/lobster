@@ -14,8 +14,7 @@ import (
 	"lobster/internal/dlmanager/engine"
 	"lobster/internal/dlmanager/store"
 	"lobster/internal/download"
-	"lobster/internal/extract"
-	"lobster/internal/history"
+"lobster/internal/history"
 	"lobster/internal/httputil"
 	"lobster/internal/media"
 	"lobster/internal/player"
@@ -305,69 +304,17 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		return playStream(stream, title, selected, season, episode)
 	}
 
-	// Get servers
-	stopServer := ui.StartSpinner("Negotiating stream servers...")
-	servers, err := p.GetServers(selected.ID, episodeID)
-	stopServer()
-	if err != nil || len(servers) == 0 {
-		if err != nil {
-			debugf("GetServers failed: %v", err)
-		}
-		// Try fallback immediately
-		fmt.Fprintf(os.Stderr, "Primary provider failed, trying fallback...\n")
-		fbStream, fbErr := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
-		if fbErr != nil {
-			if err != nil {
-				return fmt.Errorf("getting servers: %w", err)
-			}
-			return fmt.Errorf("no servers found")
-		}
-		return playStream(fbStream, title, selected, season, episode)
+	// Skip primary provider's embed+extract (unreliable) and go straight to
+	// fallback StreamProviders (Soap2Day, etc.) for stream resolution.
+	debugf("resolving stream via fallback providers for %s", title)
+	stopStream := ui.StartSpinner(fmt.Sprintf("Fetching %s media stream...", title))
+	fbStream, err := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
+	stopStream()
+	if err != nil {
+		debugf("fallback failed: %v", err)
+		return fmt.Errorf("all providers failed for %s: %w", title, err)
 	}
-
-	// Try servers in order: preferred first, then fallbacks
-	stopExt := ui.StartSpinner(fmt.Sprintf("Extracting %s media stream...", title))
-	defer stopExt() // Just defer to be safe when it breaks or returns
-
-	ordered := orderServers(servers, cfg.Provider)
-	var stream *media.Stream
-	for _, srv := range ordered {
-		debugf("trying server: %s (ID: %s)", srv.Name, srv.ID)
-
-		embedURL, err := p.GetEmbedURL(srv.ID)
-		if err != nil {
-			debugf("server %s embed failed: %v", srv.Name, err)
-			continue
-		}
-		debugf("embed URL: %s", embedURL)
-
-		ext, resolvedURL := extract.ResolveForURL(embedURL)
-		stream, err = ext.Extract(resolvedURL, cfg.Quality)
-		if err != nil {
-			debugf("server %s extract failed: %v", srv.Name, err)
-			fmt.Fprintf(os.Stderr, "Server %s failed, trying next...\n", srv.Name)
-			continue
-		}
-		debugf("stream URL: %s (server: %s)", stream.URL, srv.Name)
-		break
-	}
-	if stream == nil {
-		stopExt()
-		// Try fallback providers
-		fmt.Fprintf(os.Stderr, "Primary provider failed, trying fallback...\n")
-		debugf("attempting fallback for %s", title)
-		fbStream, err := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
-		if err != nil {
-			debugf("fallback failed: %v", err)
-			return fmt.Errorf("all servers failed for %s", title)
-		}
-		stream = fbStream
-		debugf("fallback stream: %s", stream.URL)
-	} else {
-		stopExt()
-	}
-
-	return playStream(stream, title, selected, season, episode)
+	return playStream(fbStream, title, selected, season, episode)
 }
 
 // playStream handles all post-stream-resolution logic: JSON output, subtitle
