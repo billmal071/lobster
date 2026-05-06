@@ -91,11 +91,11 @@ else
 fi
 
 if [ -f "$CONFIG_FILE" ]; then
-    # Remove old soap2day base setting so new default (flixhq.ws) takes effect
-    if grep -q 'base.*=.*"soap2day' "$CONFIG_FILE" 2>/dev/null; then
-        sed -i.bak '/^base.*=.*"soap2day/d' "$CONFIG_FILE" 2>/dev/null || \
-        sed -i '' '/^base.*=.*"soap2day/d' "$CONFIG_FILE" 2>/dev/null
-        echo "🔄 Migrated config: removed old soap2day setting (now using flixhq.ws)"
+    # Remove old base setting so new default (flixhq.ws) takes effect
+    if grep -q '^base' "$CONFIG_FILE" 2>/dev/null; then
+        sed -i.bak '/^base/d' "$CONFIG_FILE" 2>/dev/null || \
+        sed -i '' '/^base/d' "$CONFIG_FILE" 2>/dev/null
+        echo "🔄 Migrated config: removed old provider setting (now using flixhq.ws)"
     fi
 fi
 
