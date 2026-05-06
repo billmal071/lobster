@@ -59,33 +59,94 @@ type subdlSubtitle struct {
 }
 
 // Search finds subtitles for a movie or TV episode.
+// SubDL requires two steps: first search by film_name to get sd_id,
+// then fetch subtitles by sd_id.
 func (s *SubDLClient) Search(title, language string, season, episode int) ([]media.Subtitle, error) {
-	params := url.Values{}
-	params.Set("api_key", s.apiKey)
-	params.Set("film_name", title)
+	// Step 1: Search for the film to get sd_id.
+	searchParams := url.Values{}
+	searchParams.Set("api_key", s.apiKey)
+	searchParams.Set("film_name", title)
+	searchParams.Set("subs_per_page", "10")
+
+	searchResp, err := s.fetchAPI(searchParams)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(searchResp.Results) == 0 {
+		return nil, fmt.Errorf("no results for %q", title)
+	}
+
+	// Pick the best matching result (prefer exact type match).
+	sdID := searchResp.Results[0].SDId
+	wantType := "movie"
+	if season > 0 || episode > 0 {
+		wantType = "tv"
+	}
+	for _, r := range searchResp.Results {
+		if r.Type == wantType {
+			sdID = r.SDId
+			break
+		}
+	}
+
+	// Step 2: Fetch subtitles by sd_id.
+	subParams := url.Values{}
+	subParams.Set("api_key", s.apiKey)
+	subParams.Set("sd_id", fmt.Sprintf("%d", sdID))
 	if language != "" {
-		params.Set("languages", mapLanguageCode(language))
+		subParams.Set("languages", mapLanguageCode(language))
 	}
 	if season > 0 {
-		params.Set("season_number", fmt.Sprintf("%d", season))
+		subParams.Set("season_number", fmt.Sprintf("%d", season))
 	}
 	if episode > 0 {
-		params.Set("episode_number", fmt.Sprintf("%d", episode))
+		subParams.Set("episode_number", fmt.Sprintf("%d", episode))
 	}
-	params.Set("subs_per_page", "10")
+	subParams.Set("subs_per_page", "10")
 
+	subResp, err := s.fetchAPI(subParams)
+	if err != nil {
+		return nil, err
+	}
+
+	var subtitles []media.Subtitle
+	for _, sub := range subResp.Subtitles {
+		if sub.URL == "" {
+			continue
+		}
+		label := sub.Language
+		if sub.HI {
+			label += " (SDH)"
+		}
+		dlURL := sub.URL
+		if strings.HasPrefix(dlURL, "/") {
+			dlURL = "https://dl.subdl.com" + dlURL
+		}
+		subtitles = append(subtitles, media.Subtitle{
+			Language: sub.Language,
+			Label:    label,
+			URL:      "subdl:" + dlURL,
+		})
+	}
+
+	return subtitles, nil
+}
+
+// fetchAPI makes a GET request to the SubDL API and returns the parsed response.
+func (s *SubDLClient) fetchAPI(params url.Values) (*subdlResponse, error) {
 	reqURL := fmt.Sprintf("%s?%s", subdlAPI, params.Encode())
 
 	req, err := http.NewRequest("GET", reqURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "lobster v0.3.1")
+	req.Header.Set("User-Agent", "lobster/0.6")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("searching subtitles: %w", err)
+		return nil, fmt.Errorf("SubDL request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -103,28 +164,7 @@ func (s *SubDLClient) Search(title, language string, season, episode int) ([]med
 		return nil, fmt.Errorf("parsing response: %w", err)
 	}
 
-	var subtitles []media.Subtitle
-	for _, sub := range result.Subtitles {
-		if sub.URL == "" {
-			continue
-		}
-		label := sub.Language
-		if sub.HI {
-			label += " (SDH)"
-		}
-		// SubDL returns relative paths like /subtitles/filename.zip
-		dlURL := sub.URL
-		if strings.HasPrefix(dlURL, "/") {
-			dlURL = "https://dl.subdl.com" + dlURL
-		}
-		subtitles = append(subtitles, media.Subtitle{
-			Language: sub.Language,
-			Label:    label,
-			URL:      "subdl:" + dlURL,
-		})
-	}
-
-	return subtitles, nil
+	return &result, nil
 }
 
 // DownloadAndExtract downloads a SubDL zip file and extracts the first SRT/VTT subtitle.
