@@ -98,7 +98,7 @@ function Install-Dep {
 
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         $wingetId = switch ($Name) {
-            "mpv"    { "mpv-player.mpv" }
+            "mpv"    { "mpv.net" }
             "fzf"    { "junegunn.fzf" }
             "ffmpeg" { "Gyan.FFmpeg" }
         }
