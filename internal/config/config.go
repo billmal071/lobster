@@ -42,6 +42,7 @@ func Default() *Config {
 		DownloadDir:            "~/Videos/lobster",
 		Debug:                  false,
 		MaxConcurrentDownloads: 2,
+		SubDLAPIKey:            "KCCm2v2q5ZObZOPQgQX8jpQ3-07IEY2c",
 	}
 }
 
