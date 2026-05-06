@@ -146,9 +146,42 @@ if (!(Get-Command fzf -ErrorAction SilentlyContinue)) {
     Install-Dep -Name "fzf" -Url $fzfUrl -ExeName "fzf.exe"
 } else { Write-Host "  fzf found." -ForegroundColor Green }
 
-if (!(Get-Command mpv -ErrorAction SilentlyContinue)) {
-    Install-Dep -Name "mpv" -Url $null -ExeName "mpv.exe"
-} else { Write-Host "  mpv found." -ForegroundColor Green }
+# Media player — check for any supported player (mpv, vlc, iina)
+$playerFound = $false
+foreach ($p in @("mpv", "vlc", "iina")) {
+    if (Get-Command $p -ErrorAction SilentlyContinue) {
+        Write-Host "  Player found: $p" -ForegroundColor Green
+        $playerFound = $true
+        break
+    }
+}
+# Also check common VLC install paths on Windows
+if (!$playerFound) {
+    $vlcPaths = @(
+        "$env:ProgramFiles\VideoLAN\VLC\vlc.exe",
+        "${env:ProgramFiles(x86)}\VideoLAN\VLC\vlc.exe"
+    )
+    foreach ($vp in $vlcPaths) {
+        if (Test-Path $vp) {
+            Write-Host "  Player found: VLC at $vp" -ForegroundColor Green
+            $playerFound = $true
+            break
+        }
+    }
+}
+if (!$playerFound) {
+    Write-Host "  No media player found. Installing VLC ..." -ForegroundColor Yellow
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        winget install --id VideoLAN.VLC --accept-source-agreements --accept-package-agreements --silent 2>$null | Out-Null
+        if ($?) {
+            Write-Host "  VLC installed via winget." -ForegroundColor Green
+            $playerFound = $true
+        }
+    }
+    if (!$playerFound) {
+        Write-Host "  Install a media player manually: mpv, VLC, or iina" -ForegroundColor Yellow
+    }
+}
 
 if (!(Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
     Install-Dep -Name "ffmpeg" -Url $null -ExeName "ffmpeg.exe"
@@ -176,12 +209,31 @@ foreach ($cmd in @("lobster", "fzf")) {
         $allGood = $false
     }
 }
-foreach ($cmd in @("mpv", "ffmpeg")) {
+$hasPlayer = $false
+foreach ($cmd in @("mpv", "vlc", "iina")) {
     if (Get-Command $cmd -ErrorAction SilentlyContinue) {
-        Write-Host "  $cmd ... OK" -ForegroundColor Green
-    } else {
-        Write-Host "  $cmd ... NOT FOUND (install via: winget install $cmd)" -ForegroundColor Yellow
+        Write-Host "  player ($cmd) ... OK" -ForegroundColor Green
+        $hasPlayer = $true
+        break
     }
+}
+if (!$hasPlayer) {
+    # Check VLC in standard paths
+    foreach ($vp in @("$env:ProgramFiles\VideoLAN\VLC\vlc.exe", "${env:ProgramFiles(x86)}\VideoLAN\VLC\vlc.exe")) {
+        if (Test-Path $vp) {
+            Write-Host "  player (VLC) ... OK" -ForegroundColor Green
+            $hasPlayer = $true
+            break
+        }
+    }
+}
+if (!$hasPlayer) {
+    Write-Host "  player ... NOT FOUND (install mpv or VLC)" -ForegroundColor Yellow
+}
+if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+    Write-Host "  ffmpeg ... OK" -ForegroundColor Green
+} else {
+    Write-Host "  ffmpeg ... NOT FOUND (optional, for downloads)" -ForegroundColor Yellow
 }
 
 Write-Host ""
