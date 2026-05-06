@@ -3,6 +3,7 @@
 # One-liner: irm https://raw.githubusercontent.com/billmal071/lobster/main/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $Repo = "billmal071/lobster"
 $InstallDir = "$env:LOCALAPPDATA\lobster\bin"
 $DepsDir = "$env:LOCALAPPDATA\lobster\deps"
