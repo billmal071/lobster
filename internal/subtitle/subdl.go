@@ -115,6 +115,14 @@ func (s *SubDLClient) Search(title, language string, season, episode int) ([]med
 		if sub.URL == "" {
 			continue
 		}
+		// SubDL API doesn't always filter by episode server-side.
+		// Filter client-side to ensure we get the right episode.
+		if episode > 0 && sub.Episode > 0 && sub.Episode != episode {
+			continue
+		}
+		if season > 0 && sub.Season > 0 && sub.Season != season {
+			continue
+		}
 		label := sub.Language
 		if sub.HI {
 			label += " (SDH)"
