@@ -97,6 +97,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, m.removeSelected()
 	case "c":
 		return m, m.clearCompleted()
+	case "R":
+		return m, m.refresh()
 	}
 	return m, nil
 }

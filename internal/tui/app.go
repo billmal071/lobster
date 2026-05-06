@@ -292,6 +292,15 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, listCmd)
 	}
 
+	// Always route messages to downloads model (for refresh, progress, etc.)
+	if m.dlManager != nil {
+		var dlCmd tea.Cmd
+		m.downloadsModel, dlCmd = m.downloadsModel.Update(msg)
+		if dlCmd != nil {
+			cmds = append(cmds, dlCmd)
+		}
+	}
+
 	return m, tea.Batch(cmds...)
 }
 
@@ -372,7 +381,7 @@ func (m AppModel) View() string {
 	} else if m.err != nil {
 		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555")).Render(fmt.Sprintf("Error: %v", m.err))
 	} else if m.activeTab == tabDownloads {
-		footer = footerStyle.Render("[P] Pause/Resume  [X] Cancel  [R] Retry  [BS] Remove  [C] Clear  [TAB] Browse")
+		footer = footerStyle.Render("[P] Pause/Resume  [X] Cancel  [R] Retry  [BS] Remove  [C] Clear  [Shift+R] Refresh  [TAB] Browse")
 	} else {
 		dlHint := ""
 		if m.dlManager != nil {
