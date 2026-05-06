@@ -64,7 +64,7 @@ func (m Model) renderList(width, height int) string {
 	var active, completed, failed []int
 	for i, dl := range m.downloads {
 		switch dl.Status {
-		case "downloading", "queued", "paused", "pending":
+		case "downloading", "resolving", "queued", "paused", "pending":
 			active = append(active, i)
 		case "completed":
 			completed = append(completed, i)
@@ -236,6 +236,8 @@ func statusIcon(status string) string {
 	switch status {
 	case "downloading":
 		return greenStyle.Render("↓")
+	case "resolving":
+		return purpleStyle.Render("⟳")
 	case "queued":
 		return purpleStyle.Render("◌")
 	case "pending":
@@ -255,6 +257,8 @@ func statusStyled(status string) string {
 	switch status {
 	case "downloading":
 		return greenStyle.Render("Downloading")
+	case "resolving":
+		return purpleStyle.Render("Resolving stream...")
 	case "queued":
 		return purpleStyle.Render("Queued")
 	case "pending":
