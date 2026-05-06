@@ -32,7 +32,7 @@ type Config struct {
 // Default returns the default configuration.
 func Default() *Config {
 	return &Config{
-		Base:         "soap2day",
+		Base:         "flixhq.ws",
 		Player:       "mpv",
 		Provider:     "Default",
 		SubsLanguage: "english",

@@ -16,12 +16,12 @@ import (
 func fallbackProviders(primary provider.Provider) []provider.Provider {
 	var fallbacks []provider.Provider
 
-	if _, ok := primary.(*provider.MovieBox); !ok {
-		fallbacks = append(fallbacks, provider.NewMovieBox())
-	}
-
 	if _, ok := primary.(*provider.Soap2Day); !ok {
 		fallbacks = append(fallbacks, provider.NewSoap2Day())
+	}
+
+	if _, ok := primary.(*provider.MovieBox); !ok {
+		fallbacks = append(fallbacks, provider.NewMovieBox())
 	}
 
 	if _, ok := primary.(*provider.FlixHQWS); !ok {
