@@ -7,13 +7,11 @@ import (
 	"time"
 
 	"lobster/internal/download"
-	"lobster/internal/extract"
-	"lobster/internal/history"
+"lobster/internal/history"
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/playlist"
-	"lobster/internal/provider"
-	"lobster/internal/subtitle"
+"lobster/internal/subtitle"
 	"lobster/internal/ui"
 )
 
@@ -167,61 +165,11 @@ func episodeListMenu(sess *playlist.Session) error {
 	return nil
 }
 
-// resolveStream fetches servers for the current episode and tries them in order.
-// excludeNames lists server names to skip (e.g., servers whose streams failed during playback).
-// If a server worked previously (cachedServerName), it's tried first.
-// Returns the stream and the server name that provided it.
+// resolveStream resolves a stream for the current episode via fallback providers.
+// Primary provider (FlixHQ) is used for metadata only; streaming goes through
+// Soap2Day and other fallbacks directly.
 func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media.Stream, string, error) {
-	episodeID := sess.Current().ID
-
-	// Always fetch fresh servers — IDs are episode-specific
-	servers, err := sess.Provider.GetServers(sess.Content.ID, episodeID)
-	if err != nil || len(servers) == 0 {
-		if err != nil {
-			debugf("GetServers failed: %v", err)
-		} else {
-			debugf("no servers found for %s", sess.Title())
-		}
-		// Try fallback before giving up
-		fmt.Fprintf(os.Stderr, "Primary provider failed, trying fallback...\n")
-		stream, fbErr := tryFallbackStream(
-			sess.Provider,
-			sess.Content.Title,
-			sess.Content.Type,
-			sess.CurrentSeason().Number,
-			sess.Current().Number,
-		)
-		if fbErr != nil {
-			if err != nil {
-				return nil, "", fmt.Errorf("getting servers: %w", err)
-			}
-			return nil, "", fmt.Errorf("no servers found for %s", sess.Title())
-		}
-		return stream, "Fallback", nil
-	}
-
-	// Order servers: prefer cached server name, then user-configured provider, then rest
-	ordered := orderServersWithCache(servers, cfg.Provider, cachedServerName)
-
-	for _, srv := range ordered {
-		if excludeNames[srv.Name] {
-			debugf("skipping excluded server: %s (ID: %s)", srv.Name, srv.ID)
-			continue
-		}
-		debugf("trying server: %s (ID: %s)", srv.Name, srv.ID)
-		stream, err := tryServer(sess, &srv)
-		if err != nil {
-			debugf("server %s failed: %v", srv.Name, err)
-			fmt.Fprintf(os.Stderr, "Server %s failed, trying next...\n", srv.Name)
-			continue
-		}
-		cachedServerName = srv.Name
-		return stream, srv.Name, nil
-	}
-
-	// Try fallback providers before giving up
-	fmt.Fprintf(os.Stderr, "Primary provider failed, trying fallback...\n")
-	debugf("attempting fallback for %s", sess.Title())
+	debugf("resolving stream via fallback providers for %s", sess.Title())
 	stream, err := tryFallbackStream(
 		sess.Provider,
 		sess.Content.Title,
@@ -230,38 +178,10 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 		sess.Current().Number,
 	)
 	if err != nil {
-		debugf("fallback failed: %v", err)
-		return nil, "", fmt.Errorf("all servers failed for %s", sess.Title())
+		debugf("all fallbacks failed: %v", err)
+		return nil, "", fmt.Errorf("all providers failed for %s: %w", sess.Title(), err)
 	}
-	debugf("fallback stream: %s", stream.URL)
 	return stream, "Fallback", nil
-}
-
-// tryServer attempts to extract a stream from a single server.
-func tryServer(sess *playlist.Session, srv *media.Server) (*media.Stream, error) {
-	// StreamProvider (consumet) can resolve streams directly
-	if sp, ok := sess.Provider.(provider.StreamProvider); ok {
-		stream, err := sp.Watch(sess.Content.ID, sess.Current().ID, srv.Name, cfg.Quality)
-		if err != nil {
-			return nil, fmt.Errorf("watch failed: %w", err)
-		}
-		debugf("stream URL: %s (server: %s)", stream.URL, srv.Name)
-		return stream, nil
-	}
-
-	embedURL, err := sess.Provider.GetEmbedURL(srv.ID)
-	if err != nil {
-		return nil, fmt.Errorf("embed failed: %w", err)
-	}
-	debugf("embed URL: %s", embedURL)
-
-	ext, resolvedURL := extract.ResolveForURL(embedURL)
-	stream, err := ext.Extract(resolvedURL, cfg.Quality)
-	if err != nil {
-		return nil, fmt.Errorf("extract failed: %w", err)
-	}
-	debugf("stream URL: %s (server: %s)", stream.URL, srv.Name)
-	return stream, nil
 }
 
 // playCurrentEpisode resolves the stream and plays the current episode.
