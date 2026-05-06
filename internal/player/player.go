@@ -13,7 +13,7 @@ import (
 // Player is the interface for media player implementations.
 type Player interface {
 	// Play starts playback of a stream. Returns the last playback position.
-	Play(stream *media.Stream, title string, startPos float64, subFile string) (float64, error)
+	Play(stream *media.Stream, title string, startPos float64, subFiles []string) (float64, error)
 
 	// Name returns the player name.
 	Name() string

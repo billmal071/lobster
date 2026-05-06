@@ -334,24 +334,25 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	}
 
 	// Handle subtitles — prefer SubDL over embedded (better sync)
-	var subFile string
+	// Download multiple tracks so the user can cycle with 'j' in mpv.
+	var subFiles []string
 	if !flagNoSubs {
 		subs := searchExternalSubs(selected.Title, season, episode)
 		if len(subs) == 0 {
 			subs = stream.Subtitles
 		}
 		if len(subs) > 0 {
-			best := subtitle.BestMatch(subs, cfg.SubsLanguage)
-			if best != nil {
-				tmpDir, err := subtitle.NewTempDir()
-				if err == nil {
-					defer tmpDir.Cleanup()
-					subFile, err = resolveAndDownloadSub(tmpDir, *best)
+			tmpDir, err := subtitle.NewTempDir()
+			if err == nil {
+				defer tmpDir.Cleanup()
+				for _, sub := range subs {
+					f, err := resolveAndDownloadSub(tmpDir, sub)
 					if err != nil {
-						debugf("subtitle download failed: %v", err)
-					} else {
-						debugf("subtitle file: %s", subFile)
+						debugf("subtitle download failed (%s): %v", sub.Label, err)
+						continue
 					}
+					debugf("subtitle file: %s (%s)", f, sub.Label)
+					subFiles = append(subFiles, f)
 				}
 			}
 		}
@@ -359,7 +360,11 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 
 	// Download mode
 	if flagDownload != "" {
-		outputPath, err := download.Download(stream, title, flagDownload, subFile)
+		dlSub := ""
+		if len(subFiles) > 0 {
+			dlSub = subFiles[0]
+		}
+		outputPath, err := download.Download(stream, title, flagDownload, dlSub)
 		if err != nil {
 			return err
 		}
@@ -385,7 +390,7 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		return player.NotFoundError(cfg.Player)
 	}
 
-	lastPos, err := p2.Play(stream, title, startPos, subFile)
+	lastPos, err := p2.Play(stream, title, startPos, subFiles)
 	if err != nil {
 		return fmt.Errorf("playback failed: %w", err)
 	}

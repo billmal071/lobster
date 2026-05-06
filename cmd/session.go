@@ -314,9 +314,9 @@ func playCurrentEpisode(sess *playlist.Session) error {
 			return err
 		}
 
-		subFile := resolveSubtitles(stream, sess.Content.Title, sess.CurrentSeason().Number, sess.Current().Number)
+		subFiles := resolveSubtitles(stream, sess.Content.Title, sess.CurrentSeason().Number, sess.Current().Number)
 
-		lastPos, playErr := p.Play(stream, title, startPos, subFile)
+		lastPos, playErr := p.Play(stream, title, startPos, subFiles)
 		if playErr == nil {
 			sess.LastPosition = lastPos
 			return nil
@@ -341,46 +341,49 @@ func playCurrentEpisode(sess *playlist.Session) error {
 	}
 }
 
-// resolveSubtitles downloads the best-match subtitle file.
-// Falls back to OpenSubtitles if the stream has no embedded subtitles.
-func resolveSubtitles(stream *media.Stream, title string, season, episode int) string {
+// resolveSubtitles downloads multiple subtitle files.
+// Prefers SubDL over embedded. User can cycle tracks with 'j' in mpv.
+func resolveSubtitles(stream *media.Stream, title string, season, episode int) []string {
 	if flagNoSubs {
-		return ""
+		return nil
 	}
 
-	subs := stream.Subtitles
+	subs := searchExternalSubs(title, season, episode)
 	if len(subs) == 0 {
-		subs = searchExternalSubs(title, season, episode)
+		subs = stream.Subtitles
 	}
 
 	if len(subs) == 0 {
-		return ""
-	}
-
-	best := subtitle.BestMatch(subs, cfg.SubsLanguage)
-	if best == nil {
-		return ""
+		return nil
 	}
 
 	tmpDir, err := subtitle.NewTempDir()
 	if err != nil {
-		return ""
+		return nil
 	}
 	// Note: tmpDir cleanup happens when process exits; acceptable for a session
 
-	subFile, err := resolveAndDownloadSub(tmpDir, *best)
-	if err != nil {
-		debugf("subtitle download failed: %v", err)
-		return ""
+	var subFiles []string
+	for _, sub := range subs {
+		f, err := resolveAndDownloadSub(tmpDir, sub)
+		if err != nil {
+			debugf("subtitle download failed (%s): %v", sub.Label, err)
+			continue
+		}
+		debugf("subtitle file: %s (%s)", f, sub.Label)
+		subFiles = append(subFiles, f)
 	}
-	debugf("subtitle file: %s", subFile)
-	return subFile
+	return subFiles
 }
 
 // downloadEpisode handles the download path.
 func downloadEpisode(stream *media.Stream, sess *playlist.Session, title string) error {
-	subFile := resolveSubtitles(stream, sess.Content.Title, sess.CurrentSeason().Number, sess.Current().Number)
-	outputPath, err := download.Download(stream, title, flagDownload, subFile)
+	subFiles := resolveSubtitles(stream, sess.Content.Title, sess.CurrentSeason().Number, sess.Current().Number)
+	dlSub := ""
+	if len(subFiles) > 0 {
+		dlSub = subFiles[0]
+	}
+	outputPath, err := download.Download(stream, title, flagDownload, dlSub)
 	if err != nil {
 		return err
 	}
