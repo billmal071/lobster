@@ -27,22 +27,6 @@ func TestResolveDownloadBaseDirFromFlag(t *testing.T) {
 	}
 }
 
-func TestResolveDownloadBaseDirFromSentinel(t *testing.T) {
-	previousCfg := cfg
-	t.Cleanup(func() {
-		cfg = previousCfg
-	})
-	cfg = &config.Config{DownloadDir: "."}
-
-	got, err := resolveDownloadBaseDir(downloadFlagDefaultSentinel)
-	if err != nil {
-		t.Fatalf("resolveDownloadBaseDir returned error: %v", err)
-	}
-	if !filepath.IsAbs(got) {
-		t.Fatalf("expected absolute path from sentinel, got %s", got)
-	}
-}
-
 func TestResolveDownloadBaseDirFromEmpty(t *testing.T) {
 	previousCfg := cfg
 	t.Cleanup(func() {

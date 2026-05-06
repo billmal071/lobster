@@ -10,9 +10,6 @@ import (
 )
 
 func resolveDownloadBaseDir(downloadArg string) (string, error) {
-	if downloadArg == downloadFlagDefaultSentinel {
-		return cfg.ExpandDownloadDir()
-	}
 	if strings.TrimSpace(downloadArg) != "" {
 		return filepath.Abs(downloadArg)
 	}

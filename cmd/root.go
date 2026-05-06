@@ -41,9 +41,6 @@ Search for movies and TV shows, stream them with mpv/vlc, or download with ffmpe
 	RunE:              searchRun,
 }
 
-// downloadFlagDefaultSentinel is injected when users pass `--download`
-// without a value, so we can distinguish that from an explicit path.
-const downloadFlagDefaultSentinel = "__lobster_default_download_dir__"
 
 // Execute runs the root command.
 func Execute() {
@@ -53,8 +50,7 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&flagDownload, "download", "d", "", "Download to path instead of playing")
-	rootCmd.PersistentFlags().Lookup("download").NoOptDefVal = downloadFlagDefaultSentinel
+	rootCmd.PersistentFlags().StringVarP(&flagDownload, "download", "d", "", "Download to path instead of playing (default: config download_dir)")
 	rootCmd.PersistentFlags().StringVarP(&flagLanguage, "language", "l", "", "Subtitle language (default: english)")
 	rootCmd.PersistentFlags().BoolVarP(&flagNoSubs, "no-subs", "n", false, "Disable subtitles")
 	rootCmd.PersistentFlags().StringVarP(&flagProvider, "provider", "p", "", "Server provider: Vidcloud | UpCloud")
