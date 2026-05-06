@@ -9,12 +9,10 @@ import (
 	"strings"
 
 	"lobster/internal/download"
-	"lobster/internal/extract"
-	"lobster/internal/httputil"
+"lobster/internal/httputil"
 	"lobster/internal/media"
 	"lobster/internal/provider"
-	"lobster/internal/subtitle"
-	"lobster/internal/ui"
+"lobster/internal/ui"
 )
 
 // parseEpisodeRange parses a range string like "1-5", "3,7,9", or "1-3,7,10-12"
@@ -152,99 +150,14 @@ func batchDownload(p provider.Provider, selected media.SearchResult, episodes []
 	return nil
 }
 
-// downloadSingleEpisode resolves and downloads one episode, trying fallback servers on failure.
+// downloadSingleEpisode resolves and downloads one episode via fallback providers.
 func downloadSingleEpisode(p provider.Provider, selected media.SearchResult, ep media.Episode, seasonNum int, outputDir, title string) error {
-	// Get servers
-	servers, err := p.GetServers(selected.ID, ep.ID)
-	if err != nil || len(servers) == 0 {
-		if err != nil {
-			debugf("GetServers failed: %v", err)
-		}
-		// Try fallback before giving up
-		fmt.Fprintf(os.Stderr, "  Primary provider failed, trying fallback...\n")
-		fbStream, fbErr := tryFallbackStream(p, selected.Title, selected.Type, seasonNum, ep.Number)
-		if fbErr != nil {
-			if err != nil {
-				return fmt.Errorf("getting servers: %w", err)
-			}
-			return fmt.Errorf("no servers found")
-		}
-		_, dlErr := download.Download(fbStream, title, outputDir, "")
-		return dlErr
+	debugf("resolving stream via fallback providers for %s", title)
+	stream, err := tryFallbackStream(p, selected.Title, selected.Type, seasonNum, ep.Number)
+	if err != nil {
+		return fmt.Errorf("all providers failed: %w", err)
 	}
-
-	// Order servers: preferred first, then the rest as fallbacks
-	ordered := orderServers(servers, cfg.Provider)
-
-	var lastErr error
-	for _, srv := range ordered {
-		debugf("trying server: %s (ID: %s)", srv.Name, srv.ID)
-
-		err := tryDownloadFromServer(p, srv, selected.ID, ep.ID, title, outputDir)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		debugf("server %s failed: %v", srv.Name, err)
-		if len(ordered) > 1 {
-			fmt.Fprintf(os.Stderr, "  Server %s failed, trying next...\n", srv.Name)
-		}
-	}
-
-	return lastErr
-}
-
-// tryDownloadFromServer attempts to resolve and download from a single server.
-func tryDownloadFromServer(p provider.Provider, srv media.Server, mediaID, episodeID, title, outputDir string) error {
-	var stream *media.Stream
-	var err error
-
-	// StreamProvider (consumet) can resolve streams directly
-	if sp, ok := p.(provider.StreamProvider); ok {
-		stream, err = sp.Watch(mediaID, episodeID, srv.Name, cfg.Quality)
-		if err != nil {
-			return fmt.Errorf("watch failed: %w", err)
-		}
-	} else {
-		// Get embed URL
-		embedURL, err := p.GetEmbedURL(srv.ID)
-		if err != nil {
-			return fmt.Errorf("getting embed URL: %w", err)
-		}
-
-		// Extract stream
-		ext, resolvedURL := extract.ResolveForURL(embedURL)
-		stream, err = ext.Extract(resolvedURL, cfg.Quality)
-		if err != nil {
-			return fmt.Errorf("extracting stream: %w", err)
-		}
-	}
-
-	// Handle subtitles (explicit cleanup, no defer in loop)
-	var subFile string
-	var tmpDir *subtitle.TempDir
-	if !flagNoSubs && len(stream.Subtitles) > 0 {
-		best := subtitle.BestMatch(stream.Subtitles, cfg.SubsLanguage)
-		if best != nil {
-			tmpDir, err = subtitle.NewTempDir()
-			if err == nil {
-				subFile, err = tmpDir.Download(*best)
-				if err != nil {
-					debugf("subtitle download failed: %v", err)
-					subFile = ""
-				}
-			}
-		}
-	}
-
-	// Download
-	_, dlErr := download.Download(stream, title, outputDir, subFile)
-
-	// Clean up subtitle temp dir explicitly
-	if tmpDir != nil {
-		tmpDir.Cleanup()
-	}
-
+	_, dlErr := download.Download(stream, title, outputDir, "")
 	return dlErr
 }
 
