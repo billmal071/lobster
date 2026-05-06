@@ -405,7 +405,8 @@ func (s *Soap2Day) Recent(mediaType media.MediaType) ([]media.SearchResult, erro
 }
 
 func (s *Soap2Day) fetchTMDBTrending(mediaType string) ([]media.SearchResult, error) {
-	trendingURL := fmt.Sprintf("%s/trending/%s/week?language=en-US", tmdbSearchBase, mediaType)
+	// TMDB's /search/trending endpoint returns trending results with a minimal query.
+	trendingURL := fmt.Sprintf("%s/search/trending?query=a", tmdbSearchBase)
 
 	body, err := s.fetchWithReferer(trendingURL, tmdbSearchBase+"/")
 	if err != nil {
@@ -430,6 +431,11 @@ func (s *Soap2Day) fetchTMDBTrending(mediaType string) ([]media.SearchResult, er
 
 		if item.MediaType == "" {
 			item.MediaType = mediaType
+		}
+
+		// Filter by requested media type.
+		if item.MediaType != mediaType {
+			continue
 		}
 
 		mt := media.Movie
