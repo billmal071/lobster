@@ -459,10 +459,19 @@ func (m AppModel) renderBrowseContent(mainHeight int) string {
 				MarginTop(1).
 				Render(m.currentDetail.Description)
 
+			genre := "—"
+			if len(m.currentDetail.Genre) > 0 {
+				genre = strings.Join(m.currentDetail.Genre, ", ")
+			}
+			cast := "—"
+			if len(m.currentDetail.Casts) > 0 {
+				cast = strings.Join(m.currentDetail.Casts, ", ")
+			}
+
 			extDetails = fmt.Sprintf("\n%s\n%s\n%s\n%s",
 				detailLabelStyle.Render("Rating: ")+lipgloss.NewStyle().Foreground(lipgloss.Color("#F1FA8C")).Render(m.currentDetail.Rating),
-				detailLabelStyle.Render("Genre:  ")+m.currentDetail.Genre[0],
-				detailLabelStyle.Render("Cast:   ")+strings.Join(m.currentDetail.Casts, ", "),
+				detailLabelStyle.Render("Genre:  ")+genre,
+				detailLabelStyle.Render("Cast:   ")+cast,
 				plotBox,
 			)
 		} else {
