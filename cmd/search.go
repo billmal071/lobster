@@ -14,7 +14,7 @@ import (
 	"lobster/internal/dlmanager/engine"
 	"lobster/internal/dlmanager/store"
 	"lobster/internal/download"
-"lobster/internal/history"
+	"lobster/internal/history"
 	"lobster/internal/httputil"
 	"lobster/internal/media"
 	"lobster/internal/player"
@@ -251,7 +251,6 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		return runPlaybackLoop(sess)
 	}
 
-
 	// If provider supports direct streaming (consumet API), skip embed+extract step.
 	if sp, ok := p.(provider.StreamProvider); ok {
 		stopStream := ui.StartSpinner("Negotiating stream servers...")
@@ -364,7 +363,11 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		if len(subFiles) > 0 {
 			dlSub = subFiles[0]
 		}
-		outputPath, err := download.Download(stream, title, flagDownload, dlSub)
+		outputDir, err := resolveDownloadBaseDir(flagDownload)
+		if err != nil {
+			return fmt.Errorf("resolving download dir: %w", err)
+		}
+		outputPath, err := download.Download(stream, title, outputDir, dlSub)
 		if err != nil {
 			return err
 		}

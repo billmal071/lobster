@@ -3,16 +3,14 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
 	"lobster/internal/download"
-"lobster/internal/httputil"
 	"lobster/internal/media"
 	"lobster/internal/provider"
-"lobster/internal/ui"
+	"lobster/internal/ui"
 )
 
 // parseEpisodeRange parses a range string like "1-5", "3,7,9", or "1-3,7,10-12"
@@ -95,20 +93,11 @@ func batchDownload(p provider.Provider, selected media.SearchResult, episodes []
 		return fmt.Errorf("--json is not supported with batch downloads")
 	}
 
-	// Resolve base download directory
-	dir := flagDownload
-	if dir == "" {
-		var err error
-		dir, err = cfg.ExpandDownloadDir()
-		if err != nil {
-			return fmt.Errorf("resolving download dir: %w", err)
-		}
+	baseDir, err := resolveDownloadBaseDir(flagDownload)
+	if err != nil {
+		return fmt.Errorf("resolving download dir: %w", err)
 	}
-
-	// Build nested output directory: <base>/<ShowTitle>/Season <NN>/
-	showDir := httputil.SanitizeFilename(selected.Title)
-	seasonDir := fmt.Sprintf("Season %02d", season.Number)
-	outputDir := filepath.Join(dir, showDir, seasonDir)
+	outputDir := buildTVSeasonDownloadDir(baseDir, selected.Title, season.Number)
 
 	total := len(episodes)
 	var failed []media.Episode

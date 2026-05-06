@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"lobster/internal/download"
-"lobster/internal/history"
+	"lobster/internal/history"
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/playlist"
-"lobster/internal/subtitle"
+	"lobster/internal/subtitle"
 	"lobster/internal/ui"
 )
 
@@ -303,7 +303,12 @@ func downloadEpisode(stream *media.Stream, sess *playlist.Session, title string)
 	if len(subFiles) > 0 {
 		dlSub = subFiles[0]
 	}
-	outputPath, err := download.Download(stream, title, flagDownload, dlSub)
+	baseDir, err := resolveDownloadBaseDir(flagDownload)
+	if err != nil {
+		return fmt.Errorf("resolving download dir: %w", err)
+	}
+	outputDir := buildTVSeasonDownloadDir(baseDir, sess.Content.Title, sess.CurrentSeason().Number)
+	outputPath, err := download.Download(stream, title, outputDir, dlSub)
 	if err != nil {
 		return err
 	}
