@@ -390,12 +390,61 @@ func (s *Soap2Day) fetchWithReferer(rawURL, referer string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 }
 
-// Trending is not supported.
+// Trending returns trending content from TMDB.
 func (s *Soap2Day) Trending(mediaType media.MediaType) ([]media.SearchResult, error) {
-	return nil, fmt.Errorf("trending not supported by soap2day provider")
+	mt := "movie"
+	if mediaType == media.TV {
+		mt = "tv"
+	}
+	return s.fetchTMDBTrending(mt)
 }
 
-// Recent is not supported.
+// Recent returns recently added content (uses trending as proxy).
 func (s *Soap2Day) Recent(mediaType media.MediaType) ([]media.SearchResult, error) {
-	return nil, fmt.Errorf("recent not supported by soap2day provider")
+	return s.Trending(mediaType)
+}
+
+func (s *Soap2Day) fetchTMDBTrending(mediaType string) ([]media.SearchResult, error) {
+	trendingURL := fmt.Sprintf("%s/trending/%s/week?language=en-US", tmdbSearchBase, mediaType)
+
+	body, err := s.fetchWithReferer(trendingURL, tmdbSearchBase+"/")
+	if err != nil {
+		return nil, fmt.Errorf("trending: %w", err)
+	}
+
+	var resp tmdbSearchResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("trending: parsing response: %w", err)
+	}
+
+	var results []media.SearchResult
+	for _, raw := range resp.Results {
+		if len(raw) == 0 || raw[0] != '{' {
+			continue
+		}
+
+		var item tmdbSearchResult
+		if err := json.Unmarshal(raw, &item); err != nil {
+			continue
+		}
+
+		if item.MediaType == "" {
+			item.MediaType = mediaType
+		}
+
+		mt := media.Movie
+		if item.MediaType == "tv" {
+			mt = media.TV
+		}
+
+		results = append(results, media.SearchResult{
+			ID:    fmt.Sprintf("%s/%d", item.MediaType, item.ID),
+			Title: item.displayTitle(),
+			Type:  mt,
+			Year:  item.year(),
+			URL:   fmt.Sprintf("%s/%s/%d", tmdbSearchBase, item.MediaType, item.ID),
+		})
+	}
+
+	return results, nil
 }
