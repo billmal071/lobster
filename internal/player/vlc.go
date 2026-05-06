@@ -25,7 +25,7 @@ func (v *VLC) Available() bool {
 
 // Play launches VLC. VLC doesn't have IPC position tracking like mpv,
 // so we return 0 for position.
-func (v *VLC) Play(stream *media.Stream, title string, startPos float64, subFile string) (float64, error) {
+func (v *VLC) Play(stream *media.Stream, title string, startPos float64, subFiles []string) (float64, error) {
 	args := []string{
 		stream.URL,
 		"--meta-title", title,
@@ -40,8 +40,8 @@ func (v *VLC) Play(stream *media.Stream, title string, startPos float64, subFile
 		args = append(args, fmt.Sprintf("--start-time=%.0f", startPos))
 	}
 
-	if subFile != "" {
-		args = append(args, "--sub-file", subFile)
+	if len(subFiles) > 0 {
+		args = append(args, "--sub-file", subFiles[0])
 	}
 
 	cmd := exec.Command(vlcBinaryName(), args...)

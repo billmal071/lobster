@@ -33,7 +33,7 @@ func (m *MPV) Available() bool {
 }
 
 // Play launches mpv with the given stream and returns the final playback position.
-func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile string) (float64, error) {
+func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFiles []string) (float64, error) {
 	// Create randomized IPC path (Unix socket on Unix, named pipe on Windows)
 	ipc, err := newIPCSocket()
 	if err != nil {
@@ -61,14 +61,15 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 		args = append(args, fmt.Sprintf("--start=+%.0f", startPos))
 	}
 
-	if subFile != "" {
-		args = append(args, "--sub-file="+subFile)
+	if len(subFiles) > 0 {
+		for _, sf := range subFiles {
+			args = append(args, "--sub-file="+sf)
+		}
 	} else {
 		// If we have embedded subtitles from the stream, add them
 		for _, sub := range stream.Subtitles {
 			if sub.URL != "" {
 				args = append(args, "--sub-file="+sub.URL)
-				break // mpv handles multiple sub tracks, but add primary only
 			}
 		}
 	}

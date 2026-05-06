@@ -22,7 +22,7 @@ func (g *Generic) Available() bool {
 }
 
 // Play launches the generic player. Position tracking is not supported.
-func (g *Generic) Play(stream *media.Stream, title string, startPos float64, subFile string) (float64, error) {
+func (g *Generic) Play(stream *media.Stream, title string, startPos float64, subFiles []string) (float64, error) {
 	args := []string{stream.URL}
 
 	// Both iina and celluloid accept mpv-style flags
@@ -32,8 +32,8 @@ func (g *Generic) Play(stream *media.Stream, title string, startPos float64, sub
 		args = append(args, fmt.Sprintf("--start=+%.0f", startPos))
 	}
 
-	if subFile != "" {
-		args = append(args, "--sub-file="+subFile)
+	for _, sf := range subFiles {
+		args = append(args, "--sub-file="+sf)
 	}
 
 	cmd := exec.Command(g.name, args...)
