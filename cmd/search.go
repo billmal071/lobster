@@ -333,12 +333,12 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		return enc.Encode(out)
 	}
 
-	// Handle subtitles — fall back to OpenSubtitles if stream has none
+	// Handle subtitles — prefer SubDL over embedded (better sync)
 	var subFile string
 	if !flagNoSubs {
-		subs := stream.Subtitles
+		subs := searchExternalSubs(selected.Title, season, episode)
 		if len(subs) == 0 {
-			subs = searchExternalSubs(selected.Title, season, episode)
+			subs = stream.Subtitles
 		}
 		if len(subs) > 0 {
 			best := subtitle.BestMatch(subs, cfg.SubsLanguage)
