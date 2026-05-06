@@ -363,10 +363,11 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		if len(subFiles) > 0 {
 			dlSub = subFiles[0]
 		}
-		outputDir, err := resolveDownloadBaseDir(flagDownload)
+		baseDir, err := resolveDownloadBaseDir(flagDownload)
 		if err != nil {
 			return fmt.Errorf("resolving download dir: %w", err)
 		}
+		outputDir := resolveDownloadOutputDir(baseDir, selected, season)
 		outputPath, err := download.Download(stream, title, outputDir, dlSub)
 		if err != nil {
 			return err

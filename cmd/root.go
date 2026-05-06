@@ -41,10 +41,9 @@ Search for movies and TV shows, stream them with mpv/vlc, or download with ffmpe
 	RunE:              searchRun,
 }
 
-const downloadFlagDefaultSentinel = "__lobster_default_download_dir__"
-
 // downloadFlagDefaultSentinel is injected when users pass `--download`
 // without a value, so we can distinguish that from an explicit path.
+const downloadFlagDefaultSentinel = "__lobster_default_download_dir__"
 
 // Execute runs the root command.
 func Execute() {
