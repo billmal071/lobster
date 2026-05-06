@@ -7,10 +7,9 @@ import (
 )
 
 // newProvider returns the configured content provider.
-// When cfg.APIURL is set, it returns a Consumet provider (which supports
-// direct stream resolution via the StreamProvider interface).
-// When base is "flixhq.ws", uses the FlixHQWS scraper.
-// Otherwise, uses the default FlixHQ scraper.
+// Default is MovieBox (direct API, no scraping required).
+// Legacy providers (FlixHQ, Soap2Day) are available via base config
+// and are always included as fallbacks.
 func newProvider() provider.Provider {
 	if cfg.APIURL != "" {
 		return provider.NewConsumet(cfg.APIURL)
@@ -21,11 +20,12 @@ func newProvider() provider.Provider {
 	if strings.Contains(cfg.Base, "kimcartoon") {
 		return provider.NewKimCartoon(cfg.Base)
 	}
-	if strings.Contains(cfg.Base, "moviebox") {
-		return provider.NewMovieBox()
-	}
 	if strings.Contains(cfg.Base, "flixhq.ws") {
 		return provider.NewFlixHQWS(cfg.Base)
 	}
-	return provider.NewFlixHQ(cfg.Base)
+	if strings.Contains(cfg.Base, "flixhq") {
+		return provider.NewFlixHQ(cfg.Base)
+	}
+	// Default: MovieBox
+	return provider.NewMovieBox()
 }

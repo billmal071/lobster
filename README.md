@@ -111,14 +111,17 @@ Config file location:
 - **Windows:** `%APPDATA%\lobster\config.toml`
 
 ```toml
-base = "flixhq.to"
 player = "mpv"
-provider = "Vidcloud"
-subs_language = "english"
 quality = "1080"
+subs_language = "english"
 history = true
 auto_next = true
 download_dir = "~/Videos/lobster"
+
+# Provider selection (default: moviebox)
+# Available: moviebox, flixhq.to, flixhq.ws, soap2day, kimcartoon
+# All other providers are automatically used as fallbacks.
+# base = "moviebox"
 
 # Optional: use a consumet API backend instead of the built-in scraper.
 # Self-host from: https://github.com/consumet/api.consumet.org

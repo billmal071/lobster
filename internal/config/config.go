@@ -32,9 +32,9 @@ type Config struct {
 // Default returns the default configuration.
 func Default() *Config {
 	return &Config{
-		Base:         "flixhq.ws",
+		Base:         "moviebox",
 		Player:       "mpv",
-		Provider:     "Vidcloud",
+		Provider:     "Default",
 		SubsLanguage: "english",
 		Quality:      "1080",
 		History:      true,
@@ -95,10 +95,10 @@ func (c *Config) Validate() error {
 	}
 
 	validProviders := map[string]bool{
-		"vidcloud": true, "upcloud": true,
+		"vidcloud": true, "upcloud": true, "default": true,
 	}
 	if !validProviders[strings.ToLower(c.Provider)] {
-		return fmt.Errorf("unsupported provider %q (valid: Vidcloud, UpCloud)", c.Provider)
+		return fmt.Errorf("unsupported provider %q (valid: Default, Vidcloud, UpCloud)", c.Provider)
 	}
 
 	validQualities := map[string]bool{

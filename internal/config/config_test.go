@@ -15,8 +15,8 @@ func TestDefault(t *testing.T) {
 	if cfg.Quality != "1080" {
 		t.Errorf("default quality = %q, want 1080", cfg.Quality)
 	}
-	if cfg.Provider != "Vidcloud" {
-		t.Errorf("default provider = %q, want Vidcloud", cfg.Provider)
+	if cfg.Provider != "Default" {
+		t.Errorf("default provider = %q, want Default", cfg.Provider)
 	}
 	if !cfg.History {
 		t.Error("default history should be true")
@@ -60,9 +60,9 @@ func TestLoadFromTOML(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "config.toml")
 
 	content := `
-base = "example.com"
+base = "moviebox"
 player = "vlc"
-provider = "UpCloud"
+provider = "Default"
 quality = "720"
 history = false
 `
@@ -87,14 +87,14 @@ history = false
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	if cfg.Base != "example.com" {
-		t.Errorf("base = %q, want example.com", cfg.Base)
+	if cfg.Base != "moviebox" {
+		t.Errorf("base = %q, want moviebox", cfg.Base)
 	}
 	if cfg.Player != "vlc" {
 		t.Errorf("player = %q, want vlc", cfg.Player)
 	}
-	if cfg.Provider != "UpCloud" {
-		t.Errorf("provider = %q, want UpCloud", cfg.Provider)
+	if cfg.Provider != "Default" {
+		t.Errorf("provider = %q, want Default", cfg.Provider)
 	}
 	if cfg.Quality != "720" {
 		t.Errorf("quality = %q, want 720", cfg.Quality)
