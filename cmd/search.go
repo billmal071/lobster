@@ -532,6 +532,7 @@ func initDownloadManager(c *config.Config) (*dlmanager.Manager, func(), error) {
 	}
 
 	mgr := dlmanager.New(s, httpEng, hlsEng, workers)
+	mgr.SetResolver(makeStreamResolver(newProvider()))
 	ctx := context.Background()
 	mgr.Start(ctx)
 

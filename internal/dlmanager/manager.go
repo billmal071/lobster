@@ -23,6 +23,17 @@ type ProgressUpdate struct {
 	Error         string
 }
 
+// StreamResult holds a resolved stream URL and metadata.
+type StreamResult struct {
+	URL        string
+	StreamType string // "hls" or "http"
+	Referer    string
+}
+
+// StreamResolver resolves a stream URL for a download.
+// It receives the title, media ID, episode ID, media type, season, and episode number.
+type StreamResolver func(title, mediaID, episodeID, mediaType string, season, episode int) (*StreamResult, error)
+
 // Manager coordinates download workers and relays progress.
 type Manager struct {
 	store      *store.Store
@@ -32,6 +43,7 @@ type Manager struct {
 	pollRate   time.Duration // how often workers poll for new work
 	progress   chan ProgressUpdate
 	notify     chan struct{} // signals workers that new work is available
+	resolver   StreamResolver
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -53,6 +65,11 @@ func New(s *store.Store, httpEng engine.Engine, hlsEng *engine.HLSEngine, worker
 		notify:     make(chan struct{}, 1),
 		cancels:    make(map[int]context.CancelFunc),
 	}
+}
+
+// SetResolver sets the stream resolver used to resolve URLs before downloading.
+func (m *Manager) SetResolver(r StreamResolver) {
+	m.resolver = r
 }
 
 // SetPollRate sets how often workers poll for new work (for testing).
@@ -212,6 +229,28 @@ func (m *Manager) processDownload(dl *store.Download) {
 
 	// Already claimed as "downloading" by ClaimNextQueued.
 	m.sendProgress(ProgressUpdate{DownloadID: dl.ID, Status: "downloading"})
+
+	// Resolve stream URL if not set.
+	if dl.StreamURL == "" && m.resolver != nil {
+		m.sendProgress(ProgressUpdate{DownloadID: dl.ID, Status: "resolving"})
+		result, err := m.resolver(dl.MediaTitle, dl.MediaID, dl.EpisodeID, dl.MediaType, dl.Season, dl.Episode)
+		if err != nil {
+			m.store.UpdateStatus(dl.ID, "failed", err.Error())
+			m.sendProgress(ProgressUpdate{DownloadID: dl.ID, Status: "failed", Error: err.Error()})
+			return
+		}
+		dl.StreamURL = result.URL
+		dl.StreamType = result.StreamType
+		dl.Referer = result.Referer
+		m.store.UpdateStreamInfo(dl.ID, result.URL, result.StreamType, result.Referer)
+	}
+
+	if dl.StreamURL == "" {
+		errMsg := "no stream URL and no resolver configured"
+		m.store.UpdateStatus(dl.ID, "failed", errMsg)
+		m.sendProgress(ProgressUpdate{DownloadID: dl.ID, Status: "failed", Error: errMsg})
+		return
+	}
 
 	var dlErr error
 	switch dl.StreamType {
