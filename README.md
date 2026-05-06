@@ -63,7 +63,17 @@ go build -o lobster .
 sudo make install # installs to /usr/local/bin
 ```
 
-### Windows
+### Quick Install (Windows)
+
+Run this in PowerShell — it downloads lobster and installs dependencies (mpv, fzf, ffmpeg) automatically:
+
+```powershell
+irm https://raw.githubusercontent.com/billmal071/lobster/main/install.ps1 | iex
+```
+
+Or download the zip from [Releases](https://github.com/billmal071/lobster/releases/latest), extract, and double-click `install.bat`.
+
+### From Source (Windows)
 
 Install [Go](https://go.dev/dl/), [fzf](https://github.com/junegunn/fzf#windows), [mpv](https://mpv.io/installation/) (or [VLC](https://www.videolan.org/)), and optionally [ffmpeg](https://ffmpeg.org/download.html). Ensure they are in your PATH.
 
