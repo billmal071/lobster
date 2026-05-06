@@ -20,7 +20,7 @@ echo "Latest release: $LATEST_RELEASE"
 ARCH=$(uname -m)
 case $ARCH in
     x86_64) PKG_ARCH="amd64"; TAR_ARCH="x86_64" ;;
-    aarch64) PKG_ARCH="arm64"; TAR_ARCH="arm64" ;;
+    aarch64|arm64) PKG_ARCH="arm64"; TAR_ARCH="arm64" ;;
     armv7l) PKG_ARCH="armv7"; TAR_ARCH="armv7" ;;
     *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
@@ -80,5 +80,15 @@ else
     exit 1
 fi
 
-echo "✅ Lobster installed successfully!"
+echo "✅ Lobster $LATEST_RELEASE installed successfully!"
+lobster version 2>/dev/null || true
+
+# Check for old config that may override new defaults
+CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/lobster/config.toml"
+if [ -f "$CONFIG_FILE" ] && grep -q 'base.*=.*"flixhq' "$CONFIG_FILE" 2>/dev/null; then
+    echo ""
+    echo "⚠️  Your config ($CONFIG_FILE) uses an old provider."
+    echo "   Remove the 'base' line or set base = \"soap2day\" for the new default."
+fi
+
 echo "Run 'lobster' in your terminal to get started."
