@@ -32,6 +32,10 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 		fallbacks = append(fallbacks, provider.NewFlixHQ("flixhq.to"))
 	}
 
+	if _, ok := primary.(*provider.KimCartoon); !ok {
+		fallbacks = append(fallbacks, provider.NewKimCartoon("kimcartoon.li"))
+	}
+
 	return fallbacks
 }
 
