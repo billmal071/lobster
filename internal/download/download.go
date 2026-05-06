@@ -46,8 +46,14 @@ func Download(stream *media.Stream, title string, outputDir string, subFile stri
 	// Build ffmpeg args as explicit slice
 	args := []string{
 		"-y", // Overwrite output (for partial/empty files)
-		"-i", stream.URL,
 	}
+
+	// Pass Referer and headers for CDNs that require them
+	if stream.Referer != "" {
+		args = append(args, "-headers", "Referer: "+stream.Referer+"\r\n")
+	}
+
+	args = append(args, "-i", stream.URL)
 
 	// Add subtitle if available
 	if subFile != "" {
