@@ -262,17 +262,16 @@ func playCurrentEpisode(sess *playlist.Session) error {
 }
 
 // resolveSubtitles downloads multiple subtitle files.
-// Prefers SubDL over embedded. User can cycle tracks with 'j' in mpv.
+// User can cycle tracks with 'j' in mpv.
 func resolveSubtitles(stream *media.Stream, title string, season, episode int) []string {
 	if flagNoSubs {
 		return nil
 	}
 
-	subs := searchExternalSubs(title, season, episode)
-	if len(subs) == 0 {
-		subs = stream.Subtitles
-	}
-
+	subs := mergeSubtitles(
+		subtitle.Filter(stream.Subtitles, cfg.SubsLanguage),
+		searchExternalSubs(title, season, episode),
+	)
 	if len(subs) == 0 {
 		return nil
 	}

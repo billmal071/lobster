@@ -22,11 +22,34 @@ type KimCartoon struct {
 	client *http.Client
 }
 
+const kimCartoonDefaultBase = "kimcartoon.com.co"
+
 // NewKimCartoon creates a new KimCartoon provider.
 func NewKimCartoon(base string) *KimCartoon {
 	return &KimCartoon{
-		base:   base,
+		base:   normalizeKimCartoonBase(base),
 		client: httputil.NewClient(),
+	}
+}
+
+func normalizeKimCartoonBase(base string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return kimCartoonDefaultBase
+	}
+
+	base = strings.TrimRight(base, "/")
+	if strings.Contains(base, "://") {
+		if u, err := url.Parse(base); err == nil && u.Host != "" {
+			base = u.Host
+		}
+	}
+
+	switch strings.ToLower(base) {
+	case "kimcartoon", "kimcartoon.li", "www.kimcartoon.li", "kimcartoon.com.co", "www.kimcartoon.com.co":
+		return kimCartoonDefaultBase
+	default:
+		return base
 	}
 }
 
@@ -65,38 +88,77 @@ func (k *KimCartoon) Search(query string) ([]media.SearchResult, error) {
 // parseKCSearchResults extracts search results from a kimcartoon search page.
 func parseKCSearchResults(doc *goquery.Document) []media.SearchResult {
 	var results []media.SearchResult
+	seen := make(map[string]bool)
 
-	doc.Find("article.bs div.bsx a[itemprop='url']").Each(func(_ int, s *goquery.Selection) {
-		href, exists := s.Attr("href")
-		if !exists {
-			return
-		}
-
-		title := strings.TrimSpace(s.AttrOr("title", ""))
-		if title == "" {
-			title = strings.TrimSpace(s.Find(".ttzz").Text())
-		}
-
-		id := extractKCID(href)
-		if id == "" {
-			return
-		}
-
-		year := ""
-		if m := kcYearRe.FindStringSubmatch(title); len(m) > 1 {
-			year = m[1]
-		}
-
-		results = append(results, media.SearchResult{
-			ID:    id,
-			Title: title,
-			Type:  media.TV, // Cartoons are episodic
-			Year:  year,
-			URL:   href,
+	addLinks := func(scope *goquery.Selection, selector string) {
+		scope.Find(selector).Each(func(_ int, s *goquery.Selection) {
+			result, ok := parseKCResultLink(s)
+			if !ok {
+				return
+			}
+			if seen[result.ID] {
+				return
+			}
+			seen[result.ID] = true
+			results = append(results, result)
 		})
-	})
+	}
+
+	mainList := doc.Find(".postbody .bixbox .listupd")
+	if mainList.Length() > 0 {
+		addLinks(mainList, "article.bs div.bsx a[itemprop='url'], article.bs div.bsx a.tip[href], a.series[href]")
+		return results
+	}
+
+	addLinks(doc.Selection, "article.bs div.bsx a[itemprop='url'], article.bs div.bsx a.tip[href]")
+	addLinks(doc.Selection, "#wpop-items .serieslist a.series[href], .serieslist.pop a.series[href]")
 
 	return results
+}
+
+func parseKCResultLink(s *goquery.Selection) (media.SearchResult, bool) {
+	href, exists := s.Attr("href")
+	if !exists {
+		return media.SearchResult{}, false
+	}
+
+	title := strings.TrimSpace(s.AttrOr("title", ""))
+	if title == "" {
+		title = strings.TrimSpace(s.Find(".ttzz").Text())
+	}
+	if title == "" {
+		title = strings.TrimSpace(s.Text())
+	}
+	if title == "" {
+		title = strings.TrimSpace(s.Find("img").AttrOr("alt", ""))
+	}
+	if title == "" {
+		title = strings.TrimSpace(s.Find("img").AttrOr("title", ""))
+	}
+	if title == "" {
+		title = strings.TrimSpace(s.Closest("li").Find(".leftseries a.series").First().Text())
+	}
+	if title == "" {
+		return media.SearchResult{}, false
+	}
+
+	id := extractKCID(href)
+	if id == "" {
+		return media.SearchResult{}, false
+	}
+
+	year := ""
+	if m := kcYearRe.FindStringSubmatch(title); len(m) > 1 {
+		year = m[1]
+	}
+
+	return media.SearchResult{
+		ID:    id,
+		Title: title,
+		Type:  media.TV, // Cartoons are episodic
+		Year:  year,
+		URL:   href,
+	}, true
 }
 
 var kcYearRe = regexp.MustCompile(`\((\d{4})\)`)

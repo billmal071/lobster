@@ -31,30 +31,36 @@ const (
 type tab int
 
 const (
-	tabBrowse tab = iota
+	tabMovies tab = iota
+	tabSeries
+	tabCartoons
+	tabAnime
 	tabDownloads
 )
 
 // AppModel struct holding state
 type AppModel struct {
-	state          state
-	provider       provider.Provider
-	config         *config.Config
+	state           state
+	provider        provider.Provider
+	cartoonProvider provider.Provider
+	animeProvider   provider.Provider
+	config          *config.Config
 
-	list           list.Model
-	searchInput    textinput.Model
-	loader         spinner.Model
-	results        []media.SearchResult
+	list        list.Model
+	searchInput textinput.Model
+	loader      spinner.Model
+	results     []media.SearchResult
 
-	width          int
-	height         int
+	width  int
+	height int
 
-	currentItem    *media.SearchResult
-	currentDetail  *media.ContentDetail
+	currentItem   *media.SearchResult
+	currentDetail *media.ContentDetail
 
-	err            error
-	isSearching    bool
-	selectedResult *media.SearchResult
+	err              error
+	isSearching      bool
+	selectedResult   *media.SearchResult
+	selectedProvider provider.Provider
 
 	// Tab and download manager state
 	activeTab      tab
@@ -68,8 +74,8 @@ type listItem struct {
 	result media.SearchResult
 }
 
-func (i listItem) Title() string       { return i.result.Title }
-func (i listItem) Description() string { 
+func (i listItem) Title() string { return i.result.Title }
+func (i listItem) Description() string {
 	desc := fmt.Sprintf("%s \u2022 %s", i.result.Type.String(), i.result.Year)
 	if i.result.Type == media.TV {
 		desc = fmt.Sprintf("%s \u2022 %d Seasons", desc, i.result.Seasons)
@@ -86,14 +92,14 @@ var (
 )
 
 // StartApp launches the TUI. If mgr is nil, download features are disabled.
-func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager) (*media.SearchResult, error) {
+func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager) (*media.SearchResult, provider.Provider, error) {
 	ti := textinput.New()
-	ti.Placeholder = "Search for a movie or TV show..."
+	ti.Placeholder = "Search..."
 	ti.CharLimit = 156
 	ti.Width = 40
 
 	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
-	l.Title = "Trending"
+	l.Title = "Movies"
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 	l.SetFilteringEnabled(false) // We handle custom filtering/search
@@ -104,13 +110,15 @@ func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager) (
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4C4C"))
 
 	m := AppModel{
-		state:       stateTrending,
-		provider:    p,
-		config:      cfg,
-		list:        l,
-		searchInput: ti,
-		loader:      sp,
-		dlManager:   mgr,
+		state:           stateTrending,
+		provider:        p,
+		cartoonProvider: provider.NewKimCartoon("kimcartoon.com.co"),
+		animeProvider:   provider.NewKimCartoon("kimcartoon.com.co"),
+		config:          cfg,
+		list:            l,
+		searchInput:     ti,
+		loader:          sp,
+		dlManager:       mgr,
 	}
 
 	if mgr != nil {
@@ -120,15 +128,18 @@ func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager) (
 	p2 := tea.NewProgram(m, tea.WithAltScreen())
 	m2, err := p2.Run()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	appModel := m2.(AppModel)
-	return appModel.selectedResult, nil
+	if appModel.selectedProvider == nil {
+		appModel.selectedProvider = p
+	}
+	return appModel.selectedResult, appModel.selectedProvider, nil
 }
 
 func (m AppModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		fetchTrendingCmd(m.provider),
+		fetchTabCmd(m.providerForActiveTab(), m.activeTab),
 		textinput.Blink,
 		m.loader.Tick,
 		m.list.StartSpinner(),
@@ -156,7 +167,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.results = nil // Clear current results to show loader
 				m.currentItem = nil
 				cmds = append(cmds, m.list.StartSpinner())
-				return m, tea.Batch(searchCmd(m.provider, m.searchInput.Value()), m.list.StartSpinner())
+				return m, tea.Batch(searchCmd(m.providerForActiveTab(), m.searchInput.Value()), m.list.StartSpinner())
 			case tea.KeyEsc:
 				m.isSearching = false
 				m.searchInput.Blur()
@@ -172,23 +183,18 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			return m, tea.Quit
 		case "tab":
-			if m.activeTab == tabBrowse {
-				m.activeTab = tabDownloads
-				m.downloadsModel.SetFocused(true)
-			} else {
-				m.activeTab = tabBrowse
-				m.downloadsModel.SetFocused(false)
-			}
-			return m, m.downloadsModel.Init()
+			return m, m.switchTab(m.nextTab())
 		case "1":
-			m.activeTab = tabBrowse
-			m.downloadsModel.SetFocused(false)
-			return m, nil
+			return m, m.switchTab(tabMovies)
 		case "2":
+			return m, m.switchTab(tabSeries)
+		case "3":
+			return m, m.switchTab(tabCartoons)
+		case "4":
+			return m, m.switchTab(tabAnime)
+		case "5":
 			if m.dlManager != nil {
-				m.activeTab = tabDownloads
-				m.downloadsModel.SetFocused(true)
-				return m, m.downloadsModel.Init()
+				return m, m.switchTab(tabDownloads)
 			}
 			return m, nil
 		}
@@ -210,6 +216,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if m.currentItem != nil {
 				m.selectedResult = m.currentItem
+				m.selectedProvider = m.providerForActiveTab()
 				return m, tea.Quit
 			}
 			return m, nil
@@ -249,7 +256,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.StopSpinner()
 		if len(msg) > 0 {
 			m.currentItem = &msg[0]
-			cmds = append(cmds, fetchDetailCmd(m.provider, msg[0].ID))
+			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), msg[0].ID))
+		} else {
+			m.currentItem = nil
+			m.currentDetail = nil
 		}
 
 	case detailFetchedMsg:
@@ -279,7 +289,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Update browse list and handle item change.
-	if m.activeTab == tabBrowse {
+	if m.activeTab != tabDownloads {
 		var listCmd tea.Cmd
 		prevIndex := m.list.Index()
 		m.list, listCmd = m.list.Update(msg)
@@ -287,7 +297,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentItem = &m.results[m.list.Index()]
 			m.currentDetail = nil
 			m.err = nil
-			cmds = append(cmds, fetchDetailCmd(m.provider, m.currentItem.ID))
+			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), m.currentItem.ID))
 		}
 		cmds = append(cmds, listCmd)
 	}
@@ -387,7 +397,7 @@ func (m AppModel) View() string {
 		if m.dlManager != nil {
 			dlHint = "  [D] Download  "
 		}
-		footer = footerStyle.Render("[ENTER] Play" + dlHint + "[S] Search  [TAB] Downloads  [Q] Quit")
+		footer = footerStyle.Render("[ENTER] Play" + dlHint + "[S] Search  [1-4] Categories  [TAB] Next Tab  [Q] Quit")
 	}
 
 	return docStyle.Render(lipgloss.JoinVertical(lipgloss.Left,
@@ -409,19 +419,99 @@ func (m AppModel) renderTabBar() string {
 		Foreground(lipgloss.Color("#888888")).
 		Padding(0, 2)
 
-	browseLabel := "1 Browse"
-	dlLabel := "2 Downloads"
-
-	var browseTab, dlTab string
-	if m.activeTab == tabBrowse {
-		browseTab = activeStyle.Render(browseLabel)
-		dlTab = inactiveStyle.Render(dlLabel)
-	} else {
-		browseTab = inactiveStyle.Render(browseLabel)
-		dlTab = activeStyle.Render(dlLabel)
+	labels := []struct {
+		tab   tab
+		label string
+	}{
+		{tabMovies, "1 Movies"},
+		{tabSeries, "2 Series"},
+		{tabCartoons, "3 Cartoons"},
+		{tabAnime, "4 Anime"},
 	}
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, browseTab, "  ", dlTab)
+	if m.dlManager != nil {
+		labels = append(labels, struct {
+			tab   tab
+			label string
+		}{tabDownloads, "5 Downloads"})
+	}
+
+	rendered := make([]string, 0, len(labels)*2)
+	for _, item := range labels {
+		if m.activeTab == item.tab {
+			rendered = append(rendered, activeStyle.Render(item.label))
+		} else {
+			rendered = append(rendered, inactiveStyle.Render(item.label))
+		}
+	}
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
+}
+
+func (m AppModel) providerForActiveTab() provider.Provider {
+	switch m.activeTab {
+	case tabCartoons:
+		return m.cartoonProvider
+	case tabAnime:
+		return m.animeProvider
+	default:
+		return m.provider
+	}
+}
+
+func (m AppModel) nextTab() tab {
+	switch m.activeTab {
+	case tabMovies:
+		return tabSeries
+	case tabSeries:
+		return tabCartoons
+	case tabCartoons:
+		return tabAnime
+	case tabAnime:
+		if m.dlManager != nil {
+			return tabDownloads
+		}
+		return tabMovies
+	default:
+		return tabMovies
+	}
+}
+
+func (m *AppModel) switchTab(next tab) tea.Cmd {
+	if next == tabDownloads && m.dlManager == nil {
+		return nil
+	}
+
+	m.activeTab = next
+	m.isSearching = false
+	m.searchInput.Blur()
+	m.currentItem = nil
+	m.currentDetail = nil
+	m.err = nil
+
+	if next == tabDownloads {
+		m.downloadsModel.SetFocused(true)
+		return m.downloadsModel.Init()
+	}
+
+	m.downloadsModel.SetFocused(false)
+	m.results = nil
+	m.list.SetItems(nil)
+	m.list.Title = m.tabTitle(next)
+	return tea.Batch(fetchTabCmd(m.providerForActiveTab(), next), m.list.StartSpinner())
+}
+
+func (m AppModel) tabTitle(t tab) string {
+	switch t {
+	case tabSeries:
+		return "Series"
+	case tabCartoons:
+		return "Cartoons"
+	case tabAnime:
+		return "Anime"
+	default:
+		return "Movies"
+	}
 }
 
 func (m AppModel) renderBrowseContent(mainHeight int) string {
@@ -502,7 +592,7 @@ func (m AppModel) renderBrowseContent(mainHeight int) string {
 		)
 
 		rightPaneStyle := lipgloss.NewStyle().
-			Width(m.width - m.width/3 - 4).
+			Width(m.width-m.width/3-4).
 			Height(mainHeight).
 			Padding(0, 2)
 
