@@ -339,7 +339,10 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	var subFiles []string
 	if !flagNoSubs {
 		subs := mergeSubtitles(
-			subtitle.Filter(stream.Subtitles, cfg.SubsLanguage),
+			subtitle.FilterByEpisode(
+				subtitle.Filter(stream.Subtitles, cfg.SubsLanguage),
+				season, episode,
+			),
 			searchExternalSubs(selected.Title, season, episode),
 		)
 		if len(subs) > 0 {
