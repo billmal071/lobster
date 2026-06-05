@@ -91,8 +91,8 @@ func sign(method, path, body string, key []byte) (clientToken, signature string)
 
     // x-tr-signature canonical string
     bodyMD5 := md5.Sum([]byte(body))
-    canonical := fmt.Sprintf("GET\napplication/json\napplication/json\n%d\n%s\n%s\n%s",
-        len(body), ts, hex.EncodeToString(bodyMD5[:]), path)
+    canonical := fmt.Sprintf("%s\napplication/json\napplication/json\n%d\n%s\n%s\n%s",
+        method, len(body), ts, hex.EncodeToString(bodyMD5[:]), path)
 
     mac := hmac.New(md5.New, key)
     mac.Write([]byte(canonical))
@@ -134,13 +134,12 @@ Internally, `Watch` calls `GET /play-info?subjectId={mediaID}&se={se}&ep={ep}` a
 **Search result item:**
 ```json
 {
-  "subjectId": 1857349212451623008,
-  "detailPath": "KHgp5s6Gcd2",
-  "name": "Project Hail Mary",
+  "subjectId": "1857349212451623008",
+  "detailUrl": "https://moviebox.ph/detail/project-hail-mary-...",
+  "title": "Project Hail Mary",
   "subjectType": 1,
-  "releaseYear": 2025,
-  "seasonNum": 0,
-  "episodeNum": 0
+  "releaseDate": "2025-03-14",
+  "seNum": 0
 }
 ```
 `subjectType`: `1` = movie, `2` = TV series, `3` = animation.
