@@ -350,7 +350,7 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 			if err == nil {
 				defer tmpDir.Cleanup()
 				for _, sub := range subs {
-					f, err := resolveAndDownloadSub(tmpDir, sub)
+					f, err := resolveAndDownloadSub(tmpDir, sub, season, episode)
 					if err != nil {
 						debugf("subtitle download failed (%s): %v", sub.Label, err)
 						continue
@@ -424,11 +424,11 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 
 // resolveAndDownloadSub handles downloading a subtitle, resolving provider-specific
 // URL schemes (opensubtitles:, subdl:) to actual files.
-func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle) (string, error) {
+func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle, season, episode int) (string, error) {
 	if strings.HasPrefix(sub.URL, "subdl:") {
 		zipURL := strings.TrimPrefix(sub.URL, "subdl:")
 		client := subtitle.NewSubDL(cfg.SubDLAPIKey)
-		return client.DownloadAndExtract(zipURL, tmpDir)
+		return client.DownloadAndExtract(zipURL, tmpDir, season, episode)
 	}
 	if strings.HasPrefix(sub.URL, "opensubtitles:") {
 		var fileID int

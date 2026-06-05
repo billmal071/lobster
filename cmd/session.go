@@ -287,7 +287,7 @@ func resolveSubtitles(stream *media.Stream, title string, season, episode int) [
 
 	var subFiles []string
 	for _, sub := range subs {
-		f, err := resolveAndDownloadSub(tmpDir, sub)
+		f, err := resolveAndDownloadSub(tmpDir, sub, season, episode)
 		if err != nil {
 			debugf("subtitle download failed (%s): %v", sub.Label, err)
 			continue
