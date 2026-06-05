@@ -47,7 +47,7 @@ type TBCPL struct {
 func NewTBCPL(base string) *TBCPL {
 	return &TBCPL{
 		base:          normalizeTBCPLBase(base),
-		client:        &http.Client{Timeout: 15 * time.Second, Transport: httputil.NewClient().Transport},
+		client:        &http.Client{Timeout: 8 * time.Second, Transport: httputil.NewClient().Transport},
 		tmdbBaseURL:   tbcplTMDBBase,
 		vidzeeBaseURL: tbcplVidzeeBase,
 		vidzeeKeyURL:  tbcplVidzeeKeyURL,
@@ -296,14 +296,19 @@ func (t *TBCPL) Recent(mediaType media.MediaType) ([]media.SearchResult, error) 
 }
 
 // Watch resolves a direct HLS stream through Vidzee's server API.
+// Uses a 20s overall deadline across all server attempts.
 func (t *TBCPL) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
 	candidates := tbcplDirectServers
 	if srv, ok := t.matchDirectServer(server); ok {
 		candidates = []tbcplDirectServer{srv}
 	}
 
+	deadline := time.Now().Add(20 * time.Second)
 	var lastErr error
 	for _, srv := range candidates {
+		if time.Now().After(deadline) {
+			break
+		}
 		stream, err := t.watchWithServer(mediaID, episodeID, srv, quality)
 		if err == nil {
 			return stream, nil
@@ -311,6 +316,9 @@ func (t *TBCPL) Watch(mediaID, episodeID, server, quality string) (*media.Stream
 		lastErr = err
 	}
 
+	if lastErr == nil {
+		lastErr = fmt.Errorf("all servers timed out")
+	}
 	return nil, fmt.Errorf("tbcpl watch failed: %w", lastErr)
 }
 
