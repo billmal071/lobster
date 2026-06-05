@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"context"
+	"net"
 	"sync"
 	"time"
 
@@ -45,14 +47,45 @@ type TBCPL struct {
 
 // NewTBCPL creates a new TBCPL provider.
 func NewTBCPL(base string) *TBCPL {
+	// Use a custom transport that resolves player.vidzee.wtf to known Cloudflare IPs.
+	// Some networks/DNS resolvers fail to resolve this subdomain.
+	baseTransport := httputil.NewClient().Transport.(*http.Transport).Clone()
+	baseTransport.DialContext = vidzeeDialer()
+
 	return &TBCPL{
 		base:          normalizeTBCPLBase(base),
-		client:        &http.Client{Timeout: 8 * time.Second, Transport: httputil.NewClient().Transport},
+		client:        &http.Client{Timeout: 8 * time.Second, Transport: baseTransport},
 		tmdbBaseURL:   tbcplTMDBBase,
 		vidzeeBaseURL: tbcplVidzeeBase,
 		vidzeeKeyURL:  tbcplVidzeeKeyURL,
 		searchCache:   make(map[string]tbcplCatalogItem),
 		seasonCache:   make(map[string]*tbcplSeasonResponse),
+	}
+}
+
+// vidzeeDialer returns a DialContext that resolves vidzee.wtf subdomains
+// to known Cloudflare IPs when system DNS fails.
+func vidzeeDialer() func(ctx context.Context, network, addr string) (net.Conn, error) {
+	fallbackIPs := []string{"172.67.180.227", "104.21.75.193"}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, _ := net.SplitHostPort(addr)
+		// Try system DNS first.
+		dialer := &net.Dialer{Timeout: 5 * time.Second}
+		conn, err := dialer.DialContext(ctx, network, addr)
+		if err == nil {
+			return conn, nil
+		}
+		// Fallback to hardcoded IPs for vidzee.wtf subdomains.
+		if !strings.Contains(host, "vidzee.wtf") {
+			return nil, err
+		}
+		for _, ip := range fallbackIPs {
+			conn, err = dialer.DialContext(ctx, network, net.JoinHostPort(ip, port))
+			if err == nil {
+				return conn, nil
+			}
+		}
+		return nil, fmt.Errorf("all vidzee IPs failed for %s", addr)
 	}
 }
 
