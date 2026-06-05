@@ -278,6 +278,10 @@ func resolveSubtitles(stream *media.Stream, title string, season, episode int) [
 	if len(subs) == 0 {
 		return nil
 	}
+	// Limit to 3 subtitle downloads to avoid stream URL expiry.
+	if len(subs) > 3 {
+		subs = subs[:3]
+	}
 
 	tmpDir, err := subtitle.NewTempDir()
 	if err != nil {

@@ -345,6 +345,10 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 			),
 			season, episode,
 		)
+		// Limit to 3 subtitle downloads to avoid stream URL expiry.
+		if len(subs) > 3 {
+			subs = subs[:3]
+		}
 		if len(subs) > 0 {
 			tmpDir, err := subtitle.NewTempDir()
 			if err == nil {
