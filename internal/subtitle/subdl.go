@@ -123,6 +123,14 @@ func (s *SubDLClient) Search(title, language string, season, episode int) ([]med
 		if season > 0 && sub.Season > 0 && sub.Season != season {
 			continue
 		}
+		// Skip full-season packs (contain multiple episodes in one zip)
+		if episode > 0 && sub.FullSeason {
+			continue
+		}
+		// Check release name for wrong episode markers
+		if episode > 0 && isWrongEpisode(strings.ToLower(sub.ReleaseName), season, episode) {
+			continue
+		}
 		label := sub.Language
 		if sub.HI {
 			label += " (SDH)"
@@ -176,7 +184,8 @@ func (s *SubDLClient) fetchAPI(params url.Values) (*subdlResponse, error) {
 }
 
 // DownloadAndExtract downloads a SubDL zip file and extracts the first SRT/VTT subtitle.
-func (s *SubDLClient) DownloadAndExtract(zipURL string, tmpDir *TempDir) (string, error) {
+// Season/episode are used to filter out wrong-episode files from multi-episode zips.
+func (s *SubDLClient) DownloadAndExtract(zipURL string, tmpDir *TempDir, season, episode int) (string, error) {
 	req, err := http.NewRequest("GET", zipURL, nil)
 	if err != nil {
 		return "", err
@@ -204,15 +213,20 @@ func (s *SubDLClient) DownloadAndExtract(zipURL string, tmpDir *TempDir) (string
 		return "", fmt.Errorf("opening zip: %w", err)
 	}
 
-	// Find first SRT or VTT file
+	// Find best SRT or VTT file, preferring one that matches the episode
 	var best *zip.File
 	for _, f := range reader.File {
 		ext := strings.ToLower(filepath.Ext(f.Name))
-		if ext == ".srt" || ext == ".vtt" || ext == ".ass" {
-			best = f
-			if ext == ".srt" {
-				break // prefer SRT
-			}
+		if ext != ".srt" && ext != ".vtt" && ext != ".ass" {
+			continue
+		}
+		// Skip files clearly for a different episode
+		if episode > 0 && isWrongEpisode(strings.ToLower(f.Name), season, episode) {
+			continue
+		}
+		best = f
+		if ext == ".srt" {
+			break // prefer SRT
 		}
 	}
 

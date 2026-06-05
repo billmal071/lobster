@@ -9,10 +9,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// fetchTrendingCmd fetches trending movies.
-func fetchTrendingCmd(p provider.Provider) tea.Cmd {
+// fetchTabCmd fetches the default listing for a dashboard category.
+func fetchTabCmd(p provider.Provider, active tab) tea.Cmd {
 	return func() tea.Msg {
-		results, err := p.Trending(media.Movie)
+		mediaType := media.Movie
+		if active == tabSeries || active == tabCartoons || active == tabAnime {
+			mediaType = media.TV
+		}
+
+		results, err := p.Trending(mediaType)
 		if err != nil {
 			return errMsg{err}
 		}

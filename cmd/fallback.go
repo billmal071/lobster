@@ -10,9 +10,12 @@ import (
 	"lobster/internal/provider"
 )
 
+const maxFallbackCandidates = 5
+
 // fallbackProviders returns all available fallback providers, excluding the primary.
-// Both StreamProviders (Soap2Day, Consumet) and regular Providers (FlixHQ, FlixHQWS)
-// are included so the app tries every source before giving up.
+// Both StreamProviders (Soap2Day, Consumet, MovieBox, TBCPL) and regular
+// Providers (FlixHQ, FlixHQWS) are included so the app tries every source
+// before giving up.
 func fallbackProviders(primary provider.Provider) []provider.Provider {
 	var fallbacks []provider.Provider
 
@@ -24,6 +27,10 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 		fallbacks = append(fallbacks, provider.NewMovieBox())
 	}
 
+	if _, ok := primary.(*provider.TBCPL); !ok {
+		fallbacks = append(fallbacks, provider.NewTBCPL("tbcpl"))
+	}
+
 	if _, ok := primary.(*provider.FlixHQWS); !ok {
 		fallbacks = append(fallbacks, provider.NewFlixHQWS("flixhq.ws"))
 	}
@@ -33,7 +40,7 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 	}
 
 	if _, ok := primary.(*provider.KimCartoon); !ok {
-		fallbacks = append(fallbacks, provider.NewKimCartoon("kimcartoon.li"))
+		fallbacks = append(fallbacks, provider.NewKimCartoon("kimcartoon.com.co"))
 	}
 
 	return fallbacks
@@ -70,35 +77,70 @@ func tryFallbackProvider(fb provider.Provider, title string, mediaType media.Med
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
 
-	// Find best match: prefer same media type
-	var match *media.SearchResult
-	for i, r := range results {
-		if r.Type == mediaType {
-			match = &results[i]
-			break
-		}
-	}
-	if match == nil && len(results) > 0 {
-		match = &results[0]
-	}
-	if match == nil {
+	candidates := fallbackCandidates(results, mediaType)
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no matching result for %q", title)
 	}
-
-	debugf("fallback matched: %s (ID: %s)", match.Title, match.ID)
 
 	quality := "1080"
 	if cfg != nil && cfg.Quality != "" {
 		quality = cfg.Quality
 	}
 
-	// StreamProvider path: use Watch() directly
-	if sp, ok := fb.(provider.StreamProvider); ok {
-		return tryStreamProviderFallback(sp, match, mediaType, season, episode, quality)
+	var lastErr error
+	for i := range candidates {
+		match := &candidates[i]
+		debugf("fallback candidate: %s (ID: %s)", match.Title, match.ID)
+
+		var stream *media.Stream
+		if sp, ok := fb.(provider.StreamProvider); ok {
+			stream, err = tryStreamProviderFallback(sp, match, mediaType, season, episode, quality)
+		} else {
+			stream, err = tryEmbedProviderFallback(fb, match, mediaType, season, episode, quality)
+		}
+		if err == nil {
+			return stream, nil
+		}
+		lastErr = err
+		debugf("fallback candidate %s failed: %v", match.Title, err)
 	}
 
-	// Regular Provider path: GetServers + GetEmbedURL + Extract
-	return tryEmbedProviderFallback(fb, match, mediaType, season, episode, quality)
+	return nil, fmt.Errorf("all %d candidates failed: %w", len(candidates), lastErr)
+}
+
+func fallbackCandidates(results []media.SearchResult, mediaType media.MediaType) []media.SearchResult {
+	var sameType []media.SearchResult
+	var otherType []media.SearchResult
+	seen := make(map[string]bool)
+
+	appendUnique := func(dst []media.SearchResult, r media.SearchResult) []media.SearchResult {
+		key := r.ID
+		if key == "" {
+			key = r.Title + r.URL
+		}
+		if seen[key] {
+			return dst
+		}
+		seen[key] = true
+		return append(dst, r)
+	}
+
+	for _, r := range results {
+		if r.Type == mediaType {
+			sameType = appendUnique(sameType, r)
+		} else {
+			otherType = appendUnique(otherType, r)
+		}
+	}
+
+	candidates := sameType
+	if len(candidates) == 0 {
+		candidates = otherType
+	}
+	if len(candidates) > maxFallbackCandidates {
+		candidates = candidates[:maxFallbackCandidates]
+	}
+	return candidates
 }
 
 // tryStreamProviderFallback resolves a stream via StreamProvider.Watch().
