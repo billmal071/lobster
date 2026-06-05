@@ -428,10 +428,10 @@ func (t *TBCPL) watchWithServer(mediaID, episodeID string, server tbcplDirectSer
 		return nil, fmt.Errorf("parsing Vidzee response: %w", err)
 	}
 	if resp.Error != "" {
-		return nil, fmt.Errorf("Vidzee %s: %s", server.Name, resp.Error)
+		return nil, fmt.Errorf("vidzee %s: %s", server.Name, resp.Error)
 	}
 	if len(resp.URL) == 0 {
-		return nil, fmt.Errorf("Vidzee %s returned no URLs", server.Name)
+		return nil, fmt.Errorf("vidzee %s returned no URLs", server.Name)
 	}
 
 	key, err := t.fetchVidzeeKey()
@@ -453,7 +453,7 @@ func (t *TBCPL) watchWithServer(mediaID, episodeID string, server tbcplDirectSer
 		}, nil
 	}
 
-	return nil, fmt.Errorf("Vidzee %s returned no decryptable stream URLs", server.Name)
+	return nil, fmt.Errorf("vidzee %s returned no decryptable stream URLs", server.Name)
 }
 
 type tbcplVidzeeResponse struct {
@@ -703,6 +703,10 @@ func decryptTBCPLVidzeeLink(encrypted, key string) (string, error) {
 	}
 	if len(ciphertext) == 0 || len(ciphertext)%aes.BlockSize != 0 {
 		return "", fmt.Errorf("invalid ciphertext length")
+	}
+
+	if len(iv) != aes.BlockSize {
+		return "", fmt.Errorf("invalid iv length")
 	}
 
 	block, err := aes.NewCipher(aesKey)

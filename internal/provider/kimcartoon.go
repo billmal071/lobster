@@ -39,10 +39,11 @@ func normalizeKimCartoonBase(base string) string {
 	}
 
 	base = strings.TrimRight(base, "/")
-	if strings.Contains(base, "://") {
-		if u, err := url.Parse(base); err == nil && u.Host != "" {
-			base = u.Host
-		}
+	if !strings.Contains(base, "://") {
+		base = "https://" + base
+	}
+	if u, err := url.Parse(base); err == nil && u.Host != "" {
+		base = u.Host
 	}
 
 	switch strings.ToLower(base) {
