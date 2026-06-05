@@ -41,12 +41,15 @@ func searchRun(cmd *cobra.Command, args []string) error {
 			defer cleanup()
 		}
 
-		selected, err := tui.StartApp(p, cfg, mgr)
+		selected, selectedProvider, err := tui.StartApp(p, cfg, mgr)
 		if err != nil {
 			return err
 		}
 		if selected != nil {
-			return resolveAndPlay(p, *selected, 0, 0)
+			if selectedProvider == nil {
+				selectedProvider = p
+			}
+			return resolveAndPlay(selectedProvider, *selected, 0, 0)
 		}
 		return nil
 	}
@@ -332,20 +335,26 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		return enc.Encode(out)
 	}
 
-	// Handle subtitles — prefer SubDL over embedded (better sync)
 	// Download multiple tracks so the user can cycle with 'j' in mpv.
 	var subFiles []string
 	if !flagNoSubs {
-		subs := searchExternalSubs(selected.Title, season, episode)
-		if len(subs) == 0 {
-			subs = stream.Subtitles
+		subs := subtitle.FilterByEpisode(
+			mergeSubtitles(
+				subtitle.Filter(stream.Subtitles, cfg.SubsLanguage),
+				searchExternalSubs(selected.Title, season, episode),
+			),
+			season, episode,
+		)
+		// Limit to 3 subtitle downloads to avoid stream URL expiry.
+		if len(subs) > 3 {
+			subs = subs[:3]
 		}
 		if len(subs) > 0 {
 			tmpDir, err := subtitle.NewTempDir()
 			if err == nil {
 				defer tmpDir.Cleanup()
 				for _, sub := range subs {
-					f, err := resolveAndDownloadSub(tmpDir, sub)
+					f, err := resolveAndDownloadSub(tmpDir, sub, season, episode)
 					if err != nil {
 						debugf("subtitle download failed (%s): %v", sub.Label, err)
 						continue
@@ -419,11 +428,11 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 
 // resolveAndDownloadSub handles downloading a subtitle, resolving provider-specific
 // URL schemes (opensubtitles:, subdl:) to actual files.
-func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle) (string, error) {
+func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle, season, episode int) (string, error) {
 	if strings.HasPrefix(sub.URL, "subdl:") {
 		zipURL := strings.TrimPrefix(sub.URL, "subdl:")
 		client := subtitle.NewSubDL(cfg.SubDLAPIKey)
-		return client.DownloadAndExtract(zipURL, tmpDir)
+		return client.DownloadAndExtract(zipURL, tmpDir, season, episode)
 	}
 	if strings.HasPrefix(sub.URL, "opensubtitles:") {
 		var fileID int
@@ -440,15 +449,16 @@ func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle) (string
 
 // searchExternalSubs tries SubDL first, then OpenSubtitles as fallback.
 func searchExternalSubs(title string, season, episode int) []media.Subtitle {
+	var all []media.Subtitle
 	if cfg.SubDLAPIKey != "" {
-		debugf("no embedded subtitles, trying SubDL...")
+		debugf("trying SubDL subtitles...")
 		subs, err := subtitle.NewSubDL(cfg.SubDLAPIKey).Search(
 			title, cfg.SubsLanguage, season, episode,
 		)
 		if err != nil {
 			debugf("SubDL search failed: %v", err)
 		} else if len(subs) > 0 {
-			return subs
+			all = append(all, subs...)
 		}
 	}
 	if cfg.OSAPIKey != "" {
@@ -459,10 +469,25 @@ func searchExternalSubs(title string, season, episode int) []media.Subtitle {
 		if err != nil {
 			debugf("OpenSubtitles search failed: %v", err)
 		} else if len(subs) > 0 {
-			return subs
+			all = append(all, subs...)
 		}
 	}
-	return nil
+	return all
+}
+
+func mergeSubtitles(groups ...[]media.Subtitle) []media.Subtitle {
+	var merged []media.Subtitle
+	seen := make(map[string]bool)
+	for _, group := range groups {
+		for _, sub := range group {
+			if sub.URL == "" || seen[sub.URL] {
+				continue
+			}
+			seen[sub.URL] = true
+			merged = append(merged, sub)
+		}
+	}
+	return merged
 }
 
 // initDownloadManager sets up the download manager with SQLite store and engines.

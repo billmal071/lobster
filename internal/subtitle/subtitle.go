@@ -14,6 +14,56 @@ import (
 	"lobster/internal/media"
 )
 
+// FilterByEpisode removes subtitles that are clearly for a different episode
+// based on filename patterns like S01E03. Keeps subs with no episode marker.
+func FilterByEpisode(subtitles []media.Subtitle, season, episode int) []media.Subtitle {
+	if season == 0 && episode == 0 {
+		return subtitles
+	}
+
+	var filtered []media.Subtitle
+	for _, sub := range subtitles {
+		// Check URL and label for episode markers
+		text := strings.ToLower(sub.URL + " " + sub.Label)
+		if isWrongEpisode(text, season, episode) {
+			continue
+		}
+		filtered = append(filtered, sub)
+	}
+	return filtered
+}
+
+// isWrongEpisode checks if text contains an episode marker for a different episode.
+// Returns false (keep) if no marker is found.
+func isWrongEpisode(text string, season, episode int) bool {
+	// Match patterns: s01e02, S01E02, 1x02
+	patterns := []string{
+		fmt.Sprintf("s%02de", season),
+		fmt.Sprintf("s%de", season),
+		fmt.Sprintf("%dx", season),
+	}
+	for _, prefix := range patterns {
+		idx := strings.Index(text, prefix)
+		if idx < 0 {
+			continue
+		}
+		// Extract episode number after the prefix
+		rest := text[idx+len(prefix):]
+		epNum := 0
+		for _, c := range rest {
+			if c >= '0' && c <= '9' {
+				epNum = epNum*10 + int(c-'0')
+			} else {
+				break
+			}
+		}
+		if epNum > 0 && epNum != episode {
+			return true
+		}
+	}
+	return false
+}
+
 // Filter returns subtitles matching the preferred language (case-insensitive).
 func Filter(subtitles []media.Subtitle, language string) []media.Subtitle {
 	if language == "" {
