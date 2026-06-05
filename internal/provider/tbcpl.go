@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"lobster/internal/httputil"
 	"lobster/internal/media"
@@ -46,7 +47,7 @@ type TBCPL struct {
 func NewTBCPL(base string) *TBCPL {
 	return &TBCPL{
 		base:          normalizeTBCPLBase(base),
-		client:        httputil.NewClient(),
+		client:        &http.Client{Timeout: 15 * time.Second, Transport: httputil.NewClient().Transport},
 		tmdbBaseURL:   tbcplTMDBBase,
 		vidzeeBaseURL: tbcplVidzeeBase,
 		vidzeeKeyURL:  tbcplVidzeeKeyURL,
