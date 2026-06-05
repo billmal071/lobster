@@ -338,12 +338,12 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	// Download multiple tracks so the user can cycle with 'j' in mpv.
 	var subFiles []string
 	if !flagNoSubs {
-		subs := mergeSubtitles(
-			subtitle.FilterByEpisode(
+		subs := subtitle.FilterByEpisode(
+			mergeSubtitles(
 				subtitle.Filter(stream.Subtitles, cfg.SubsLanguage),
-				season, episode,
+				searchExternalSubs(selected.Title, season, episode),
 			),
-			searchExternalSubs(selected.Title, season, episode),
+			season, episode,
 		)
 		if len(subs) > 0 {
 			tmpDir, err := subtitle.NewTempDir()

@@ -123,6 +123,14 @@ func (s *SubDLClient) Search(title, language string, season, episode int) ([]med
 		if season > 0 && sub.Season > 0 && sub.Season != season {
 			continue
 		}
+		// Skip full-season packs (contain multiple episodes in one zip)
+		if episode > 0 && sub.FullSeason {
+			continue
+		}
+		// Check release name for wrong episode markers
+		if episode > 0 && isWrongEpisode(strings.ToLower(sub.ReleaseName), season, episode) {
+			continue
+		}
 		label := sub.Language
 		if sub.HI {
 			label += " (SDH)"

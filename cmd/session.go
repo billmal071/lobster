@@ -268,12 +268,12 @@ func resolveSubtitles(stream *media.Stream, title string, season, episode int) [
 		return nil
 	}
 
-	subs := mergeSubtitles(
-		subtitle.FilterByEpisode(
+	subs := subtitle.FilterByEpisode(
+		mergeSubtitles(
 			subtitle.Filter(stream.Subtitles, cfg.SubsLanguage),
-			season, episode,
+			searchExternalSubs(title, season, episode),
 		),
-		searchExternalSubs(title, season, episode),
+		season, episode,
 	)
 	if len(subs) == 0 {
 		return nil
