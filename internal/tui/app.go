@@ -56,6 +56,7 @@ type AppModel struct {
 
 	currentItem   *media.SearchResult
 	currentDetail *media.ContentDetail
+	currentPoster string
 
 	err              error
 	isSearching      bool
@@ -257,6 +258,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msg) > 0 {
 			m.currentItem = &msg[0]
 			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), msg[0].ID))
+			if msg[0].Poster != "" {
+				pw, ph := m.posterSize()
+				cmds = append(cmds, fetchPosterCmd(msg[0].ID, msg[0].Poster, pw, ph))
+			}
 		} else {
 			m.currentItem = nil
 			m.currentDetail = nil
@@ -266,6 +271,11 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		if m.currentItem != nil && m.currentItem.ID == msg.id {
 			m.currentDetail = msg.detail
+		}
+
+	case posterFetchedMsg:
+		if m.currentItem != nil && m.currentItem.ID == msg.id {
+			m.currentPoster = msg.poster
 		}
 
 	case downloadProgressMsg:
@@ -296,8 +306,13 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.isSearching && len(m.results) > 0 && m.list.Index() != prevIndex {
 			m.currentItem = &m.results[m.list.Index()]
 			m.currentDetail = nil
+			m.currentPoster = ""
 			m.err = nil
 			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), m.currentItem.ID))
+			if m.currentItem.Poster != "" {
+				pw, ph := m.posterSize()
+				cmds = append(cmds, fetchPosterCmd(m.currentItem.ID, m.currentItem.Poster, pw, ph))
+			}
 		}
 		cmds = append(cmds, listCmd)
 	}
@@ -514,6 +529,23 @@ func (m AppModel) tabTitle(t tab) string {
 	}
 }
 
+// posterSize returns responsive poster dimensions based on current terminal size.
+func (m AppModel) posterSize() (cols, rows int) {
+	rightWidth := m.width - m.width/3 - 4
+	cols = rightWidth * 3 / 10
+	if cols > 30 {
+		cols = 30
+	}
+	if cols < 10 {
+		cols = 10
+	}
+	rows = cols * 6 / 10
+	if rows < 6 {
+		rows = 6
+	}
+	return
+}
+
 func (m AppModel) renderBrowseContent(mainHeight int) string {
 	m.list.SetSize(m.width/3, mainHeight)
 
@@ -539,64 +571,105 @@ func (m AppModel) renderBrowseContent(mainHeight int) string {
 	leftPane = leftPaneStyle.Render(leftPane)
 
 	var rightPane string
+	rightWidth := m.width - m.width/3 - 4
 	if m.currentItem != nil {
-		titleStr := detailTitleStyle.Render(fmt.Sprintf("%s (%s)", m.currentItem.Title, m.currentItem.Year))
+		// Compute text width accounting for poster
+		textWidth := rightWidth - 4
+		if m.currentPoster != "" {
+			pw, _ := m.posterSize()
+			textWidth = rightWidth - pw - 5
+		}
+		if textWidth < 20 {
+			textWidth = 20
+		}
 
+		// Title + year
+		titleStr := detailTitleStyle.Render(m.currentItem.Title)
+		if m.currentItem.Year != "" {
+			titleStr += " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render("("+m.currentItem.Year+")")
+		}
+
+		// Type badge
+		dot := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render(" • ")
 		var typeStr string
 		if m.currentItem.Type == media.TV {
-			typeStr = fmt.Sprintf("TV Series \u2022 %d Seasons \u2022 %d Eps", m.currentItem.Seasons, m.currentItem.Episodes)
+			typeStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Render("TV Series")
+			if m.currentItem.Seasons > 0 {
+				typeStr += dot + fmt.Sprintf("%d Seasons", m.currentItem.Seasons)
+			}
+			if m.currentItem.Episodes > 0 {
+				typeStr += dot + fmt.Sprintf("%d Eps", m.currentItem.Episodes)
+			}
 		} else {
-			typeStr = "Movie \u2022 " + m.currentItem.Duration
+			typeStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Render("Movie")
+			if m.currentItem.Duration != "" {
+				typeStr += dot + m.currentItem.Duration
+			}
 		}
 
 		var extDetails string
 		if m.currentDetail != nil {
-			plotBox := lipgloss.NewStyle().
-				Width(m.width - m.width/3 - 6).
-				Foreground(lipgloss.Color("#CCCCCC")).
-				Italic(true).
-				MarginTop(1).
-				Render(m.currentDetail.Description)
+			var parts []string
 
-			genre := "—"
+			// Rating
+			if m.currentDetail.Rating != "" {
+				parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("#F1FA8C")).Render("★ "+m.currentDetail.Rating))
+			}
+
+			// Metadata
+			labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4"))
 			if len(m.currentDetail.Genre) > 0 {
-				genre = strings.Join(m.currentDetail.Genre, ", ")
+				parts = append(parts, labelStyle.Render("Genre:")+" "+strings.Join(m.currentDetail.Genre, ", "))
 			}
-			cast := "—"
 			if len(m.currentDetail.Casts) > 0 {
-				cast = strings.Join(m.currentDetail.Casts, ", ")
+				parts = append(parts, labelStyle.Render("Cast:")+" "+strings.Join(m.currentDetail.Casts, ", "))
 			}
 
-			extDetails = fmt.Sprintf("\n%s\n%s\n%s\n%s",
-				detailLabelStyle.Render("Rating: ")+lipgloss.NewStyle().Foreground(lipgloss.Color("#F1FA8C")).Render(m.currentDetail.Rating),
-				detailLabelStyle.Render("Genre:  ")+genre,
-				detailLabelStyle.Render("Cast:   ")+cast,
-				plotBox,
-			)
+			// Description
+			if m.currentDetail.Description != "" {
+				desc := lipgloss.NewStyle().
+					Width(textWidth).
+					Foreground(lipgloss.Color("#BFBFBF")).
+					MarginTop(1).
+					Render(m.currentDetail.Description)
+				parts = append(parts, desc)
+			}
+
+			extDetails = strings.Join(parts, "\n")
 		} else {
 			if m.err != nil {
-				extDetails = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555")).MarginTop(2).Render(
-					"Failed to load details from provider.\n" +
-						"    Server might be rate-limiting or down.\n" +
-						"    Scroll up/down to retry.",
-				)
+				extDetails = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555")).MarginTop(1).Render(
+					"Failed to load details. Scroll to retry.")
 			} else {
-				extDetails = "\n\n  Loading details from server..."
+				extDetails = lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).MarginTop(1).Render(
+					"Loading details...")
 			}
 		}
 
 		rightPaneContent := lipgloss.JoinVertical(lipgloss.Left,
 			titleStr,
-			lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).MarginBottom(1).Render(typeStr),
+			typeStr,
+			"",
 			extDetails,
 		)
 
 		rightPaneStyle := lipgloss.NewStyle().
-			Width(m.width-m.width/3-4).
+			Width(rightWidth).
 			Height(mainHeight).
 			Padding(0, 2)
 
-		rightPane = rightPaneStyle.Render(rightPaneContent)
+		if m.currentPoster != "" {
+			pw, _ := m.posterSize()
+			textWidth := rightWidth - pw - 5
+			if textWidth < 20 {
+				textWidth = 20
+			}
+			posterBlock := lipgloss.NewStyle().MarginRight(2).Render(m.currentPoster)
+			textBlock := lipgloss.NewStyle().Width(textWidth).Render(rightPaneContent)
+			rightPane = rightPaneStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, posterBlock, textBlock))
+		} else {
+			rightPane = rightPaneStyle.Render(rightPaneContent)
+		}
 	} else {
 		if len(m.results) == 0 && m.err == nil {
 			msg := fmt.Sprintf("\n\n  %s Fetching content...", m.loader.View())

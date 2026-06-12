@@ -20,6 +20,7 @@ const (
 	tmdbSearchBase = "https://www.themoviedb.org"
 	moviesapiBase  = "https://ww2.moviesapi.to"
 	flixcdnBase    = "https://flixcdn.cyou"
+	hd4uBase       = "https://hd4u.sbs"
 	flixcdnKey     = "kiemtienmua911ca"
 	flixcdnIV      = "1234567890oiuytr"
 )
@@ -79,6 +80,13 @@ type moviesapiResponse struct {
 	VideoURL  string              `json:"video_url"`
 	UpnURL    string              `json:"upn_url"`
 	Subtitles []moviesapiSubtitle `json:"subtitles"`
+}
+
+// hd4uDecrypted represents the decrypted response from hd4u.sbs,
+// which includes the stream source and optional embedded subtitles.
+type hd4uDecrypted struct {
+	Source   string            `json:"source"`
+	Subtitle map[string]string `json:"subtitle"`
 }
 
 type moviesapiSubtitle struct {
@@ -232,7 +240,8 @@ func (s *Soap2Day) GetEmbedURL(serverID string) (string, error) {
 	return "", fmt.Errorf("use Watch instead")
 }
 
-// Watch resolves the stream URL through moviesapi.to and flixcdn decryption.
+// Watch resolves the stream URL through moviesapi.to and hd4u/flixcdn decryption.
+// Tries hd4u.sbs first (primary CDN), falls back to flixcdn.cyou.
 func (s *Soap2Day) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
 	// Build moviesapi URL from the encoded IDs
 	var apiURL string
@@ -264,19 +273,7 @@ func (s *Soap2Day) Watch(mediaID, episodeID, server, quality string) (*media.Str
 		return nil, fmt.Errorf("no video_url in response")
 	}
 
-	// Extract embed ID from video_url (after # and before first &)
-	embedID, err := extractEmbedID(apiResp.VideoURL)
-	if err != nil {
-		return nil, fmt.Errorf("%w", err)
-	}
-
-	// Decrypt stream URL from flixcdn
-	m3u8URL, err := s.decryptFlixcdn(embedID)
-	if err != nil {
-		return nil, fmt.Errorf("stream decryption: %w", err)
-	}
-
-	// Map subtitles
+	// Map subtitles from moviesapi response
 	var subtitles []media.Subtitle
 	for _, sub := range apiResp.Subtitles {
 		subtitles = append(subtitles, media.Subtitle{
@@ -286,12 +283,51 @@ func (s *Soap2Day) Watch(mediaID, episodeID, server, quality string) (*media.Str
 		})
 	}
 
-	return &media.Stream{
-		URL:       m3u8URL,
-		Quality:   quality,
-		Subtitles: subtitles,
-		Referer:   flixcdnBase + "/",
-	}, nil
+	// Try CDN backends: hd4u.sbs (video_url) first, then flixcdn.cyou (upn_url)
+	type cdnAttempt struct {
+		embedURL string
+		base     string
+	}
+	attempts := []cdnAttempt{
+		{apiResp.VideoURL, hd4uBase},
+		{apiResp.UpnURL, flixcdnBase},
+	}
+
+	var lastErr error
+	for _, attempt := range attempts {
+		if attempt.embedURL == "" {
+			continue
+		}
+		embedID, err := extractEmbedID(attempt.embedURL)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		m3u8URL, cdnSubs, err := s.decryptCDN(attempt.base, embedID)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		// Use CDN-provided subtitles if moviesapi had none
+		subs := subtitles
+		if len(subs) == 0 && len(cdnSubs) > 0 {
+			subs = cdnSubs
+		}
+
+		return &media.Stream{
+			URL:       m3u8URL,
+			Quality:   quality,
+			Subtitles: subs,
+			Referer:   attempt.base + "/",
+		}, nil
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no CDN backends available")
+	}
+	return nil, fmt.Errorf("stream resolution failed: %w", lastErr)
 }
 
 // extractTMDBID extracts the numeric TMDB ID from a provider ID like "tv/79744" or "movie/299534".
@@ -318,29 +354,40 @@ func extractEmbedID(videoURL string) (string, error) {
 	return fragment, nil
 }
 
-// decryptFlixcdn fetches encrypted stream data from flixcdn and decrypts it.
-func (s *Soap2Day) decryptFlixcdn(embedID string) (string, error) {
-	apiURL := fmt.Sprintf("%s/api/v1/video?id=%s", flixcdnBase, url.QueryEscape(embedID))
+// decryptCDN fetches encrypted stream data from a CDN (hd4u.sbs or flixcdn.cyou) and decrypts it.
+// Both CDNs use the same AES-128-CBC encryption with identical key/IV.
+// Returns the m3u8 URL and any embedded subtitles.
+func (s *Soap2Day) decryptCDN(base, embedID string) (string, []media.Subtitle, error) {
+	apiURL := fmt.Sprintf("%s/api/v1/video?id=%s", base, url.QueryEscape(embedID))
 
-	body, err := s.fetchWithReferer(apiURL, flixcdnBase+"/")
+	body, err := s.fetchWithReferer(apiURL, base+"/")
 	if err != nil {
-		return "", fmt.Errorf("flixcdn request: %w", err)
+		return "", nil, fmt.Errorf("cdn request: %w", err)
+	}
+
+	// Check for JSON error responses (e.g. {"message": "Video not found or deleted"})
+	trimmed := strings.TrimSpace(string(body))
+	if len(trimmed) > 0 && trimmed[0] == '{' {
+		var errResp struct{ Message string `json:"message"` }
+		if json.Unmarshal([]byte(trimmed), &errResp) == nil && errResp.Message != "" {
+			return "", nil, fmt.Errorf("%s", errResp.Message)
+		}
 	}
 
 	// Response is hex-encoded AES-CBC encrypted data
-	ciphertext, err := hex.DecodeString(strings.TrimSpace(string(body)))
+	ciphertext, err := hex.DecodeString(trimmed)
 	if err != nil {
-		return "", fmt.Errorf("hex decode: %w", err)
+		return "", nil, fmt.Errorf("hex decode: %w", err)
 	}
 
 	// Decrypt AES-CBC
 	block, err := aes.NewCipher([]byte(flixcdnKey))
 	if err != nil {
-		return "", fmt.Errorf("aes cipher: %w", err)
+		return "", nil, fmt.Errorf("aes cipher: %w", err)
 	}
 
 	if len(ciphertext) < aes.BlockSize || len(ciphertext)%aes.BlockSize != 0 {
-		return "", fmt.Errorf("invalid ciphertext length %d", len(ciphertext))
+		return "", nil, fmt.Errorf("invalid ciphertext length %d", len(ciphertext))
 	}
 
 	mode := cipher.NewCBCDecrypter(block, []byte(flixcdnIV))
@@ -353,16 +400,42 @@ func (s *Soap2Day) decryptFlixcdn(embedID string) (string, error) {
 		plaintext = plaintext[:len(plaintext)-padLen]
 	}
 
-	var decrypted flixcdnDecrypted
-	if err := json.Unmarshal(plaintext, &decrypted); err != nil {
-		return "", fmt.Errorf("parsing decrypted response: %w", err)
+	// Try hd4u format first (has source + subtitle fields)
+	var hd4u hd4uDecrypted
+	if json.Unmarshal(plaintext, &hd4u) == nil && hd4u.Source != "" {
+		var subs []media.Subtitle
+		for lang, subURL := range hd4u.Subtitle {
+			// Strip fragment (e.g. "#en") from subtitle URLs
+			if idx := strings.Index(subURL, "#"); idx >= 0 {
+				subURL = subURL[:idx]
+			}
+			if subURL == "" {
+				continue
+			}
+			// Subtitle URLs may be relative paths
+			if !strings.HasPrefix(subURL, "http") {
+				subURL = base + subURL
+			}
+			subs = append(subs, media.Subtitle{
+				Language: lang,
+				Label:    lang,
+				URL:      subURL,
+			})
+		}
+		return hd4u.Source, subs, nil
 	}
 
-	if decrypted.Source == "" {
-		return "", fmt.Errorf("empty source in decrypted response")
+	// Fall back to flixcdn format (simple {source: "..."})
+	var flixcdn flixcdnDecrypted
+	if err := json.Unmarshal(plaintext, &flixcdn); err != nil {
+		return "", nil, fmt.Errorf("parsing decrypted response: %w", err)
 	}
 
-	return decrypted.Source, nil
+	if flixcdn.Source == "" {
+		return "", nil, fmt.Errorf("empty source in decrypted response")
+	}
+
+	return flixcdn.Source, nil, nil
 }
 
 // fetchWithReferer performs a GET request with a specific Referer header.

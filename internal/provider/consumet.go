@@ -44,6 +44,7 @@ type consumetSearchResult struct {
 	Type        string `json:"type"`
 	ReleaseDate string `json:"releaseDate"`
 	Seasons     int    `json:"seasons"`
+	Image       string `json:"image"`
 }
 
 // Search returns matching results for the given query.
@@ -73,6 +74,7 @@ func (c *Consumet) Search(query string) ([]media.SearchResult, error) {
 			Type:    mt,
 			Year:    r.ReleaseDate,
 			Seasons: r.Seasons,
+			Poster:  r.Image,
 		})
 	}
 

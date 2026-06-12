@@ -53,8 +53,10 @@ func (m *MovieBox) rotateHost() {
 }
 
 const (
-	hmacKey1 = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
-	hmacKey2 = "Xqn2nnO41/L92o1iuXhSLHTbXvY4Z5ZZ62m8mSLA"
+	hmacKey1  = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
+	hmacKey2  = "Xqn2nnO41/L92o1iuXhSLHTbXvY4Z5ZZ62m8mSLA"
+	mbAppID   = "302770f8bb6543ce8bdff585943a1eca"
+	mbAppKey  = "a9d263ae575d4f5d94eab086a150c67e"
 )
 
 // sign signs a request with HMAC-MD5 and returns the required headers.
@@ -66,20 +68,26 @@ func (m *MovieBox) sign(method, path, body string) (clientToken, signature strin
 	h := md5.Sum([]byte(rev))
 	clientToken = ts + "," + hex.EncodeToString(h[:])
 
-	// x-tr-signature
-	bodyMD5 := md5.Sum([]byte(body))
-	queryPath := path
-	if idx := strings.IndexByte(path, '?'); idx != -1 {
-		queryPath = path[:idx] + path[idx:]
+	// For GET requests (empty body), body hash and length are empty strings.
+	// For POST requests, they are the MD5 hash and length of the body.
+	var bodyLenStr, bodyHashStr string
+	if body != "" {
+		bodyMD5 := md5.Sum([]byte(body))
+		bodyLenStr = strconv.Itoa(len(body))
+		bodyHashStr = hex.EncodeToString(bodyMD5[:])
 	}
-	canonical := fmt.Sprintf("%s\n%s\n%s\n%d\n%s\n%s\n%s",
+
+	// Sort query parameters alphabetically in the canonical path.
+	canonicalPath := sortQueryParams(path)
+
+	canonical := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s\n%s",
 		method,
 		"application/json",
 		"application/json",
-		len(body),
+		bodyLenStr,
 		ts,
-		hex.EncodeToString(bodyMD5[:]),
-		queryPath,
+		bodyHashStr,
+		canonicalPath,
 	)
 
 	key, _ := base64.StdEncoding.DecodeString(hmacKey1)
@@ -91,26 +99,57 @@ func (m *MovieBox) sign(method, path, body string) (clientToken, signature strin
 	return
 }
 
+// sortQueryParams sorts URL query parameters alphabetically for canonical signing.
+func sortQueryParams(path string) string {
+	idx := strings.IndexByte(path, '?')
+	if idx == -1 {
+		return path
+	}
+	basePath := path[:idx]
+	query := path[idx+1:]
+	params := strings.Split(query, "&")
+	sort.Strings(params)
+	return basePath + "?" + strings.Join(params, "&")
+}
+
 // request makes an HTTP request with MovieBox signing and returns the response body.
 func (m *MovieBox) request(method, path string, body []byte) ([]byte, error) {
 	var lastErr error
 
+	bodyStr := ""
+	if len(body) > 0 {
+		bodyStr = string(body)
+	}
+
 	for i := 0; i < len(m.baseURLs); i++ {
 		url := m.baseURL() + path
 
-		req, err := http.NewRequest(method, url, strings.NewReader(string(body)))
+		var bodyReader io.Reader
+		if bodyStr != "" {
+			bodyReader = strings.NewReader(bodyStr)
+		}
+
+		req, err := http.NewRequest(method, url, bodyReader)
 		if err != nil {
 			return nil, fmt.Errorf("creating request: %w", err)
 		}
 
-		clientToken, signature := m.sign(method, path, string(body))
+		clientToken, signature := m.sign(method, path, bodyStr)
 		req.Header.Set("X-Client-Token", clientToken)
 		req.Header.Set("x-tr-signature", signature)
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-client-status", "0")
+		req.Header.Set("appid", mbAppID)
+		req.Header.Set("appkey", mbAppKey)
+		req.Header.Set("lang", "en")
+		req.Header.Set("os", "android")
 
-		if m.token != "" {
-			req.Header.Set("Authorization", "Bearer "+m.token)
+		m.mu.RLock()
+		token := m.token
+		m.mu.RUnlock()
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
 		}
 
 		resp, err := m.client.Do(req)
@@ -126,9 +165,9 @@ func (m *MovieBox) request(method, path string, body []byte) ([]byte, error) {
 			continue
 		}
 
-		// Capture bearer token from x-user header
-		if token := resp.Header.Get("x-user"); token != "" && m.token == "" {
-			m.token = token
+		// Capture bearer token from x-user header (JSON: {"token":"..."})
+		if xUser := resp.Header.Get("x-user"); xUser != "" {
+			m.extractToken(xUser)
 		}
 
 		defer resp.Body.Close()
@@ -146,6 +185,35 @@ func (m *MovieBox) request(method, path string, body []byte) ([]byte, error) {
 	}
 
 	return nil, fmt.Errorf("all hosts failed, last error: %w", lastErr)
+}
+
+// extractToken parses the x-user response header to capture the bearer token.
+// The header may be a JSON object like {"token":"eyJ..."} or a plain token string.
+func (m *MovieBox) extractToken(xUser string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.token != "" {
+		return
+	}
+
+	xUser = strings.TrimSpace(xUser)
+	if xUser == "" {
+		return
+	}
+
+	// Try JSON format first
+	if xUser[0] == '{' {
+		var parsed struct {
+			Token string `json:"token"`
+		}
+		if json.Unmarshal([]byte(xUser), &parsed) == nil && parsed.Token != "" {
+			m.token = parsed.Token
+			return
+		}
+	}
+
+	// Fall back to using raw value as token
+	m.token = xUser
 }
 
 // unwrapData extracts the "data" field from the API envelope.
@@ -284,6 +352,7 @@ func (m *MovieBox) Search(query string) ([]media.SearchResult, error) {
 				Year:     year,
 				Duration: item.Duration,
 				Seasons:  item.SeNum,
+				Poster:   item.Cover.URL,
 			})
 		}
 	}

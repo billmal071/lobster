@@ -1,0 +1,86 @@
+<h2>Section 4: Downloads Tab UI</h2>
+<p class="subtitle">How should the downloads tab look in the TUI?</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>List + Detail Split</h3>
+      <p>Same 2-pane layout as Browse tab. Left: download queue list. Right: selected download details (speed, ETA, path, error info). Consistent with existing design.</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-header">Downloads Tab — List + Detail</div>
+        <div class="mockup-body" style="font-family:monospace;font-size:13px;line-height:1.5;background:#1a1a2e;color:#ccc;padding:16px">
+          <div style="color:#FF4C4C;margin-bottom:8px">[1] Browse  <span style="background:#FF4C4C;color:#000;padding:2px 8px;border-radius:3px">[2] Downloads</span></div>
+          <div style="display:flex;gap:2px">
+            <div style="flex:1;border-right:1px solid #444;padding-right:12px">
+              <div style="color:#888;margin-bottom:6px">▼ Active (2)</div>
+              <div style="background:#2a2a3e;padding:6px;border-radius:4px;margin-bottom:4px;border-left:3px solid #50fa7b">
+                <div style="color:#fff">S06E01 - Strike Back</div>
+                <div style="color:#50fa7b;font-size:12px">████████████░░░░░ 72% · 4.2 MB/s · 2m left</div>
+              </div>
+              <div style="background:#2a2a3e;padding:6px;border-radius:4px;margin-bottom:4px;border-left:3px solid #bd93f9">
+                <div style="color:#fff">S06E02 - The Hammer</div>
+                <div style="color:#bd93f9;font-size:12px">Queued — waiting</div>
+              </div>
+              <div style="color:#888;margin-top:8px;margin-bottom:6px">▼ Completed (3)</div>
+              <div style="background:#2a2a3e;padding:6px;border-radius:4px;margin-bottom:4px;border-left:3px solid #888">
+                <div style="color:#888">S05E10 - The List</div>
+                <div style="font-size:12px;color:#666">342 MB · 5 min ago</div>
+              </div>
+              <div style="background:#2a2a3e;padding:6px;border-radius:4px;margin-bottom:4px;border-left:3px solid #888">
+                <div style="color:#888">S05E09 - Breakdown</div>
+                <div style="font-size:12px;color:#666">298 MB · 12 min ago</div>
+              </div>
+            </div>
+            <div style="flex:1;padding-left:12px">
+              <div style="color:#FF0055;font-size:14px;margin-bottom:8px">S06E01 - Strike Back</div>
+              <div style="color:#888;font-size:12px;margin-bottom:4px">Show: <span style="color:#ccc">The Rookie</span></div>
+              <div style="color:#888;font-size:12px;margin-bottom:4px">Season: <span style="color:#ccc">6</span> Episode: <span style="color:#ccc">1</span></div>
+              <div style="color:#888;font-size:12px;margin-bottom:4px">Status: <span style="color:#50fa7b">Downloading</span></div>
+              <div style="color:#888;font-size:12px;margin-bottom:4px">Progress: <span style="color:#ccc">247 / 342 MB</span></div>
+              <div style="color:#888;font-size:12px;margin-bottom:4px">Speed: <span style="color:#ccc">4.2 MB/s</span></div>
+              <div style="color:#888;font-size:12px;margin-bottom:4px">ETA: <span style="color:#ccc">~2 minutes</span></div>
+              <div style="color:#888;font-size:12px;margin-bottom:4px">Segments: <span style="color:#ccc">156 / 217</span></div>
+              <div style="color:#888;font-size:12px;margin-bottom:4px">Path: <span style="color:#ccc">~/Videos/lobster/The Rookie/Season 06/</span></div>
+              <div style="color:#888;font-size:12px;margin-bottom:4px">Subtitles: <span style="color:#ccc">English (SubDL)</span></div>
+              <div style="color:#888;font-size:12px;margin-bottom:12px">Source: <span style="color:#ccc">Soap2Day (fallback)</span></div>
+              <div style="color:#666;font-size:11px">[p] Pause  [x] Cancel  [r] Retry  [⌫] Remove</div>
+            </div>
+          </div>
+          <div style="color:#666;font-size:11px;margin-top:8px;border-top:1px solid #333;padding-top:6px">[Tab/1/2] Switch tabs  [d] Download selected  [D] Download season  [q] Quit</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Full-Width List</h3>
+      <p>Downloads take the full width. Each row shows inline progress bar, speed, and status. No detail pane — all info visible at a glance in a compact table format.</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-header">Downloads Tab — Full Width</div>
+        <div class="mockup-body" style="font-family:monospace;font-size:13px;line-height:1.6;background:#1a1a2e;color:#ccc;padding:16px">
+          <div style="color:#FF4C4C;margin-bottom:8px">[1] Browse  <span style="background:#FF4C4C;color:#000;padding:2px 8px;border-radius:3px">[2] Downloads</span></div>
+          <div style="color:#888;font-size:11px;margin-bottom:4px;border-bottom:1px solid #333;padding-bottom:4px">  TITLE                          STATUS        PROGRESS                    SPEED     ETA</div>
+          <div style="background:#2a2a3e;padding:4px 8px;margin-bottom:2px;border-radius:3px">
+            <span style="color:#50fa7b">↓</span> <span style="color:#fff">S06E01 - Strike Back</span>        <span style="color:#50fa7b">downloading</span>   <span style="color:#50fa7b">████████████░░░░░</span> 72%   4.2 MB/s  ~2m
+          </div>
+          <div style="background:#2a2a3e;padding:4px 8px;margin-bottom:2px;border-radius:3px">
+            <span style="color:#bd93f9">◆</span> <span style="color:#fff">S06E02 - The Hammer</span>         <span style="color:#bd93f9">queued</span>        <span style="color:#444">░░░░░░░░░░░░░░░░░</span>  0%   —         —
+          </div>
+          <div style="background:#2a2a3e;padding:4px 8px;margin-bottom:2px;border-radius:3px">
+            <span style="color:#ff5555">✗</span> <span style="color:#fff">S06E03 - Testify</span>            <span style="color:#ff5555">failed</span>        <span style="color:#ff5555">████████░░░░░░░░░</span> 45%   —         <span style="color:#ff5555">CDN 403</span>
+          </div>
+          <div style="background:#2a2a3e;padding:4px 8px;margin-bottom:2px;border-radius:3px">
+            <span style="color:#888">✓</span> <span style="color:#888">S05E10 - The List</span>            <span style="color:#888">completed</span>     <span style="color:#888">█████████████████</span> 100%  —         342 MB
+          </div>
+          <div style="background:#2a2a3e;padding:4px 8px;margin-bottom:2px;border-radius:3px">
+            <span style="color:#888">✓</span> <span style="color:#888">S05E09 - Breakdown</span>           <span style="color:#888">completed</span>     <span style="color:#888">█████████████████</span> 100%  —         298 MB
+          </div>
+          <div style="color:#666;font-size:11px;margin-top:12px;border-top:1px solid #333;padding-top:6px">[Tab/1/2] Switch tabs  [p] Pause  [r] Retry  [x] Cancel  [⌫] Remove  [Enter] Details  [q] Quit</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

@@ -18,11 +18,15 @@ import (
 	"lobster/internal/httputil"
 	"lobster/internal/media"
 	"lobster/internal/player"
+	"lobster/internal/poster"
 	"lobster/internal/playlist"
 	"lobster/internal/provider"
 	"lobster/internal/subtitle"
 	"lobster/internal/tui"
 	"lobster/internal/ui"
+
+	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/term"
 )
 
 // searchRun is the default command: lobster <query>
@@ -104,32 +108,103 @@ func playFlow(p provider.Provider, query string) error {
 	}
 }
 
-// printDetail displays content metadata to stderr.
-func printDetail(r media.SearchResult, d *media.ContentDetail) {
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintf(os.Stderr, "  %s", r.Title)
-	if r.Year != "" {
-		fmt.Fprintf(os.Stderr, " (%s)", r.Year)
-	}
-	fmt.Fprintln(os.Stderr)
+// Detail pane styles.
+var (
+	detailTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F8F8F2"))
+	detailYear  = lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4"))
+	detailType  = lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9"))
+	detailDot   = lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).SetString(" • ")
+	detailStar  = lipgloss.NewStyle().Foreground(lipgloss.Color("#F1FA8C"))
+	detailLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4"))
+	detailValue = lipgloss.NewStyle().Foreground(lipgloss.Color("#F8F8F2"))
+	detailDesc  = lipgloss.NewStyle().Foreground(lipgloss.Color("#BFBFBF"))
+)
 
+// printDetail displays content metadata to stderr with poster on the left
+// and details on the right. Layout is responsive to terminal width.
+func printDetail(r media.SearchResult, d *media.ContentDetail) {
+	termWidth := 80
+	if w, _, err := term.GetSize(int(os.Stderr.Fd())); err == nil && w > 0 {
+		termWidth = w
+	}
+
+	// Poster: 25% of width, capped at 26 cols
+	posterCols := termWidth / 4
+	if posterCols > 26 {
+		posterCols = 26
+	}
+	if posterCols < 8 {
+		posterCols = 8
+	}
+	posterRows := posterCols * 3 / 5
+
+	textWidth := termWidth - posterCols - 8
+	if r.Poster == "" {
+		textWidth = termWidth - 4
+	}
+	if textWidth < 30 {
+		textWidth = 30
+	}
+
+	// Build styled text lines
+	var lines []string
+
+	// Title + year
+	title := detailTitle.Render(r.Title)
+	if r.Year != "" {
+		title += " " + detailYear.Render("("+r.Year+")")
+	}
+	lines = append(lines, title)
+
+	// Type badge
+	var typeLine string
+	if r.Type == media.TV {
+		typeLine = detailType.Render("TV Series")
+		if r.Seasons > 0 {
+			typeLine += detailDot.String() + fmt.Sprintf("%d Seasons", r.Seasons)
+		}
+		if r.Episodes > 0 {
+			typeLine += detailDot.String() + fmt.Sprintf("%d Episodes", r.Episodes)
+		}
+	} else {
+		typeLine = detailType.Render("Movie")
+		dur := d.Duration
+		if dur == "" {
+			dur = r.Duration
+		}
+		if dur != "" {
+			typeLine += detailDot.String() + dur
+		}
+	}
+	lines = append(lines, typeLine, "")
+
+	// Rating
 	if d.Rating != "" {
-		fmt.Fprintf(os.Stderr, "  Rating:   %s\n", d.Rating)
+		lines = append(lines, detailStar.Render("★ "+d.Rating))
 	}
-	if d.Duration != "" {
-		fmt.Fprintf(os.Stderr, "  Duration: %s\n", d.Duration)
-	} else if r.Duration != "" {
-		fmt.Fprintf(os.Stderr, "  Duration: %s\n", r.Duration)
-	}
-	if r.Type == media.TV && r.Seasons > 0 {
-		fmt.Fprintf(os.Stderr, "  Seasons:  %d (%d episodes)\n", r.Seasons, r.Episodes)
-	}
+
+	// Metadata
 	if len(d.Genre) > 0 {
-		fmt.Fprintf(os.Stderr, "  Genre:    %s\n", strings.Join(d.Genre, ", "))
+		lines = append(lines, detailLabel.Render("Genre:")+" "+detailValue.Render(strings.Join(d.Genre, ", ")))
 	}
+	if d.Released != "" {
+		lines = append(lines, detailLabel.Render("Released:")+" "+detailValue.Render(d.Released))
+	}
+	if d.Country != "" {
+		lines = append(lines, detailLabel.Render("Country:")+" "+detailValue.Render(d.Country))
+	}
+
+	// Description (word-wrapped)
 	if d.Description != "" {
-		fmt.Fprintf(os.Stderr, "\n  %s\n", d.Description)
+		lines = append(lines, "")
+		desc := detailDesc.Width(textWidth).Render(d.Description)
+		lines = append(lines, strings.Split(desc, "\n")...)
 	}
+
+	// Render poster + text side by side (Kitty or half-block)
+	fmt.Fprintln(os.Stderr)
+	output := poster.RenderSideBySide(r.Poster, posterCols, posterRows, lines)
+	fmt.Fprintln(os.Stderr, " "+output)
 	fmt.Fprintln(os.Stderr)
 }
 

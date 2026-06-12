@@ -23,7 +23,9 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 		fallbacks = append(fallbacks, provider.NewSoap2Day())
 	}
 
-	// MovieBox removed: play-info endpoint returns 407 (needs app auth).
+	if _, ok := primary.(*provider.MovieBox); !ok {
+		fallbacks = append(fallbacks, provider.NewMovieBox())
+	}
 
 	if _, ok := primary.(*provider.TBCPL); !ok {
 		fallbacks = append(fallbacks, provider.NewTBCPL("tbcpl"))
