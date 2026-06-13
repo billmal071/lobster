@@ -19,11 +19,21 @@ const maxFallbackCandidates = 5
 func fallbackProviders(primary provider.Provider) []provider.Provider {
 	var fallbacks []provider.Provider
 
+	if _, ok := primary.(*provider.VaPlayer); !ok {
+		fallbacks = append(fallbacks, provider.NewVaPlayer())
+	}
+
+	if _, ok := primary.(*provider.VidNest); !ok {
+		fallbacks = append(fallbacks, provider.NewVidNest())
+	}
+
 	if _, ok := primary.(*provider.Soap2Day); !ok {
 		fallbacks = append(fallbacks, provider.NewSoap2Day())
 	}
 
-	// MovieBox removed: play-info endpoint returns 407 (needs app auth).
+	if _, ok := primary.(*provider.MovieBox); !ok {
+		fallbacks = append(fallbacks, provider.NewMovieBox())
+	}
 
 	if _, ok := primary.(*provider.TBCPL); !ok {
 		fallbacks = append(fallbacks, provider.NewTBCPL("tbcpl"))
@@ -242,7 +252,7 @@ func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 			mt = media.TV
 		}
 
-		// Skip primary (FlixHQ) for streaming — go straight to fallbacks.
+		// Use fallback providers to resolve a stream for downloads.
 		fbStream, err := tryFallbackStream(primary, title, mt, season, episode)
 		if err != nil {
 			return nil, fmt.Errorf("all providers failed: %w", err)

@@ -29,6 +29,12 @@ func newProvider() provider.Provider {
 	if strings.Contains(cfg.Base, "tbcpl") || strings.Contains(cfg.Base, "1shows") {
 		return provider.NewTBCPL(cfg.Base)
 	}
+	if strings.Contains(cfg.Base, "vidnest") {
+		return provider.NewVidNest()
+	}
+	if strings.Contains(cfg.Base, "vaplayer") {
+		return provider.NewVaPlayer()
+	}
 	// Default: MovieBox
 	return provider.NewMovieBox()
 }

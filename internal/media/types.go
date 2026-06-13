@@ -30,6 +30,7 @@ type SearchResult struct {
 	Seasons  int       // Number of seasons (TV only)
 	Episodes int       // Total episodes (TV only)
 	URL      string    // Full URL to the content page
+	Poster   string    // Poster image URL (e.g., TMDB poster path)
 }
 
 // ContentDetail contains detailed metadata fetched from a content's detail page.
