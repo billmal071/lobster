@@ -12,18 +12,23 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"lobster/internal/dlmanager/store"
 )
 
+const defaultSegmentWorkers = 3
+
 // HLSEngine downloads HLS streams by fetching segments and muxing with ffmpeg.
 type HLSEngine struct {
-	Client      *http.Client
-	Store       *store.Store
-	RetryDelay  time.Duration // base delay for retries; 0 defaults to 2s
-	MaxRetries  int           // max download attempts per segment; 0 defaults to 3
-	SubtitleURL string        // if set, embed subtitle during mux (requires ffmpeg)
+	Client         *http.Client
+	Store          *store.Store
+	RetryDelay     time.Duration // base delay for retries; 0 defaults to 2s
+	MaxRetries     int           // max download attempts per segment; 0 defaults to 3
+	SubtitleURL    string        // if set, embed subtitle during mux (requires ffmpeg)
+	SegmentWorkers int           // number of parallel segment download workers; 0 defaults to 3
 }
 
 func (e *HLSEngine) Type() string { return "hls" }
@@ -84,38 +89,78 @@ func (e *HLSEngine) downloadHLS(ctx context.Context, streamURL, outputPath, refe
 		}
 	}
 
-	// Download each segment.
-	doneCount := 0
-	if completedSet != nil {
-		doneCount = len(completedSet)
+	// Download segments using parallel workers for faster throughput.
+	// Segments are written to individual numbered files, so download order
+	// doesn't affect the final assembly order.
+	workers := e.SegmentWorkers
+	if workers <= 0 {
+		workers = defaultSegmentWorkers
 	}
 
-	for i, segURL := range segmentURLs {
-		if ctx.Err() != nil {
-			return ctx.Err()
+	var doneCount int64
+	if completedSet != nil {
+		doneCount = int64(len(completedSet))
+	}
+
+	type segJob struct {
+		idx int
+		url string
+	}
+
+	// Build the work queue, skipping already-completed segments.
+	jobs := make(chan segJob, workers)
+	go func() {
+		defer close(jobs)
+		for i, segURL := range segmentURLs {
+			if completedSet != nil && completedSet[i] {
+				continue
+			}
+			select {
+			case jobs <- segJob{idx: i, url: segURL}:
+			case <-ctx.Done():
+				return
+			}
 		}
+	}()
 
-		// Skip already completed segments.
-		if completedSet != nil && completedSet[i] {
-			continue
-		}
+	dlCtx, dlCancel := context.WithCancelCause(ctx)
+	defer dlCancel(nil)
 
-		segPath := filepath.Join(partsDir, fmt.Sprintf("seg_%05d.ts", i))
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				if dlCtx.Err() != nil {
+					return
+				}
 
-		if err := e.downloadSegment(ctx, segURL, segPath, referer); err != nil {
-			return fmt.Errorf("downloading segment %d: %w", i, err)
-		}
+				segPath := filepath.Join(partsDir, fmt.Sprintf("seg_%05d.ts", job.idx))
+				if err := e.downloadSegment(dlCtx, job.url, segPath, referer); err != nil {
+					dlCancel(fmt.Errorf("downloading segment %d: %w", job.idx, err))
+					return
+				}
 
-		doneCount++
+				// Mark segment done in store.
+				if downloadID > 0 {
+					e.Store.MarkSegmentDone(downloadID, job.idx)
+				}
 
-		// Mark segment done in store.
-		if downloadID > 0 {
-			e.Store.MarkSegmentDone(downloadID, i)
-		}
+				done := atomic.AddInt64(&doneCount, 1)
+				if progressFn != nil {
+					progressFn(done, int64(totalSegments))
+				}
+			}
+		}()
+	}
+	wg.Wait()
 
-		if progressFn != nil {
-			progressFn(int64(doneCount), int64(totalSegments))
-		}
+	if err := context.Cause(dlCtx); err != nil && err != ctx.Err() {
+		return err
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 
 	// Mux segments into final file using ffmpeg.

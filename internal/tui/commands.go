@@ -1,6 +1,11 @@
 package tui
 
 import (
+	"context"
+	"strings"
+	"sync"
+	"time"
+
 	"lobster/internal/dlmanager"
 	"lobster/internal/dlmanager/store"
 	"lobster/internal/media"
@@ -26,15 +31,123 @@ func fetchTabCmd(p provider.Provider, active tab) tea.Cmd {
 	}
 }
 
-// searchCmd searches for items matching the query.
-func searchCmd(p provider.Provider, query string) tea.Cmd {
+// searchCmd searches for items matching the query using the primary provider
+// and optional fallback providers. When the primary returns few results (< 3),
+// fallbacks are searched in parallel and results are merged/deduplicated.
+func searchCmd(p provider.Provider, query string, fallbacks ...provider.Provider) tea.Cmd {
 	return func() tea.Msg {
 		results, err := p.Search(query)
 		if err != nil {
 			return errMsg{err}
 		}
-		return resultsFetchedMsg(results)
+
+		// If we got enough results or have no fallbacks, return immediately.
+		if len(results) >= 3 || len(fallbacks) == 0 {
+			return resultsFetchedMsg(results)
+		}
+
+		// Search fallbacks in parallel with a 5s timeout.
+		merged := tuiMultiSearch(results, fallbacks, query)
+		return resultsFetchedMsg(merged)
 	}
+}
+
+// tuiMultiSearch searches fallback providers in parallel and merges with
+// existing primary results, deduplicating by title (case-insensitive).
+func tuiMultiSearch(primary []media.SearchResult, fallbacks []provider.Provider, query string) []media.SearchResult {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var mu sync.Mutex
+	fbResults := make([][]media.SearchResult, len(fallbacks))
+
+	var wg sync.WaitGroup
+	for i, fb := range fallbacks {
+		wg.Add(1)
+		go func(idx int, p provider.Provider) {
+			defer wg.Done()
+			ch := make(chan []media.SearchResult, 1)
+			go func() {
+				r, err := p.Search(query)
+				if err != nil {
+					ch <- nil
+					return
+				}
+				ch <- r
+			}()
+			select {
+			case <-ctx.Done():
+				return
+			case r := <-ch:
+				mu.Lock()
+				fbResults[idx] = r
+				mu.Unlock()
+			}
+		}(i, fb)
+	}
+	wg.Wait()
+
+	return tuiDeduplicateResults(primary, fbResults)
+}
+
+// tuiDeduplicateResults merges primary and fallback results, deduplicating
+// by title (case-insensitive). Prefers the result with more metadata.
+func tuiDeduplicateResults(primary []media.SearchResult, fallbackGroups [][]media.SearchResult) []media.SearchResult {
+	type entry struct {
+		idx   int
+		score int
+	}
+	seen := make(map[string]entry)
+	var merged []media.SearchResult
+
+	addResult := func(r media.SearchResult) {
+		key := strings.ToLower(strings.TrimSpace(r.Title))
+		score := tuiResultScore(r)
+		if e, exists := seen[key]; exists {
+			if score > e.score {
+				merged[e.idx] = r
+				seen[key] = entry{e.idx, score}
+			}
+			return
+		}
+		seen[key] = entry{len(merged), score}
+		merged = append(merged, r)
+	}
+
+	for _, r := range primary {
+		addResult(r)
+	}
+	for _, group := range fallbackGroups {
+		for _, r := range group {
+			addResult(r)
+		}
+	}
+
+	return merged
+}
+
+// tuiResultScore returns a metadata completeness score for dedup preference.
+func tuiResultScore(r media.SearchResult) int {
+	score := 0
+	if r.Year != "" {
+		score++
+	}
+	if r.Poster != "" {
+		score++
+	}
+	if r.Duration != "" {
+		score++
+	}
+	if r.Seasons > 0 {
+		score++
+	}
+	if r.Episodes > 0 {
+		score++
+	}
+	if r.URL != "" {
+		score++
+	}
+	return score
 }
 
 // fetchDetailCmd fetches detailed metadata for a specific item.

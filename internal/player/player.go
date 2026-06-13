@@ -10,10 +10,16 @@ import (
 	"lobster/internal/media"
 )
 
+// PlayResult holds the final playback state after a player exits.
+type PlayResult struct {
+	Position float64 // last playback position in seconds
+	Duration float64 // total media duration in seconds (0 if unknown)
+}
+
 // Player is the interface for media player implementations.
 type Player interface {
-	// Play starts playback of a stream. Returns the last playback position.
-	Play(stream *media.Stream, title string, startPos float64, subFiles []string) (float64, error)
+	// Play starts playback of a stream. Returns the final playback state.
+	Play(stream *media.Stream, title string, startPos float64, subFiles []string) (PlayResult, error)
 
 	// Name returns the player name.
 	Name() string

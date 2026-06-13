@@ -46,7 +46,7 @@ func searchRun(cmd *cobra.Command, args []string) error {
 			defer cleanup()
 		}
 
-		selected, selectedProvider, err := tui.StartApp(p, cfg, mgr)
+		selected, selectedProvider, err := tui.StartApp(p, cfg, mgr, fallbackSearchProviders(p)...)
 		if err != nil {
 			return err
 		}
@@ -66,12 +66,21 @@ func searchRun(cmd *cobra.Command, args []string) error {
 
 // playFlow handles the full search -> select -> play flow.
 func playFlow(p provider.Provider, query string) error {
-	// Search
+	// Search primary provider first.
 	stop := ui.StartSpinner(fmt.Sprintf("Searching for %q...", query))
 	results, err := p.Search(query)
 	stop()
 	if err != nil {
 		return fmt.Errorf("search failed: %w", err)
+	}
+
+	// If primary returned few results, search fallback providers in parallel.
+	if len(results) < 3 {
+		debugf("primary returned %d results, searching fallback providers...", len(results))
+		stop = ui.StartSpinner("Searching more providers...")
+		fallbacks := fallbackSearchProviders(p)
+		results = multiProviderSearch(p, fallbacks, query)
+		stop()
 	}
 
 	items := make([]string, len(results))
@@ -251,9 +260,45 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			for i, s := range seasons {
 				seasonItems[i] = fmt.Sprintf("Season %d", s.Number)
 			}
+
+			// In download mode, offer multi-season batch options
+			if flagDownload != "" && len(seasons) > 1 {
+				batchItems := []string{
+					"Download all seasons",
+					"Download season range (e.g. 1-3)",
+				}
+				seasonItems = append(batchItems, seasonItems...)
+			}
+
 			seasonIdx, err = ui.Select("Season", seasonItems)
 			if err != nil {
 				return err
+			}
+
+			// Handle multi-season batch options
+			if flagDownload != "" && len(seasons) > 1 {
+				if seasonIdx == 0 {
+					return batchDownloadMultiSeason(p, selected, seasons)
+				} else if seasonIdx == 1 {
+					for {
+						rangeInput, err := ui.Input("Season range")
+						if err != nil {
+							return err
+						}
+						matched, err := parseSeasonRange(rangeInput, seasons)
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "Invalid range: %v\n", err)
+							continue
+						}
+						if len(matched) == 0 {
+							fmt.Fprintln(os.Stderr, "No seasons matched the range.")
+							continue
+						}
+						return batchDownloadMultiSeason(p, selected, matched)
+					}
+				}
+				// Offset index by 2 for injected batch options
+				seasonIdx -= 2
 			}
 		}
 
@@ -496,7 +541,7 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		return player.NotFoundError(cfg.Player)
 	}
 
-	lastPos, err := p2.Play(stream, title, startPos, subFiles)
+	result, err := p2.Play(stream, title, startPos, subFiles)
 	if err != nil {
 		return fmt.Errorf("playback failed: %w", err)
 	}
@@ -509,7 +554,8 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 			Type:     selected.Type,
 			Season:   season,
 			Episode:  episode,
-			Position: lastPos,
+			Position: result.Position,
+			Duration: result.Duration,
 		}
 		if err := history.Save(entry); err != nil {
 			debugf("saving history failed: %v", err)
