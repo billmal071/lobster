@@ -117,7 +117,10 @@ func batchDownload(p provider.Provider, selected media.SearchResult, episodes []
 	// Retry loop
 	for len(failed) > 0 {
 		ok, err := ui.Confirm("Retry failed downloads?")
-		if err != nil || !ok {
+		if err != nil {
+			return fmt.Errorf("retry prompt failed: %w", err)
+		}
+		if !ok {
 			break
 		}
 
@@ -310,7 +313,11 @@ func batchDownloadMultiSeason(p provider.Provider, selected media.SearchResult, 
 		episodes, err := p.GetEpisodes(selected.ID, season.ID)
 		stopEps()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to fetch Season %d episodes: %v, skipping\n", season.Number, err)
+			fmt.Fprintf(os.Stderr, "Failed to fetch Season %d episodes: %v\n", season.Number, err)
+			// Count each expected episode as failed. Since we can't know the
+			// exact count, record one failure entry for the season.
+			failed = append(failed, failedEpisode{SeasonNum: season.Number, Episode: media.Episode{Number: 0}})
+			totalEpisodes++
 			continue
 		}
 		if len(episodes) == 0 {
@@ -341,7 +348,10 @@ func batchDownloadMultiSeason(p provider.Provider, selected media.SearchResult, 
 	// Retry loop for failed episodes
 	for len(failed) > 0 {
 		ok, err := ui.Confirm("Retry failed downloads?")
-		if err != nil || !ok {
+		if err != nil {
+			return fmt.Errorf("retry prompt failed: %w", err)
+		}
+		if !ok {
 			break
 		}
 

@@ -107,7 +107,12 @@ func (e *HLSEngine) downloadHLS(ctx context.Context, streamURL, outputPath, refe
 		url string
 	}
 
+	dlCtx, dlCancel := context.WithCancelCause(ctx)
+	defer dlCancel(nil)
+
 	// Build the work queue, skipping already-completed segments.
+	// The producer checks dlCtx.Done() so it stops sending when a worker
+	// triggers cancellation via dlCancel.
 	jobs := make(chan segJob, workers)
 	go func() {
 		defer close(jobs)
@@ -117,14 +122,15 @@ func (e *HLSEngine) downloadHLS(ctx context.Context, streamURL, outputPath, refe
 			}
 			select {
 			case jobs <- segJob{idx: i, url: segURL}:
-			case <-ctx.Done():
+			case <-dlCtx.Done():
 				return
 			}
 		}
 	}()
 
-	dlCtx, dlCancel := context.WithCancelCause(ctx)
-	defer dlCancel(nil)
+	// Mutex to serialize progress callback delivery, since progressFn
+	// may not be safe for concurrent invocation.
+	var progressMu sync.Mutex
 
 	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {
@@ -149,7 +155,9 @@ func (e *HLSEngine) downloadHLS(ctx context.Context, streamURL, outputPath, refe
 
 				done := atomic.AddInt64(&doneCount, 1)
 				if progressFn != nil {
+					progressMu.Lock()
 					progressFn(done, int64(totalSegments))
+					progressMu.Unlock()
 				}
 			}
 		}()

@@ -117,7 +117,7 @@ func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager, f
 	m := AppModel{
 		state:             stateTrending,
 		provider:          p,
-		cartoonProvider:   provider.NewKimCartoon("kimcartoon.com.co"),
+		cartoonProvider:   provider.NewKimCartoon(provider.ResolveDomain("kimcartoon.com.co", "kimcartoon", cfg.DomainOverrides)),
 		animeProvider:     provider.NewVaPlayer(),
 		fallbackProviders: fallbacks,
 		config:            cfg,
