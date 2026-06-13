@@ -260,9 +260,45 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			for i, s := range seasons {
 				seasonItems[i] = fmt.Sprintf("Season %d", s.Number)
 			}
+
+			// In download mode, offer multi-season batch options
+			if flagDownload != "" && len(seasons) > 1 {
+				batchItems := []string{
+					"Download all seasons",
+					"Download season range (e.g. 1-3)",
+				}
+				seasonItems = append(batchItems, seasonItems...)
+			}
+
 			seasonIdx, err = ui.Select("Season", seasonItems)
 			if err != nil {
 				return err
+			}
+
+			// Handle multi-season batch options
+			if flagDownload != "" && len(seasons) > 1 {
+				if seasonIdx == 0 {
+					return batchDownloadMultiSeason(p, selected, seasons)
+				} else if seasonIdx == 1 {
+					for {
+						rangeInput, err := ui.Input("Season range")
+						if err != nil {
+							return err
+						}
+						matched, err := parseSeasonRange(rangeInput, seasons)
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "Invalid range: %v\n", err)
+							continue
+						}
+						if len(matched) == 0 {
+							fmt.Fprintln(os.Stderr, "No seasons matched the range.")
+							continue
+						}
+						return batchDownloadMultiSeason(p, selected, matched)
+					}
+				}
+				// Offset index by 2 for injected batch options
+				seasonIdx -= 2
 			}
 		}
 
