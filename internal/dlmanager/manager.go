@@ -36,14 +36,15 @@ type StreamResolver func(title, mediaID, episodeID, mediaType string, season, ep
 
 // Manager coordinates download workers and relays progress.
 type Manager struct {
-	store      *store.Store
-	httpEngine engine.Engine
-	hlsEngine  *engine.HLSEngine
-	workers    int
-	pollRate   time.Duration // how often workers poll for new work
-	progress   chan ProgressUpdate
-	notify     chan struct{} // signals workers that new work is available
-	resolver   StreamResolver
+	store        *store.Store
+	httpEngine   engine.Engine
+	hlsEngine    *engine.HLSEngine
+	workers      int
+	stallTimeout time.Duration // how long before a stalled download is recovered
+	pollRate     time.Duration // how often workers poll for new work
+	progress     chan ProgressUpdate
+	notify       chan struct{} // signals workers that new work is available
+	resolver     StreamResolver
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -54,16 +55,21 @@ type Manager struct {
 }
 
 // New creates a Manager. Call Start to begin processing.
-func New(s *store.Store, httpEng engine.Engine, hlsEng *engine.HLSEngine, workers int) *Manager {
+// stallTimeout controls how long before a stalled download is recovered; 0 defaults to 60s.
+func New(s *store.Store, httpEng engine.Engine, hlsEng *engine.HLSEngine, workers int, stallTimeout time.Duration) *Manager {
+	if stallTimeout <= 0 {
+		stallTimeout = 60 * time.Second
+	}
 	return &Manager{
-		store:      s,
-		httpEngine: httpEng,
-		hlsEngine:  hlsEng,
-		workers:    workers,
-		pollRate:   500 * time.Millisecond,
-		progress:   make(chan ProgressUpdate, 100),
-		notify:     make(chan struct{}, 1),
-		cancels:    make(map[int]context.CancelFunc),
+		store:        s,
+		httpEngine:   httpEng,
+		hlsEngine:    hlsEng,
+		workers:      workers,
+		stallTimeout: stallTimeout,
+		pollRate:     500 * time.Millisecond,
+		progress:     make(chan ProgressUpdate, 100),
+		notify:       make(chan struct{}, 1),
+		cancels:      make(map[int]context.CancelFunc),
 	}
 }
 
@@ -82,7 +88,7 @@ func (m *Manager) Start(ctx context.Context) {
 	m.ctx, m.cancel = context.WithCancel(ctx)
 
 	// Recover crashed downloads.
-	if recovered, err := m.store.RecoverStale(60 * time.Second); err == nil {
+	if recovered, err := m.store.RecoverStale(m.stallTimeout); err == nil {
 		for _, d := range recovered {
 			m.sendProgress(ProgressUpdate{
 				DownloadID: d.ID,

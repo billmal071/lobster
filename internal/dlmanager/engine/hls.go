@@ -22,6 +22,7 @@ type HLSEngine struct {
 	Client      *http.Client
 	Store       *store.Store
 	RetryDelay  time.Duration // base delay for retries; 0 defaults to 2s
+	MaxRetries  int           // max download attempts per segment; 0 defaults to 3
 	SubtitleURL string        // if set, embed subtitle during mux (requires ffmpeg)
 }
 
@@ -134,8 +135,13 @@ func (e *HLSEngine) downloadSegment(ctx context.Context, segURL, segPath, refere
 		base = 2 * time.Second
 	}
 
+	maxRetries := e.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			delay := base * time.Duration(1<<uint(attempt-1))
 			select {
@@ -153,7 +159,7 @@ func (e *HLSEngine) downloadSegment(ctx context.Context, segURL, segPath, refere
 			return ctx.Err()
 		}
 	}
-	return fmt.Errorf("after 3 attempts: %w", lastErr)
+	return fmt.Errorf("after %d attempts: %w", maxRetries, lastErr)
 }
 
 func (e *HLSEngine) doSegmentDownload(ctx context.Context, segURL, segPath, referer string) error {

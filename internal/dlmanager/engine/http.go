@@ -14,6 +14,7 @@ import (
 type HTTPEngine struct {
 	Client     *http.Client
 	RetryDelay time.Duration // base delay for retries; 0 defaults to 2s
+	MaxRetries int           // max download attempts; 0 defaults to 3
 }
 
 func (e *HTTPEngine) Type() string { return "http" }
@@ -40,8 +41,13 @@ func (e *HTTPEngine) download(ctx context.Context, streamURL, outputPath, refere
 		return fmt.Errorf("creating directory: %w", err)
 	}
 
+	maxRetries := e.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			base := e.RetryDelay
 			if base == 0 {
@@ -67,7 +73,7 @@ func (e *HTTPEngine) download(ctx context.Context, streamURL, outputPath, refere
 			return ctx.Err()
 		}
 	}
-	return fmt.Errorf("after 3 attempts: %w", lastErr)
+	return fmt.Errorf("after %d attempts: %w", maxRetries, lastErr)
 }
 
 func (e *HTTPEngine) doRequest(ctx context.Context, url, partPath, referer string, progressFn ProgressFunc, offset int64) error {

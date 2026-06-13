@@ -68,6 +68,9 @@ type AppModel struct {
 	downloadsModel downloads.Model
 	dlManager      *dlmanager.Manager
 	toast          string // transient notification
+
+	// Download dialog for TV show batch downloads
+	dlDialog downloadDialog
 }
 
 // item adapter for list.Model
@@ -120,6 +123,7 @@ func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager) (
 		searchInput:     ti,
 		loader:          sp,
 		dlManager:       mgr,
+		dlDialog:        newDownloadDialog(),
 	}
 
 	if mgr != nil {
@@ -158,7 +162,25 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case dlSeasonsMsg, dlEpisodesMsg:
+		handled, cmd := m.dlDialog.Update(msg)
+		if handled && cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
+
 	case tea.KeyMsg:
+		// Route to download dialog when it's active
+		if m.dlDialog.active {
+			handled, cmd := m.dlDialog.Update(msg)
+			if handled {
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return m, tea.Batch(cmds...)
+			}
+		}
+
 		if m.isSearching {
 			switch msg.Type {
 			case tea.KeyEnter:
@@ -223,6 +245,15 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "d":
 			if m.dlManager != nil && m.currentItem != nil {
+				if m.currentItem.Type == media.TV {
+					outputDir, err := m.config.ExpandDownloadDir()
+					if err != nil {
+						m.err = err
+						return m, nil
+					}
+					cmd := m.dlDialog.start(*m.currentItem, m.providerForActiveTab(), m.dlManager, outputDir)
+					return m, cmd
+				}
 				return m, m.queueCurrentDownload()
 			}
 		}
@@ -415,12 +446,19 @@ func (m AppModel) View() string {
 		footer = footerStyle.Render("[ENTER] Play" + dlHint + "[S] Search  [1-4] Categories  [TAB] Next Tab  [Q] Quit")
 	}
 
-	return docStyle.Render(lipgloss.JoinVertical(lipgloss.Left,
+	base := docStyle.Render(lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		tabBar,
 		mainContent,
 		footer,
 	))
+
+	// Overlay the download dialog when active
+	if m.dlDialog.active {
+		return m.dlDialog.View(m.width, m.height)
+	}
+
+	return base
 }
 
 func (m AppModel) renderTabBar() string {

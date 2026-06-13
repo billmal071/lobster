@@ -54,13 +54,14 @@ func normalizeKimCartoonBase(base string) string {
 	}
 }
 
-func (k *KimCartoon) baseURL() string {
+// BaseURL returns the full base URL for this provider.
+func (k *KimCartoon) BaseURL() string {
 	return "https://" + k.base
 }
 
 // Search returns matching results for a query.
 func (k *KimCartoon) Search(query string) ([]media.SearchResult, error) {
-	searchURL := fmt.Sprintf("%s/?s=%s", k.baseURL(), url.QueryEscape(query))
+	searchURL := fmt.Sprintf("%s/?s=%s", k.BaseURL(), url.QueryEscape(query))
 
 	doc, err := k.fetchDocument(searchURL)
 	if err != nil {
@@ -71,7 +72,7 @@ func (k *KimCartoon) Search(query string) ([]media.SearchResult, error) {
 
 	// Fetch page 2 if available
 	if doc.Find("a.next.page-numbers").Length() > 0 {
-		page2URL := fmt.Sprintf("%s/page/2/?s=%s", k.baseURL(), url.QueryEscape(query))
+		page2URL := fmt.Sprintf("%s/page/2/?s=%s", k.BaseURL(), url.QueryEscape(query))
 		if doc2, err := k.fetchDocument(page2URL); err == nil {
 			results = append(results, parseKCSearchResults(doc2)...)
 		}
@@ -191,7 +192,7 @@ func extractKCID(rawURL string) string {
 
 // GetDetails returns detailed metadata for a content item.
 func (k *KimCartoon) GetDetails(id string) (*media.ContentDetail, error) {
-	pageURL := fmt.Sprintf("%s/%s/", k.baseURL(), id)
+	pageURL := fmt.Sprintf("%s/%s/", k.BaseURL(), id)
 	doc, err := k.fetchDocument(pageURL)
 	if err != nil {
 		return nil, fmt.Errorf("getting details: %w", err)
@@ -228,7 +229,7 @@ func (k *KimCartoon) GetSeasons(id string) ([]media.Season, error) {
 
 // GetEpisodes returns episodes for the given show/season page.
 func (k *KimCartoon) GetEpisodes(id string, seasonID string) ([]media.Episode, error) {
-	pageURL := fmt.Sprintf("%s/%s/", k.baseURL(), seasonID)
+	pageURL := fmt.Sprintf("%s/%s/", k.BaseURL(), seasonID)
 	doc, err := k.fetchDocument(pageURL)
 	if err != nil {
 		return nil, fmt.Errorf("getting episodes: %w", err)
@@ -296,7 +297,7 @@ func (k *KimCartoon) GetServers(id string, episodeID string) ([]media.Server, er
 		episodeID = id
 	}
 
-	pageURL := fmt.Sprintf("%s/%s/", k.baseURL(), episodeID)
+	pageURL := fmt.Sprintf("%s/%s/", k.BaseURL(), episodeID)
 	doc, err := k.fetchDocument(pageURL)
 	if err != nil {
 		return nil, fmt.Errorf("fetching episode page: %w", err)
@@ -342,7 +343,7 @@ func (k *KimCartoon) GetEmbedURL(serverID string) (string, error) {
 		return "", fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/121.0")
-	req.Header.Set("Referer", k.baseURL()+"/")
+	req.Header.Set("Referer", k.BaseURL()+"/")
 
 	resp, err := k.client.Do(req)
 	if err != nil {
@@ -369,7 +370,7 @@ func (k *KimCartoon) GetEmbedURL(serverID string) (string, error) {
 
 // Trending returns trending content from the homepage.
 func (k *KimCartoon) Trending(mediaType media.MediaType) ([]media.SearchResult, error) {
-	doc, err := k.fetchDocument(k.baseURL() + "/")
+	doc, err := k.fetchDocument(k.BaseURL() + "/")
 	if err != nil {
 		return nil, fmt.Errorf("getting trending: %w", err)
 	}

@@ -32,7 +32,8 @@ func NewFlixHQWS(base string) *FlixHQWS {
 	}
 }
 
-func (f *FlixHQWS) baseURL() string {
+// BaseURL returns the full base URL for this provider.
+func (f *FlixHQWS) BaseURL() string {
 	return "https://" + f.base
 }
 
@@ -40,7 +41,7 @@ func (f *FlixHQWS) baseURL() string {
 func (f *FlixHQWS) Search(query string) ([]media.SearchResult, error) {
 	// flixhq.ws uses space-encoded queries (%20), not dash-separated like flixhq.to
 	encoded := url.PathEscape(query)
-	baseSearchURL := fmt.Sprintf("%s/search/%s/", f.baseURL(), encoded)
+	baseSearchURL := fmt.Sprintf("%s/search/%s/", f.BaseURL(), encoded)
 
 	doc, err := f.fetchDocument(baseSearchURL)
 	if err != nil {
@@ -71,7 +72,7 @@ func (f *FlixHQWS) Search(query string) ([]media.SearchResult, error) {
 
 	for i := range results {
 		if !strings.HasPrefix(results[i].URL, "http") {
-			results[i].URL = f.baseURL() + results[i].URL
+			results[i].URL = f.BaseURL() + results[i].URL
 		}
 	}
 
@@ -84,7 +85,7 @@ func (f *FlixHQWS) GetDetails(id string) (*media.ContentDetail, error) {
 		return nil, fmt.Errorf("invalid content ID: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/%s/", f.baseURL(), id)
+	url := fmt.Sprintf("%s/%s/", f.BaseURL(), id)
 	doc, err := f.fetchDocument(url)
 	if err != nil {
 		return nil, fmt.Errorf("getting details: %w", err)
@@ -101,7 +102,7 @@ func (f *FlixHQWS) GetSeasons(id string) ([]media.Season, error) {
 		return nil, fmt.Errorf("invalid content ID: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/%s/", f.baseURL(), id)
+	url := fmt.Sprintf("%s/%s/", f.BaseURL(), id)
 	doc, err := f.fetchDocument(url)
 	if err != nil {
 		return nil, fmt.Errorf("getting seasons: %w", err)
@@ -139,7 +140,7 @@ func (f *FlixHQWS) GetEpisodes(id string, seasonID string) ([]media.Episode, err
 		return nil, fmt.Errorf("season ID cannot be empty")
 	}
 
-	url := fmt.Sprintf("%s/ajax/ajax.php?episode=%s", f.baseURL(), seasonID)
+	url := fmt.Sprintf("%s/ajax/ajax.php?episode=%s", f.BaseURL(), seasonID)
 	doc, err := f.fetchDocument(url)
 	if err != nil {
 		return nil, fmt.Errorf("getting episodes: %w", err)
@@ -206,16 +207,16 @@ func (f *FlixHQWS) GetServers(id string, episodeID string) ([]media.Server, erro
 		if strings.HasPrefix(episodeID, "http") {
 			pageURL = episodeID
 		} else if strings.HasPrefix(episodeID, "/") {
-			pageURL = f.baseURL() + episodeID
+			pageURL = f.BaseURL() + episodeID
 		} else {
-			pageURL = fmt.Sprintf("%s/%s", f.baseURL(), episodeID)
+			pageURL = fmt.Sprintf("%s/%s", f.BaseURL(), episodeID)
 		}
 	} else {
 		// Movie
 		if err := httputil.ValidateID(id); err != nil {
 			return nil, fmt.Errorf("invalid content ID: %w", err)
 		}
-		pageURL = fmt.Sprintf("%s/%s/", f.baseURL(), id)
+		pageURL = fmt.Sprintf("%s/%s/", f.BaseURL(), id)
 	}
 
 	// Ensure trailing slash
@@ -287,7 +288,7 @@ func (f *FlixHQWS) GetEmbedURL(serverID string) (string, error) {
 
 // Trending returns trending content from the /home page.
 func (f *FlixHQWS) Trending(mediaType media.MediaType) ([]media.SearchResult, error) {
-	url := fmt.Sprintf("%s/home/", f.baseURL())
+	url := fmt.Sprintf("%s/home/", f.BaseURL())
 
 	doc, err := f.fetchDocument(url)
 	if err != nil {
@@ -297,7 +298,7 @@ func (f *FlixHQWS) Trending(mediaType media.MediaType) ([]media.SearchResult, er
 	results := parseTrendingResults(doc, mediaType)
 	for i := range results {
 		if !strings.HasPrefix(results[i].URL, "http") {
-			results[i].URL = f.baseURL() + results[i].URL
+			results[i].URL = f.BaseURL() + results[i].URL
 		}
 	}
 	return results, nil
@@ -308,11 +309,11 @@ func (f *FlixHQWS) Recent(mediaType media.MediaType) ([]media.SearchResult, erro
 	var url string
 	switch mediaType {
 	case media.Movie:
-		url = fmt.Sprintf("%s/movie/", f.baseURL())
+		url = fmt.Sprintf("%s/movie/", f.BaseURL())
 	case media.TV:
-		url = fmt.Sprintf("%s/series/", f.baseURL())
+		url = fmt.Sprintf("%s/series/", f.BaseURL())
 	default:
-		url = fmt.Sprintf("%s/movie/", f.baseURL())
+		url = fmt.Sprintf("%s/movie/", f.BaseURL())
 	}
 
 	doc, err := f.fetchDocument(url)
@@ -323,7 +324,7 @@ func (f *FlixHQWS) Recent(mediaType media.MediaType) ([]media.SearchResult, erro
 	results := parseSearchResults(doc)
 	for i := range results {
 		if !strings.HasPrefix(results[i].URL, "http") {
-			results[i].URL = f.baseURL() + results[i].URL
+			results[i].URL = f.BaseURL() + results[i].URL
 		}
 	}
 	return results, nil

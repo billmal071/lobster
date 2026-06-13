@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -596,15 +597,16 @@ func initDownloadManager(c *config.Config) (*dlmanager.Manager, func(), error) {
 	}
 
 	client := httputil.NewClient()
-	httpEng := &engine.HTTPEngine{Client: client}
-	hlsEng := &engine.HLSEngine{Client: client, Store: s}
+	httpEng := &engine.HTTPEngine{Client: client, MaxRetries: c.MaxRetries}
+	hlsEng := &engine.HLSEngine{Client: client, Store: s, MaxRetries: c.MaxRetries}
 
 	workers := c.MaxConcurrentDownloads
 	if workers < 1 {
 		workers = 2
 	}
 
-	mgr := dlmanager.New(s, httpEng, hlsEng, workers)
+	stallTimeout := time.Duration(c.StallTimeout) * time.Second
+	mgr := dlmanager.New(s, httpEng, hlsEng, workers, stallTimeout)
 	mgr.SetResolver(makeStreamResolver(newProvider()))
 	ctx := context.Background()
 	mgr.Start(ctx)

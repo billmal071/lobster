@@ -27,6 +27,8 @@ type Config struct {
 	SubDLAPIKey  string `toml:"subdl_api_key"`
 	Debug                  bool `toml:"debug"`
 	MaxConcurrentDownloads int  `toml:"max_concurrent_downloads"`
+	StallTimeout           int  `toml:"stall_timeout"`  // seconds before a stalled download is recovered
+	MaxRetries             int  `toml:"max_retries"`    // retry count for segment/file downloads
 }
 
 // Default returns the default configuration.
@@ -42,6 +44,8 @@ func Default() *Config {
 		DownloadDir:            "~/Videos/lobster",
 		Debug:                  false,
 		MaxConcurrentDownloads: 2,
+		StallTimeout:           60,
+		MaxRetries:             3,
 		SubDLAPIKey:            "KCCm2v2q5ZObZOPQgQX8jpQ3-07IEY2c",
 	}
 }
@@ -115,6 +119,14 @@ func (c *Config) Validate() error {
 
 	if c.MaxConcurrentDownloads < 1 || c.MaxConcurrentDownloads > 5 {
 		return fmt.Errorf("max_concurrent_downloads must be 1-5, got %d", c.MaxConcurrentDownloads)
+	}
+
+	if c.StallTimeout < 10 || c.StallTimeout > 600 {
+		return fmt.Errorf("stall_timeout must be 10-600 seconds, got %d", c.StallTimeout)
+	}
+
+	if c.MaxRetries < 1 || c.MaxRetries > 20 {
+		return fmt.Errorf("max_retries must be 1-20, got %d", c.MaxRetries)
 	}
 
 	return nil
