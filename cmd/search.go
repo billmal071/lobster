@@ -218,8 +218,18 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		stopSeasons := ui.StartSpinner("Fetching seasons...")
 		seasons, err := p.GetSeasons(selected.ID)
 		stopSeasons()
-		if err != nil {
-			return fmt.Errorf("getting seasons: %w", err)
+		if err != nil || len(seasons) == 0 {
+			// Primary provider can't resolve seasons — try fallback stream
+			debugf("primary provider seasons failed: %v, trying fallbacks", err)
+			fmt.Fprintf(os.Stderr, "Provider has no season data, trying fallbacks...\n")
+			fbStream, fbErr := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
+			if fbErr != nil {
+				if err != nil {
+					return fmt.Errorf("getting seasons: %w", err)
+				}
+				return fmt.Errorf("no seasons found")
+			}
+			return playStream(fbStream, title, selected, season, episode)
 		}
 
 		if len(seasons) == 0 {
