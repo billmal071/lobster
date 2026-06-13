@@ -258,19 +258,30 @@ func (s *Soap2Day) Watch(mediaID, episodeID, server, quality string) (*media.Str
 		apiURL = fmt.Sprintf("%s/api/movie/%s", moviesapiBase, tmdbID)
 	}
 
-	// Fetch moviesapi response
-	apiBody, err := s.fetchWithReferer(apiURL, moviesapiBase+"/")
-	if err != nil {
-		return nil, fmt.Errorf("moviesapi request: %w", err)
-	}
-
+	// Fetch moviesapi response (one retry on transient failure)
 	var apiResp moviesapiResponse
-	if err := json.Unmarshal(apiBody, &apiResp); err != nil {
-		return nil, fmt.Errorf("parsing moviesapi response: %w", err)
-	}
+	for attempt := 0; attempt < 2; attempt++ {
+		apiBody, err := s.fetchWithReferer(apiURL, moviesapiBase+"/")
+		if err != nil {
+			if attempt == 0 {
+				continue
+			}
+			return nil, fmt.Errorf("moviesapi request: %w", err)
+		}
 
-	if apiResp.VideoURL == "" {
-		return nil, fmt.Errorf("no video_url in response")
+		if err := json.Unmarshal(apiBody, &apiResp); err != nil {
+			if attempt == 0 {
+				continue
+			}
+			return nil, fmt.Errorf("parsing moviesapi response: %w", err)
+		}
+
+		if apiResp.VideoURL != "" {
+			break
+		}
+		if attempt == 1 {
+			return nil, fmt.Errorf("no video_url in response")
+		}
 	}
 
 	// Map subtitles from moviesapi response
