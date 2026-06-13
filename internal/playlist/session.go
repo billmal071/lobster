@@ -18,6 +18,7 @@ type Session struct {
 	SeasonIdx    int
 	EpisodeIdx   int
 	LastPosition float64 // playback position from most recent play
+	LastDuration float64 // total media duration from most recent play
 }
 
 // New creates a Session positioned at the given season and episode.

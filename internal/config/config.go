@@ -25,10 +25,11 @@ type Config struct {
 	DownloadDir  string `toml:"download_dir"`
 	OSAPIKey     string `toml:"opensubtitles_api_key"`
 	SubDLAPIKey  string `toml:"subdl_api_key"`
-	Debug                  bool `toml:"debug"`
-	MaxConcurrentDownloads int  `toml:"max_concurrent_downloads"`
-	StallTimeout           int  `toml:"stall_timeout"`  // seconds before a stalled download is recovered
-	MaxRetries             int  `toml:"max_retries"`    // retry count for segment/file downloads
+	Debug                  bool              `toml:"debug"`
+	MaxConcurrentDownloads int               `toml:"max_concurrent_downloads"`
+	StallTimeout           int               `toml:"stall_timeout"`  // seconds before a stalled download is recovered
+	MaxRetries             int               `toml:"max_retries"`    // retry count for segment/file downloads
+	DomainOverrides        map[string][]string `toml:"domain_overrides"` // provider name -> fallback domains
 }
 
 // Default returns the default configuration.

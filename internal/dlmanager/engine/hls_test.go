@@ -273,7 +273,8 @@ func TestHLSCancel(t *testing.T) {
 		cancel()
 	}()
 
-	e := &HLSEngine{Client: srv.Client(), RetryDelay: 1 * time.Millisecond}
+	// Use 1 worker so segments download sequentially (seg 0, 1 complete before seg 2 blocks).
+	e := &HLSEngine{Client: srv.Client(), RetryDelay: 1 * time.Millisecond, SegmentWorkers: 1}
 	err := e.Download(ctx, srv.URL+"/playlist.m3u8", out, "", nil)
 	if err == nil {
 		t.Fatal("expected error from cancellation")

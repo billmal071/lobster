@@ -236,16 +236,17 @@ func playCurrentEpisode(sess *playlist.Session) error {
 
 		subFiles := resolveSubtitles(stream, sess.Content.Title, sess.CurrentSeason().Number, sess.Current().Number)
 
-		lastPos, playErr := p.Play(stream, title, startPos, subFiles)
+		result, playErr := p.Play(stream, title, startPos, subFiles)
 		if playErr == nil {
-			sess.LastPosition = lastPos
+			sess.LastPosition = result.Position
+			sess.LastDuration = result.Duration
 			return nil
 		}
 
 		// Playback failed — if user watched some of it, resume from there
-		if lastPos > 0 {
-			startPos = lastPos
-			debugf("playback stopped at %.0fs, will resume from there", lastPos)
+		if result.Position > 0 {
+			startPos = result.Position
+			debugf("playback stopped at %.0fs, will resume from there", result.Position)
 		}
 
 		// If the fallback stream also failed, don't retry endlessly
@@ -335,6 +336,7 @@ func saveHistory(sess *playlist.Session) {
 		Season:   sess.CurrentSeason().Number,
 		Episode:  sess.Current().Number,
 		Position: sess.LastPosition,
+		Duration: sess.LastDuration,
 	}
 	if err := history.Save(entry); err != nil {
 		debugf("saving history failed: %v", err)

@@ -41,10 +41,11 @@ const (
 // AppModel struct holding state
 type AppModel struct {
 	state           state
-	provider        provider.Provider
-	cartoonProvider provider.Provider
-	animeProvider   provider.Provider
-	config          *config.Config
+	provider          provider.Provider
+	cartoonProvider   provider.Provider
+	animeProvider     provider.Provider
+	fallbackProviders []provider.Provider
+	config            *config.Config
 
 	list        list.Model
 	searchInput textinput.Model
@@ -96,7 +97,7 @@ var (
 )
 
 // StartApp launches the TUI. If mgr is nil, download features are disabled.
-func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager) (*media.SearchResult, provider.Provider, error) {
+func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager, fallbacks ...provider.Provider) (*media.SearchResult, provider.Provider, error) {
 	ti := textinput.New()
 	ti.Placeholder = "Search..."
 	ti.CharLimit = 156
@@ -114,16 +115,17 @@ func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager) (
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4C4C"))
 
 	m := AppModel{
-		state:           stateTrending,
-		provider:        p,
-		cartoonProvider: provider.NewKimCartoon("kimcartoon.com.co"),
-		animeProvider:   provider.NewVaPlayer(),
-		config:          cfg,
-		list:            l,
-		searchInput:     ti,
-		loader:          sp,
-		dlManager:       mgr,
-		dlDialog:        newDownloadDialog(),
+		state:             stateTrending,
+		provider:          p,
+		cartoonProvider:   provider.NewKimCartoon("kimcartoon.com.co"),
+		animeProvider:     provider.NewVaPlayer(),
+		fallbackProviders: fallbacks,
+		config:            cfg,
+		list:              l,
+		searchInput:       ti,
+		loader:            sp,
+		dlManager:         mgr,
+		dlDialog:          newDownloadDialog(),
 	}
 
 	if mgr != nil {
@@ -190,7 +192,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.results = nil // Clear current results to show loader
 				m.currentItem = nil
 				cmds = append(cmds, m.list.StartSpinner())
-				return m, tea.Batch(searchCmd(m.providerForActiveTab(), m.searchInput.Value()), m.list.StartSpinner())
+				return m, tea.Batch(searchCmd(m.providerForActiveTab(), m.searchInput.Value(), m.fallbackProviders...), m.list.StartSpinner())
 			case tea.KeyEsc:
 				m.isSearching = false
 				m.searchInput.Blur()

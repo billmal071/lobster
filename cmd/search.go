@@ -46,7 +46,7 @@ func searchRun(cmd *cobra.Command, args []string) error {
 			defer cleanup()
 		}
 
-		selected, selectedProvider, err := tui.StartApp(p, cfg, mgr)
+		selected, selectedProvider, err := tui.StartApp(p, cfg, mgr, fallbackSearchProviders(p)...)
 		if err != nil {
 			return err
 		}
@@ -66,12 +66,21 @@ func searchRun(cmd *cobra.Command, args []string) error {
 
 // playFlow handles the full search -> select -> play flow.
 func playFlow(p provider.Provider, query string) error {
-	// Search
+	// Search primary provider first.
 	stop := ui.StartSpinner(fmt.Sprintf("Searching for %q...", query))
 	results, err := p.Search(query)
 	stop()
 	if err != nil {
 		return fmt.Errorf("search failed: %w", err)
+	}
+
+	// If primary returned few results, search fallback providers in parallel.
+	if len(results) < 3 {
+		debugf("primary returned %d results, searching fallback providers...", len(results))
+		stop = ui.StartSpinner("Searching more providers...")
+		fallbacks := fallbackSearchProviders(p)
+		results = multiProviderSearch(p, fallbacks, query)
+		stop()
 	}
 
 	items := make([]string, len(results))
@@ -496,7 +505,7 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		return player.NotFoundError(cfg.Player)
 	}
 
-	lastPos, err := p2.Play(stream, title, startPos, subFiles)
+	result, err := p2.Play(stream, title, startPos, subFiles)
 	if err != nil {
 		return fmt.Errorf("playback failed: %w", err)
 	}
@@ -509,7 +518,8 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 			Type:     selected.Type,
 			Season:   season,
 			Episode:  episode,
-			Position: lastPos,
+			Position: result.Position,
+			Duration: result.Duration,
 		}
 		if err := history.Save(entry); err != nil {
 			debugf("saving history failed: %v", err)
