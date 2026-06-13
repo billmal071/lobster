@@ -10,21 +10,31 @@ import (
 // Default is MovieBox (direct API, no scraping required).
 // Legacy providers (FlixHQ, Soap2Day) are available via base config
 // and are always included as fallbacks.
+//
+// For providers that use a base domain, the domain is checked for health
+// at startup. If unreachable, known alternative domains are tried in order
+// (config overrides first, then built-in fallbacks).
 func newProvider() provider.Provider {
 	if cfg.APIURL != "" {
 		return provider.NewConsumet(cfg.APIURL)
 	}
+
+	overrides := cfg.DomainOverrides
+
 	if strings.Contains(cfg.Base, "soap2day") {
 		return provider.NewSoap2Day()
 	}
 	if strings.Contains(cfg.Base, "kimcartoon") {
-		return provider.NewKimCartoon(cfg.Base)
+		base := provider.ResolveDomain(cfg.Base, "kimcartoon", overrides)
+		return provider.NewKimCartoon(base)
 	}
 	if strings.Contains(cfg.Base, "flixhq.ws") {
-		return provider.NewFlixHQWS(cfg.Base)
+		base := provider.ResolveDomain(cfg.Base, "flixhqws", overrides)
+		return provider.NewFlixHQWS(base)
 	}
 	if strings.Contains(cfg.Base, "flixhq") {
-		return provider.NewFlixHQ(cfg.Base)
+		base := provider.ResolveDomain(cfg.Base, "flixhq", overrides)
+		return provider.NewFlixHQ(base)
 	}
 	if strings.Contains(cfg.Base, "tbcpl") || strings.Contains(cfg.Base, "1shows") {
 		return provider.NewTBCPL(cfg.Base)

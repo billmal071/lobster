@@ -193,6 +193,14 @@ func formatEpisodeLabel(ep media.Episode) string {
 	return fmt.Sprintf("E%02d", ep.Number)
 }
 
+// formatSeasonEpisodeLabel creates a label like "S01E03 - Episode Title".
+func formatSeasonEpisodeLabel(seasonNum int, ep media.Episode) string {
+	if ep.Title != "" {
+		return fmt.Sprintf("S%02dE%02d - %s", seasonNum, ep.Number, ep.Title)
+	}
+	return fmt.Sprintf("S%02dE%02d", seasonNum, ep.Number)
+}
+
 // printBatchSummary prints the download results summary.
 func printBatchSummary(total int, failed []media.Episode) {
 	succeeded := total - len(failed)
@@ -204,5 +212,170 @@ func printBatchSummary(total int, failed []media.Episode) {
 			labels[i] = fmt.Sprintf("E%02d", ep.Number)
 		}
 		fmt.Fprintf(os.Stderr, "Downloaded %d/%d episodes. Failed: %s\n", succeeded, total, strings.Join(labels, ", "))
+	}
+}
+
+// failedEpisode tracks a failed episode with its season number for multi-season reporting.
+type failedEpisode struct {
+	SeasonNum int
+	Episode   media.Episode
+}
+
+// parseSeasonRange parses a range string like "1-3", "1,4,7", or "1-3,5"
+// and returns matching seasons. Works the same way as parseEpisodeRange.
+func parseSeasonRange(input string, seasons []media.Season) ([]media.Season, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return nil, fmt.Errorf("empty range")
+	}
+
+	byNum := make(map[int]media.Season)
+	for _, s := range seasons {
+		byNum[s.Number] = s
+	}
+
+	requested := make(map[int]bool)
+	parts := strings.Split(input, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		if idx := strings.Index(part, "-"); idx >= 0 {
+			startStr := strings.TrimSpace(part[:idx])
+			endStr := strings.TrimSpace(part[idx+1:])
+			start, err := strconv.Atoi(startStr)
+			if err != nil {
+				return nil, fmt.Errorf("invalid range start %q", startStr)
+			}
+			end, err := strconv.Atoi(endStr)
+			if err != nil {
+				return nil, fmt.Errorf("invalid range end %q", endStr)
+			}
+			if start > end {
+				return nil, fmt.Errorf("invalid range: %d > %d", start, end)
+			}
+			for n := start; n <= end; n++ {
+				requested[n] = true
+			}
+		} else {
+			n, err := strconv.Atoi(part)
+			if err != nil {
+				return nil, fmt.Errorf("invalid season number %q", part)
+			}
+			requested[n] = true
+		}
+	}
+
+	if len(requested) == 0 {
+		return nil, fmt.Errorf("no season numbers in range")
+	}
+
+	var matched []media.Season
+	for num := range requested {
+		if s, ok := byNum[num]; ok {
+			matched = append(matched, s)
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: season %d not found, skipping\n", num)
+		}
+	}
+
+	sort.Slice(matched, func(i, j int) bool {
+		return matched[i].Number < matched[j].Number
+	})
+
+	return matched, nil
+}
+
+// batchDownloadMultiSeason downloads all episodes from multiple seasons.
+func batchDownloadMultiSeason(p provider.Provider, selected media.SearchResult, seasons []media.Season) error {
+	if flagJSON {
+		return fmt.Errorf("--json is not supported with batch downloads")
+	}
+
+	baseDir, err := resolveDownloadBaseDir(flagDownload)
+	if err != nil {
+		return fmt.Errorf("resolving download dir: %w", err)
+	}
+
+	var totalEpisodes int
+	var downloaded int
+	var failed []failedEpisode
+
+	for _, season := range seasons {
+		fmt.Fprintf(os.Stderr, "\n=== Season %d ===\n", season.Number)
+
+		stopEps := ui.StartSpinner(fmt.Sprintf("Fetching Season %d episodes...", season.Number))
+		episodes, err := p.GetEpisodes(selected.ID, season.ID)
+		stopEps()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to fetch Season %d episodes: %v, skipping\n", season.Number, err)
+			continue
+		}
+		if len(episodes) == 0 {
+			fmt.Fprintf(os.Stderr, "Season %d has no episodes, skipping\n", season.Number)
+			continue
+		}
+
+		outputDir := buildTVSeasonDownloadDir(baseDir, selected.Title, season.Number)
+		totalEpisodes += len(episodes)
+
+		for i, ep := range episodes {
+			epLabel := formatSeasonEpisodeLabel(season.Number, ep)
+			fmt.Fprintf(os.Stderr, "Downloading Season %d, Episode %d of %d: %s\n",
+				season.Number, i+1, len(episodes), epLabel)
+
+			if err := downloadSingleEpisode(p, selected, ep, season.Number, outputDir, epLabel); err != nil {
+				fmt.Fprintf(os.Stderr, "  Failed: %v\n", err)
+				failed = append(failed, failedEpisode{SeasonNum: season.Number, Episode: ep})
+			} else {
+				downloaded++
+			}
+		}
+	}
+
+	// Print overall summary
+	printMultiSeasonSummary(totalEpisodes, downloaded, failed)
+
+	// Retry loop for failed episodes
+	for len(failed) > 0 {
+		ok, err := ui.Confirm("Retry failed downloads?")
+		if err != nil || !ok {
+			break
+		}
+
+		retrying := failed
+		failed = nil
+		for i, fe := range retrying {
+			epLabel := formatSeasonEpisodeLabel(fe.SeasonNum, fe.Episode)
+			fmt.Fprintf(os.Stderr, "[%d/%d] Retrying %s...\n", i+1, len(retrying), epLabel)
+
+			outputDir := buildTVSeasonDownloadDir(baseDir, selected.Title, fe.SeasonNum)
+			if err := downloadSingleEpisode(p, selected, fe.Episode, fe.SeasonNum, outputDir, epLabel); err != nil {
+				fmt.Fprintf(os.Stderr, "  Failed: %v\n", err)
+				failed = append(failed, fe)
+			} else {
+				downloaded++
+			}
+		}
+
+		printMultiSeasonSummary(totalEpisodes, downloaded, failed)
+	}
+
+	return nil
+}
+
+// printMultiSeasonSummary prints the multi-season download results.
+func printMultiSeasonSummary(total, downloaded int, failed []failedEpisode) {
+	if len(failed) == 0 {
+		fmt.Fprintf(os.Stderr, "\nDownloaded %d/%d episodes across all seasons.\n", downloaded, total)
+	} else {
+		labels := make([]string, len(failed))
+		for i, fe := range failed {
+			labels[i] = fmt.Sprintf("S%02dE%02d", fe.SeasonNum, fe.Episode.Number)
+		}
+		fmt.Fprintf(os.Stderr, "\nDownloaded %d/%d episodes. Failed: %s\n",
+			downloaded, total, strings.Join(labels, ", "))
 	}
 }
