@@ -47,6 +47,9 @@ func searchCmd(p provider.Provider, query string, fallbacks ...provider.Provider
 		}
 
 		// Search fallbacks in parallel with a 5s timeout.
+		// Provider provenance is not tracked when merging because all providers
+		// use TMDB IDs as their universal content identifier — any provider can
+		// resolve streams for results discovered by another.
 		merged := tuiMultiSearch(results, fallbacks, query)
 		return resultsFetchedMsg(merged)
 	}

@@ -3,6 +3,7 @@ package provider
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -41,9 +42,16 @@ func ResolveDomain(configured string, providerName string, overrides map[string]
 	fmt.Printf("[failover] %s (%s) is unreachable, trying alternatives...\n", configured, providerName)
 
 	// Build candidate list: config overrides first, then built-in known domains.
+	// Override keys are matched case-insensitively.
 	var candidates []string
 	if overrides != nil {
-		candidates = append(candidates, overrides[providerName]...)
+		lowerName := strings.ToLower(providerName)
+		for key, domains := range overrides {
+			if strings.ToLower(key) == lowerName {
+				candidates = append(candidates, domains...)
+				break
+			}
+		}
 	}
 	candidates = append(candidates, knownDomains[providerName]...)
 

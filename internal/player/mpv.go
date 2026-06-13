@@ -83,16 +83,22 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 		return PlayResult{}, fmt.Errorf("starting mpv: %w", err)
 	}
 
-	// Track position and duration from IPC in a goroutine, using atomics to avoid data race
+	// Track position and duration from IPC in a goroutine, using atomics to avoid data race.
+	// The ipcDone channel is used to synchronize the goroutine before reading final values.
 	var posBits, durBits atomic.Uint64
+	ipcDone := make(chan struct{})
 	startTime := time.Now()
 	go func() {
+		defer close(ipcDone)
 		pos, dur := m.trackPlayback(ipc)
 		posBits.Store(math.Float64bits(pos))
 		durBits.Store(math.Float64bits(dur))
 	}()
 
 	waitErr := cmd.Wait()
+	// Wait for the IPC collector to finish so the final position/duration
+	// values are fully written before we read them.
+	<-ipcDone
 	elapsed := time.Since(startTime)
 	result := PlayResult{
 		Position: math.Float64frombits(posBits.Load()),
@@ -139,7 +145,12 @@ func (m *MPV) trackPlayback(ipc *ipcSocket) (float64, float64) {
 		}
 		data, _ := json.Marshal(cmd)
 		data = append(data, '\n')
-		conn.Write(data)
+		if _, err := conn.Write(data); err != nil {
+			// IPC write failed — mpv may have exited early or the socket
+			// is broken. Return zero state so the caller can detect this.
+			fmt.Fprintf(os.Stderr, "mpv ipc: failed to observe %s: %v\n", prop, err)
+			return 0, 0
+		}
 	}
 
 	for scanner.Scan() {

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +65,10 @@ func multiProviderSearch(primary provider.Provider, fallbacks []provider.Provide
 }
 
 // searchWithContext runs a provider search, aborting if the context expires.
+// Note: the inner goroutine continues running after a timeout because
+// provider.Search does not accept a context. This is intentional — the
+// goroutine's result is simply discarded via the select, and the goroutine
+// will terminate naturally when the HTTP request completes or times out.
 func searchWithContext(ctx context.Context, p provider.Provider, query string) ([]media.SearchResult, error) {
 	type result struct {
 		results []media.SearchResult
@@ -151,6 +156,16 @@ func resultScore(r media.SearchResult) int {
 // fallbackSearchProviders returns fallback providers suitable for search.
 // This is a subset of fallbackProviders — only providers that have meaningful
 // search capabilities and cover different content catalogs.
+// Providers whose concrete type matches the primary are excluded to avoid
+// re-querying the same source in fallback mode.
 func fallbackSearchProviders(primary provider.Provider) []provider.Provider {
-	return fallbackProviders(primary)
+	all := fallbackProviders(primary)
+	primaryType := fmt.Sprintf("%T", primary)
+	filtered := make([]provider.Provider, 0, len(all))
+	for _, fb := range all {
+		if fmt.Sprintf("%T", fb) != primaryType {
+			filtered = append(filtered, fb)
+		}
+	}
+	return filtered
 }
