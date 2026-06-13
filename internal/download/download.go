@@ -44,10 +44,15 @@ func Download(stream *media.Stream, title string, outputDir string, subFile stri
 		return "", fmt.Errorf("invalid output path: %w", err)
 	}
 
-	// Skip if file already exists and has content
+	// Skip if file already exists and appears complete.
+	// A file is considered complete if it's above a minimum size threshold
+	// AND ffprobe can read a valid duration from it.
 	if info, err := os.Stat(outputPath); err == nil && info.Size() > 0 {
-		fmt.Fprintf(os.Stderr, "Already exists, skipping: %s\n", outputPath)
-		return outputPath, nil
+		if isCompleteDownload(outputPath, info.Size()) {
+			fmt.Fprintf(os.Stderr, "Already exists, skipping: %s\n", outputPath)
+			return outputPath, nil
+		}
+		fmt.Fprintf(os.Stderr, "Incomplete download detected, re-downloading: %s\n", outputPath)
 	}
 
 	// Build ffmpeg args as explicit slice
@@ -155,6 +160,47 @@ func Download(stream *media.Stream, title string, outputDir string, subFile stri
 	}
 
 	return outputPath, nil
+}
+
+// isCompleteDownload checks if a downloaded file appears to be complete
+// by verifying it meets a minimum size and ffprobe can read a valid duration.
+func isCompleteDownload(path string, size int64) bool {
+	// Files under 1 MiB are almost certainly incomplete for video
+	const minSize = 1024 * 1024
+	if size < minSize {
+		return false
+	}
+
+	// Try ffprobe to check if the file has a valid duration
+	ffprobePath, err := exec.LookPath("ffprobe")
+	if err != nil {
+		// ffprobe not available — fall back to size-only check
+		return size >= minSize
+	}
+
+	cmd := exec.Command(ffprobePath,
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		path,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+
+	durationStr := strings.TrimSpace(string(out))
+	if durationStr == "" || durationStr == "N/A" {
+		return false
+	}
+
+	duration, err := strconv.ParseFloat(durationStr, 64)
+	if err != nil {
+		return false
+	}
+
+	// A valid video should have at least 10 seconds of content
+	return duration >= 10.0
 }
 
 type tailLimitedBuffer struct {

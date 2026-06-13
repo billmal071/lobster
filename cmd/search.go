@@ -339,8 +339,9 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		return runPlaybackLoop(sess)
 	}
 
-	// If provider supports direct streaming (consumet API), skip embed+extract step.
+	// If provider supports direct streaming, skip embed+extract step.
 	if sp, ok := p.(provider.StreamProvider); ok {
+		debugf("primary provider: %T (StreamProvider)", p)
 		stopStream := ui.StartSpinner("Negotiating stream servers...")
 		servers, err := p.GetServers(selected.ID, episodeID)
 		stopStream()
@@ -399,7 +400,13 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	stopStream()
 	if err != nil {
 		debugf("fallback failed: %v", err)
-		return fmt.Errorf("all providers failed for %s: %w", title, err)
+		hint := ""
+		if _, isFlixHQ := p.(*provider.FlixHQ); isFlixHQ {
+			hint = "\nTip: try --base soap2day or --base vaplayer for better stream availability"
+		} else if _, isFlixHQWS := p.(*provider.FlixHQWS); isFlixHQWS {
+			hint = "\nTip: try --base soap2day or --base vaplayer for better stream availability"
+		}
+		return fmt.Errorf("all providers failed for %s: %w%s", title, err, hint)
 	}
 	return playStream(fbStream, title, selected, season, episode)
 }
