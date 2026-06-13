@@ -252,7 +252,7 @@ func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 			mt = media.TV
 		}
 
-		// Skip primary (FlixHQ) for streaming — go straight to fallbacks.
+		// Use fallback providers to resolve a stream for downloads.
 		fbStream, err := tryFallbackStream(primary, title, mt, season, episode)
 		if err != nil {
 			return nil, fmt.Errorf("all providers failed: %w", err)

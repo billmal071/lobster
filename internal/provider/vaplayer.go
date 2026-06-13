@@ -123,6 +123,9 @@ func (vp *VaPlayer) GetDetails(id string) (*media.ContentDetail, error) {
 // GetSeasons returns seasons by probing the vaplayer API for each season.
 func (vp *VaPlayer) GetSeasons(id string) ([]media.Season, error) {
 	tmdbID := extractTMDBID(id)
+	if err := httputil.ValidateNumericID(tmdbID); err != nil {
+		return nil, fmt.Errorf("vaplayer: invalid TMDB ID: %w", err)
+	}
 
 	var seasons []media.Season
 	for n := 1; n <= 25; n++ {
@@ -189,12 +192,26 @@ func (vp *VaPlayer) GetEmbedURL(serverID string) (string, error) {
 // Watch resolves a stream URL through the vaplayer API.
 func (vp *VaPlayer) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
 	tmdbID := extractTMDBID(mediaID)
+	if err := httputil.ValidateNumericID(tmdbID); err != nil {
+		return nil, fmt.Errorf("vaplayer: invalid TMDB ID: %w", err)
+	}
 
 	var apiURL string
 	if episodeID != "" {
 		parts := strings.SplitN(episodeID, ":", 3)
 		if len(parts) != 3 {
 			return nil, fmt.Errorf("invalid episode ID: %s", episodeID)
+		}
+		if err := httputil.ValidateNumericID(parts[0]); err != nil {
+			return nil, fmt.Errorf("vaplayer: invalid TMDB ID in episode: %w", err)
+		}
+		seasonNum, err := strconv.Atoi(parts[1])
+		if err != nil || seasonNum <= 0 {
+			return nil, fmt.Errorf("vaplayer: invalid season in episode ID: %s", episodeID)
+		}
+		episodeNum, err := strconv.Atoi(parts[2])
+		if err != nil || episodeNum <= 0 {
+			return nil, fmt.Errorf("vaplayer: invalid episode in episode ID: %s", episodeID)
 		}
 		apiURL = fmt.Sprintf("%s?tmdb=%s&type=tv&season=%s&episode=%s",
 			vaplayerBase, parts[0], parts[1], parts[2])

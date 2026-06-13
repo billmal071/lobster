@@ -151,7 +151,7 @@ func (v *VidNest) GetSeasons(id string) ([]media.Season, error) {
 }
 
 // GetEpisodes returns a reasonable episode list for a season.
-// VidNest backends accept any episode number, so we generate 1-20.
+// VidNest backends accept any episode number, so we generate 1-50.
 func (v *VidNest) GetEpisodes(id string, seasonID string) ([]media.Episode, error) {
 	parts := strings.SplitN(seasonID, ":", 2)
 	if len(parts) != 2 {
@@ -160,8 +160,8 @@ func (v *VidNest) GetEpisodes(id string, seasonID string) ([]media.Episode, erro
 	tmdbID := parts[0]
 	seasonNum, _ := strconv.Atoi(parts[1])
 
-	episodes := make([]media.Episode, 0, 20)
-	for ep := 1; ep <= 20; ep++ {
+	episodes := make([]media.Episode, 0, 50)
+	for ep := 1; ep <= 50; ep++ {
 		episodes = append(episodes, media.Episode{
 			Number: ep,
 			Title:  fmt.Sprintf("Episode %d", ep),
@@ -219,8 +219,14 @@ func (v *VidNest) Watch(mediaID, episodeID, server, quality string) (*media.Stre
 			return nil, fmt.Errorf("invalid episode ID: %s", episodeID)
 		}
 		tmdbID = parts[0]
+		if err := httputil.ValidateNumericID(tmdbID); err != nil {
+			return nil, fmt.Errorf("invalid TMDB ID in episode: %w", err)
+		}
 		season, _ = strconv.Atoi(parts[1])
 		episode, _ = strconv.Atoi(parts[2])
+		if season <= 0 || episode <= 0 {
+			return nil, fmt.Errorf("invalid season/episode in episode ID: %s", episodeID)
+		}
 	}
 
 	// If a specific server was requested, try only that backend.
@@ -289,7 +295,7 @@ func (v *VidNest) Watch(mediaID, episodeID, server, quality string) (*media.Stre
 	return nil, fmt.Errorf("vidnest watch failed: %w", lastErr)
 }
 
-// verifyStream checks that a stream URL is accessible (not 403/404).
+// verifyStream checks that a stream URL is accessible (rejects any HTTP error status).
 func (v *VidNest) verifyStream(ctx context.Context, stream *media.Stream) error {
 	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -311,7 +317,7 @@ func (v *VidNest) verifyStream(ctx context.Context, stream *media.Stream) error 
 	}
 	resp.Body.Close()
 
-	if resp.StatusCode == 403 || resp.StatusCode == 404 {
+	if resp.StatusCode >= 400 {
 		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, stream.URL)
 	}
 	return nil
