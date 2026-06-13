@@ -153,12 +153,23 @@ func parseKCResultLink(s *goquery.Selection) (media.SearchResult, bool) {
 		year = m[1]
 	}
 
+	// Extract poster image
+	posterURL := ""
+	if img := s.Find("img"); img.Length() > 0 {
+		if src, ok := img.Attr("data-src"); ok && src != "" {
+			posterURL = src
+		} else if src, ok := img.Attr("src"); ok && src != "" {
+			posterURL = src
+		}
+	}
+
 	return media.SearchResult{
-		ID:    id,
-		Title: title,
-		Type:  media.TV, // Cartoons are episodic
-		Year:  year,
-		URL:   href,
+		ID:     id,
+		Title:  title,
+		Type:   media.TV, // Cartoons are episodic
+		Year:   year,
+		URL:    href,
+		Poster: posterURL,
 	}, true
 }
 

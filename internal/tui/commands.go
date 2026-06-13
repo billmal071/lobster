@@ -4,6 +4,7 @@ import (
 	"lobster/internal/dlmanager"
 	"lobster/internal/dlmanager/store"
 	"lobster/internal/media"
+	"lobster/internal/poster"
 	"lobster/internal/provider"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -71,6 +72,14 @@ func queueSeasonCmd(mgr *dlmanager.Manager, downloads []*store.Download) tea.Cmd
 			title = downloads[0].MediaTitle
 		}
 		return downloadBatchQueuedMsg{count: len(downloads), title: title}
+	}
+}
+
+// fetchPosterCmd fetches and renders a poster image for the detail pane.
+func fetchPosterCmd(id, url string, width, height int) tea.Cmd {
+	return func() tea.Msg {
+		rendered := poster.Render(url, width, height)
+		return posterFetchedMsg{id: id, poster: rendered}
 	}
 }
 
