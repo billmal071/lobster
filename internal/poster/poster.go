@@ -4,6 +4,7 @@
 package poster
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"image/draw"
@@ -106,7 +107,9 @@ func RenderSideBySide(url string, posterCols, posterRows int, textLines []string
 // downloadToTemp downloads an image URL to a temp file and returns its path
 // and a cleanup function.
 func downloadToTemp(url string) (string, func(), error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", nil, err
 	}

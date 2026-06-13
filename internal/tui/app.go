@@ -114,7 +114,7 @@ func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager) (
 		state:           stateTrending,
 		provider:        p,
 		cartoonProvider: provider.NewKimCartoon("kimcartoon.com.co"),
-		animeProvider:   provider.NewKimCartoon("kimcartoon.com.co"),
+		animeProvider:   provider.NewVaPlayer(),
 		config:          cfg,
 		list:            l,
 		searchInput:     ti,

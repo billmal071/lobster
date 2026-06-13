@@ -173,9 +173,9 @@ func (s *Soap2Day) GetSeasons(id string) ([]media.Season, error) {
 		if err := json.Unmarshal(body, &resp); err != nil {
 			break
 		}
-		// Real content has flixcdn.cyou in the video_url; fallback URLs like
-		// player.mov2day.xyz indicate the content doesn't actually exist.
-		if !strings.Contains(resp.VideoURL, "flixcdn.cyou") {
+		// Real content has flixcdn.cyou or hd4u.sbs in the video_url;
+		// fallback URLs like player.mov2day.xyz indicate the content doesn't exist.
+		if !strings.Contains(resp.VideoURL, "flixcdn.cyou") && !strings.Contains(resp.VideoURL, "hd4u.sbs") {
 			break
 		}
 		seasons = append(seasons, media.Season{
@@ -211,7 +211,7 @@ func (s *Soap2Day) GetEpisodes(id string, seasonID string) ([]media.Episode, err
 		if err := json.Unmarshal(body, &resp); err != nil {
 			break
 		}
-		if !strings.Contains(resp.VideoURL, "flixcdn.cyou") {
+		if !strings.Contains(resp.VideoURL, "flixcdn.cyou") && !strings.Contains(resp.VideoURL, "hd4u.sbs") {
 			break
 		}
 		episodes = append(episodes, media.Episode{
