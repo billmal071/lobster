@@ -128,15 +128,15 @@ func printDetail(r media.SearchResult, d *media.ContentDetail) {
 		termWidth = w
 	}
 
-	// Poster: 25% of width, capped at 26 cols
-	posterCols := termWidth / 4
-	if posterCols > 26 {
-		posterCols = 26
+	// Poster: 35% of width, capped at 40 cols
+	posterCols := termWidth * 35 / 100
+	if posterCols > 40 {
+		posterCols = 40
 	}
-	if posterCols < 8 {
-		posterCols = 8
+	if posterCols < 15 {
+		posterCols = 15
 	}
-	posterRows := posterCols * 3 / 5
+	posterRows := posterCols * 7 / 10
 
 	textWidth := termWidth - posterCols - 8
 	if r.Poster == "" {

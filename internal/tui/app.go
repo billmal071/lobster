@@ -532,14 +532,14 @@ func (m AppModel) tabTitle(t tab) string {
 // posterSize returns responsive poster dimensions based on current terminal size.
 func (m AppModel) posterSize() (cols, rows int) {
 	rightWidth := m.width - m.width/3 - 4
-	cols = rightWidth * 3 / 10
-	if cols > 30 {
-		cols = 30
+	cols = rightWidth * 35 / 100
+	if cols > 40 {
+		cols = 40
 	}
-	if cols < 10 {
-		cols = 10
+	if cols < 15 {
+		cols = 15
 	}
-	rows = cols * 6 / 10
+	rows = cols * 7 / 10
 	if rows < 6 {
 		rows = 6
 	}

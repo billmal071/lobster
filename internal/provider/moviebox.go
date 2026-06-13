@@ -280,9 +280,17 @@ type mbSearchItem struct {
 // Metadata is extracted from search results instead.
 
 type mbPlayInfoResponse struct {
-	HLS         []mbHLSEntry   `json:"hls"`
-	Streams     []mbStreamEntry `json:"streams"`
-	HasResource bool            `json:"hasResource"`
+	HLS         []mbHLSEntry      `json:"hls"`
+	Streams     []mbStreamEntry   `json:"streams"`
+	Downloads   []mbDownloadEntry `json:"downloads"`
+	HasResource bool              `json:"hasResource"`
+}
+
+type mbDownloadEntry struct {
+	ID         string `json:"id"`
+	URL        string `json:"url"`
+	Resolution int    `json:"resolution"`
+	Size       int64  `json:"size"`
 }
 
 type mbHLSEntry struct {
@@ -557,7 +565,7 @@ func (m *MovieBox) Watch(mediaID, episodeID, server, quality string) (*media.Str
 		return nil, fmt.Errorf("moviebox watch: no streams available (geo-restricted or unavailable)")
 	}
 
-	// Prefer HLS streams, fall back to MP4 streams
+	// Prefer HLS streams, fall back to MP4 streams, then downloads
 	var streamURL, streamQuality string
 	if len(resp.HLS) > 0 {
 		sort.Slice(resp.HLS, func(i, j int) bool {
@@ -571,6 +579,12 @@ func (m *MovieBox) Watch(mediaID, episodeID, server, quality string) (*media.Str
 		})
 		streamURL = resp.Streams[0].URL
 		streamQuality = resp.Streams[0].Quality
+	} else if len(resp.Downloads) > 0 {
+		sort.Slice(resp.Downloads, func(i, j int) bool {
+			return resp.Downloads[i].Resolution > resp.Downloads[j].Resolution
+		})
+		streamURL = resp.Downloads[0].URL
+		streamQuality = fmt.Sprintf("%dp", resp.Downloads[0].Resolution)
 	} else {
 		return nil, fmt.Errorf("moviebox watch: no stream URLs found")
 	}

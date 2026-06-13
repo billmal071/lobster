@@ -19,6 +19,14 @@ const maxFallbackCandidates = 5
 func fallbackProviders(primary provider.Provider) []provider.Provider {
 	var fallbacks []provider.Provider
 
+	if _, ok := primary.(*provider.VaPlayer); !ok {
+		fallbacks = append(fallbacks, provider.NewVaPlayer())
+	}
+
+	if _, ok := primary.(*provider.VidNest); !ok {
+		fallbacks = append(fallbacks, provider.NewVidNest())
+	}
+
 	if _, ok := primary.(*provider.Soap2Day); !ok {
 		fallbacks = append(fallbacks, provider.NewSoap2Day())
 	}
