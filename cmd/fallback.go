@@ -229,7 +229,7 @@ func tryEmbedProviderFallback(fb provider.Provider, match *media.SearchResult, m
 			continue
 		}
 
-		ext, resolvedURL := extract.ResolveForURL(embedURL)
+		ext, resolvedURL := extract.ResolveForURL(embedURL, providerReferer(fb))
 		stream, err := ext.Extract(resolvedURL, quality)
 		if err != nil {
 			debugf("fallback server %s extract failed: %v", srv.Name, err)
@@ -241,6 +241,21 @@ func tryEmbedProviderFallback(fb provider.Provider, match *media.SearchResult, m
 	}
 
 	return nil, fmt.Errorf("all fallback servers failed")
+}
+
+// providerReferer returns the Referer URL for a provider's embed requests.
+// This ensures extractors send the correct origin domain instead of a hardcoded one.
+func providerReferer(p provider.Provider) string {
+	switch v := p.(type) {
+	case *provider.FlixHQ:
+		return v.BaseURL() + "/"
+	case *provider.FlixHQWS:
+		return v.BaseURL() + "/"
+	case *provider.KimCartoon:
+		return v.BaseURL() + "/"
+	default:
+		return ""
+	}
 }
 
 // makeStreamResolver builds a StreamResolver that tries the primary provider

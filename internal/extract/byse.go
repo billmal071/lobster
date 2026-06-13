@@ -18,6 +18,9 @@ import (
 // embed URLs. These are reached via vidcdn.co redirects from flixhq.ws.
 type ByseExtractor struct {
 	client *http.Client
+	// Referer is the origin domain sent as the Referer header.
+	// If empty, defaults to "https://flixhq.ws/".
+	Referer string
 }
 
 // NewByse creates a new ByseExtractor.
@@ -175,7 +178,11 @@ func (b *ByseExtractor) resolveCode(embedURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("creating redirect request: %w", err)
 	}
-	req.Header.Set("Referer", "https://flixhq.ws/")
+	referer := b.Referer
+	if referer == "" {
+		referer = "https://flixhq.ws/"
+	}
+	req.Header.Set("Referer", referer)
 
 	resp, err := noRedirectClient.Do(req)
 	if err != nil {

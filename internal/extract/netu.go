@@ -15,6 +15,9 @@ import (
 // These pages contain HLS stream URLs and subtitle links directly in the HTML.
 type NetuExtractor struct {
 	client *http.Client
+	// Referer is the origin domain sent as the Referer header.
+	// If empty, defaults to "https://flixhq.ws/".
+	Referer string
 }
 
 // NewNetu creates a new NetuExtractor.
@@ -34,7 +37,7 @@ func (n *NetuExtractor) Extract(embedURL string, preferredQuality string) (*medi
 	// Step 1: Resolve the actual embed URL if it's a vidcdn.co redirect
 	pageURL := embedURL
 	if strings.Contains(embedURL, "vidcdn.co") {
-		resolved, err := followRedirect(embedURL)
+		resolved, err := followRedirectWithReferer(embedURL, n.Referer)
 		if err != nil {
 			return nil, fmt.Errorf("following redirect: %w", err)
 		}
@@ -53,7 +56,11 @@ func (n *NetuExtractor) Extract(embedURL string, preferredQuality string) (*medi
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/121.0")
-	req.Header.Set("Referer", "https://flixhq.ws/")
+	referer := n.Referer
+	if referer == "" {
+		referer = "https://flixhq.ws/"
+	}
+	req.Header.Set("Referer", referer)
 
 	resp, err := n.client.Do(req)
 	if err != nil {
@@ -103,6 +110,16 @@ func (n *NetuExtractor) Extract(embedURL string, preferredQuality string) (*medi
 
 // followRedirect follows a single redirect and returns the Location header.
 func followRedirect(url string) (string, error) {
+	return followRedirectWithReferer(url, "")
+}
+
+// followRedirectWithReferer follows a single redirect using the given referer.
+// If referer is empty, defaults to "https://flixhq.ws/".
+func followRedirectWithReferer(url, referer string) (string, error) {
+	if referer == "" {
+		referer = "https://flixhq.ws/"
+	}
+
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -113,7 +130,7 @@ func followRedirect(url string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Referer", "https://flixhq.ws/")
+	req.Header.Set("Referer", referer)
 
 	resp, err := client.Do(req)
 	if err != nil {

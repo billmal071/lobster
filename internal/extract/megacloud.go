@@ -23,6 +23,10 @@ const (
 type MegaCloudExtractor struct {
 	client *http.Client
 
+	// Referer is the origin domain sent as the Referer header when fetching
+	// embed pages. If empty, defaults to "https://flixhq.to/".
+	Referer string
+
 	// Cached megacloud keys
 	keysMu sync.Mutex
 	keys   map[string]string
@@ -68,7 +72,11 @@ func (m *MegaCloudExtractor) Extract(embedURL string, preferredQuality string) (
 
 	// Step 1: Fetch embed page HTML to get the client key
 	embedPageURL := fmt.Sprintf("https://%s/%s/v3/e-1/%s?z=", domain, embedPrefix, sourceID)
-	embedHTML, err := m.fetchHTML(embedPageURL, "https://flixhq.to/")
+	referer := m.Referer
+	if referer == "" {
+		referer = "https://flixhq.to/"
+	}
+	embedHTML, err := m.fetchHTML(embedPageURL, referer)
 	if err != nil {
 		return nil, fmt.Errorf("fetching embed page: %w", err)
 	}

@@ -36,7 +36,7 @@ func setupTestManager(t *testing.T, data []byte) (*Manager, *httptest.Server, st
 	httpEng := &engine.HTTPEngine{Client: srv.Client(), RetryDelay: 1 * time.Millisecond}
 	hlsEng := &engine.HLSEngine{Client: srv.Client(), Store: s, RetryDelay: 1 * time.Millisecond}
 
-	mgr := New(s, httpEng, hlsEng, 2)
+	mgr := New(s, httpEng, hlsEng, 2, 0)
 	mgr.SetPollRate(10 * time.Millisecond)
 
 	return mgr, srv, dir
@@ -118,7 +118,7 @@ func TestManagerPause(t *testing.T) {
 	dir := t.TempDir()
 	httpEng := &engine.HTTPEngine{Client: srv.Client(), RetryDelay: 1 * time.Millisecond}
 	hlsEng := &engine.HLSEngine{Client: srv.Client(), Store: s, RetryDelay: 1 * time.Millisecond}
-	mgr := New(s, httpEng, hlsEng, 1)
+	mgr := New(s, httpEng, hlsEng, 1, 0)
 	mgr.SetPollRate(10 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -232,7 +232,7 @@ func TestManagerConcurrency(t *testing.T) {
 	dir := t.TempDir()
 	httpEng := &engine.HTTPEngine{Client: srv.Client(), RetryDelay: 1 * time.Millisecond}
 	hlsEng := &engine.HLSEngine{Client: srv.Client(), Store: s, RetryDelay: 1 * time.Millisecond}
-	mgr := New(s, httpEng, hlsEng, 2)
+	mgr := New(s, httpEng, hlsEng, 2, 0)
 	mgr.SetPollRate(10 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())

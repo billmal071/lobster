@@ -20,7 +20,11 @@ import (
 
 const maxCapturedFFmpegStderrBytes = 64 * 1024
 
+const maxDownloadRetries = 3
+
 // Download fetches a stream to a local file using ffmpeg.
+// On failure it retries up to 3 times, resuming from the duration
+// already downloaded (detected via ffprobe) using ffmpeg's -ss flag.
 func Download(stream *media.Stream, title string, outputDir string, subFile string) (string, error) {
 	// Validate ffmpeg is available
 	ffmpegPath, err := exec.LookPath("ffmpeg")
@@ -45,15 +49,78 @@ func Download(stream *media.Stream, title string, outputDir string, subFile stri
 	}
 
 	// Skip if file already exists and appears complete.
-	// A file is considered complete if it's above a minimum size threshold
-	// AND ffprobe can read a valid duration from it.
 	if info, err := os.Stat(outputPath); err == nil && info.Size() > 0 {
 		if isCompleteDownload(outputPath, info.Size()) {
 			fmt.Fprintf(os.Stderr, "Already exists, skipping: %s\n", outputPath)
 			return outputPath, nil
 		}
-		fmt.Fprintf(os.Stderr, "Incomplete download detected, re-downloading: %s\n", outputPath)
+		fmt.Fprintf(os.Stderr, "Incomplete download detected, will resume: %s\n", outputPath)
 	}
+
+	var lastErr error
+	for attempt := 0; attempt < maxDownloadRetries; attempt++ {
+		if attempt > 0 {
+			fmt.Fprintf(os.Stderr, "Retry %d/%d...\n", attempt, maxDownloadRetries-1)
+		}
+
+		lastErr = runFFmpegDownload(ffmpegPath, stream, title, subFile, outputPath)
+		if lastErr == nil {
+			return outputPath, nil
+		}
+
+		// Don't delete partial file -- we may resume from it on the next attempt.
+		fmt.Fprintf(os.Stderr, "Download attempt failed: %v\n", lastErr)
+	}
+
+	// All retries exhausted; clean up partial file.
+	os.Remove(outputPath)
+	return "", fmt.Errorf("ffmpeg download failed after %d attempts: %w", maxDownloadRetries, lastErr)
+}
+
+// probeDuration returns the duration (in seconds) of a media file using ffprobe.
+// Returns 0 if the file doesn't exist, ffprobe is unavailable, or the duration
+// cannot be determined.
+func probeDuration(path string) float64 {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() == 0 {
+		return 0
+	}
+
+	ffprobePath, err := exec.LookPath("ffprobe")
+	if err != nil {
+		return 0
+	}
+
+	cmd := exec.Command(ffprobePath,
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		path,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+
+	durationStr := strings.TrimSpace(string(out))
+	if durationStr == "" || durationStr == "N/A" {
+		return 0
+	}
+
+	duration, err := strconv.ParseFloat(durationStr, 64)
+	if err != nil {
+		return 0
+	}
+	return duration
+}
+
+// runFFmpegDownload runs a single ffmpeg download attempt. If a partial file
+// already exists at outputPath, it probes its duration and uses -ss to seek
+// past the already-downloaded content, appending to a temporary file and then
+// concatenating the parts.
+func runFFmpegDownload(ffmpegPath string, stream *media.Stream, title, subFile, outputPath string) error {
+	// Check if we can resume from a partial download.
+	resumeFromSec := probeDuration(outputPath)
 
 	// Build ffmpeg args as explicit slice
 	args := []string{
@@ -63,6 +130,16 @@ func Download(stream *media.Stream, title string, outputDir string, subFile stri
 	// Pass Referer and headers for CDNs that require them
 	if stream.Referer != "" {
 		args = append(args, "-headers", "Referer: "+stream.Referer+"\r\n")
+	}
+
+	// If resuming, seek past already-downloaded content on the input side.
+	if resumeFromSec > 0 {
+		// Back up 2 seconds to avoid missing frames at the boundary.
+		seekSec := resumeFromSec - 2
+		if seekSec < 0 {
+			seekSec = 0
+		}
+		args = append(args, "-ss", strconv.FormatFloat(seekSec, 'f', 3, 64))
 	}
 
 	args = append(args, "-i", stream.URL)
@@ -88,27 +165,39 @@ func Download(stream *media.Stream, title string, outputDir string, subFile stri
 		)
 	}
 
+	// When resuming, write to a temporary file; we'll concatenate after.
+	targetPath := outputPath
+	if resumeFromSec > 0 {
+		targetPath = outputPath + ".part"
+	}
+
 	// Add metadata
 	args = append(args,
 		"-metadata", fmt.Sprintf("title=%s", title),
 		"-progress", "pipe:1",
 		"-nostats",
-		outputPath,
+		targetPath,
 	)
 
 	cmd := exec.Command(ffmpegPath, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", fmt.Errorf("creating ffmpeg stdout pipe: %w", err)
+		return fmt.Errorf("creating ffmpeg stdout pipe: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return "", fmt.Errorf("creating ffmpeg stderr pipe: %w", err)
+		return fmt.Errorf("creating ffmpeg stderr pipe: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Downloading to: %s\n", outputPath)
+	if resumeFromSec > 0 {
+		fmt.Fprintf(os.Stderr, "Resuming download from %s: %s\n",
+			formatProgressTime(int64(resumeFromSec*1_000_000)), outputPath)
+	} else {
+		fmt.Fprintf(os.Stderr, "Downloading to: %s\n", outputPath)
+	}
+
 	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("starting ffmpeg: %w", err)
+		return fmt.Errorf("starting ffmpeg: %w", err)
 	}
 
 	var stderrBuf bytes.Buffer
@@ -140,7 +229,7 @@ func Download(stream *media.Stream, title string, outputDir string, subFile stri
 	if err := scanner.Err(); err != nil {
 		_ = cmd.Process.Kill()
 		<-stderrDone
-		return "", fmt.Errorf("reading ffmpeg progress: %w", err)
+		return fmt.Errorf("reading ffmpeg progress: %w", err)
 	}
 
 	runErr := cmd.Wait()
@@ -150,16 +239,60 @@ func Download(stream *media.Stream, title string, outputDir string, subFile stri
 	}
 
 	if runErr != nil {
-		// Clean up partial download on failure
-		os.Remove(outputPath)
+		// Don't delete partial file -- leave it for resume on retry.
+		os.Remove(targetPath) // Remove the .part file on failure though.
 		errOutput := strings.TrimSpace(stderrBuf.String())
 		if errOutput == "" {
-			return "", fmt.Errorf("ffmpeg download failed: %w", runErr)
+			return fmt.Errorf("ffmpeg failed: %w", runErr)
 		}
-		return "", fmt.Errorf("ffmpeg download failed: %w\n%s", runErr, errOutput)
+		return fmt.Errorf("ffmpeg failed: %w\n%s", runErr, errOutput)
 	}
 
-	return outputPath, nil
+	// If we were resuming, concatenate the original partial file with the new part.
+	if resumeFromSec > 0 {
+		if err := concatMKVFiles(ffmpegPath, outputPath, targetPath); err != nil {
+			// Concat failed; the .part file has the new segment at least.
+			// Replace the original with just the new part so we don't lose progress.
+			os.Rename(targetPath, outputPath)
+			return fmt.Errorf("concatenating resume parts: %w", err)
+		}
+		os.Remove(targetPath)
+	}
+
+	return nil
+}
+
+// concatMKVFiles concatenates two MKV files using ffmpeg's concat demuxer.
+// The result replaces the first file.
+func concatMKVFiles(ffmpegPath, file1, file2 string) error {
+	concatList := file1 + ".concat.txt"
+	content := fmt.Sprintf("file '%s'\nfile '%s'\n", file1, file2)
+	if err := os.WriteFile(concatList, []byte(content), 0644); err != nil {
+		return fmt.Errorf("writing concat list: %w", err)
+	}
+	defer os.Remove(concatList)
+
+	merged := file1 + ".merged.mkv"
+	cmd := exec.Command(ffmpegPath,
+		"-y",
+		"-f", "concat",
+		"-safe", "0",
+		"-i", concatList,
+		"-c", "copy",
+		merged,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		os.Remove(merged)
+		return fmt.Errorf("ffmpeg concat: %w\n%s", err, string(out))
+	}
+
+	// Replace original with merged file.
+	if err := os.Rename(merged, file1); err != nil {
+		os.Remove(merged)
+		return err
+	}
+
+	return nil
 }
 
 // isCompleteDownload checks if a downloaded file appears to be complete
