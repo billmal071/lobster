@@ -28,7 +28,7 @@ func parseSearchResults(doc *goquery.Document) []media.SearchResult {
 		}
 
 		// Extract poster image
-		result.Poster = extractPosterURL(s)
+		result.PosterURL = firstImageURL(s)
 
 		// Determine type from URL path or class
 		if strings.Contains(href, "/tv/") || strings.Contains(href, "/series/") {
@@ -301,7 +301,7 @@ func parseTrendingResults(doc *goquery.Document, mediaType media.MediaType) []me
 		}
 
 		// Extract poster image
-		result.Poster = extractPosterURL(s)
+		result.PosterURL = firstImageURL(s)
 
 		if strings.Contains(href, "/tv/") || strings.Contains(href, "/series/") {
 			result.Type = media.TV
@@ -332,19 +332,6 @@ func parseTrendingResults(doc *goquery.Document, mediaType media.MediaType) []me
 	})
 
 	return results
-}
-
-// extractPosterURL extracts the poster image URL from a search result item.
-// FlixHQ uses <img> inside .film-poster with data-src or src attributes.
-func extractPosterURL(s *goquery.Selection) string {
-	img := s.Find(".film-poster img")
-	if src, ok := img.Attr("data-src"); ok && src != "" {
-		return src
-	}
-	if src, ok := img.Attr("src"); ok && src != "" {
-		return src
-	}
-	return ""
 }
 
 // FormatDisplayTitle creates a display string for fzf selection.

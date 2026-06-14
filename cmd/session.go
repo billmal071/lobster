@@ -165,12 +165,23 @@ func episodeListMenu(sess *playlist.Session) error {
 	return nil
 }
 
-// resolveStream resolves a stream for the current episode via fallback providers.
-// Primary provider (FlixHQ) is used for metadata only; streaming goes through
-// Soap2Day and other fallbacks directly.
+// resolveStream resolves a stream for the current episode. It tries the
+// selected provider's exact episode ID first, then falls back to title search.
 func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media.Stream, string, error) {
+	debugf("resolving stream via primary provider for %s", sess.Title())
+	stream, serverName, err := tryPrimaryStream(
+		sess.Provider,
+		sess.Content.ID,
+		sess.Current().ID,
+		excludeNames,
+	)
+	if err == nil {
+		return stream, serverName, nil
+	}
+	debugf("primary provider failed: %v", err)
+
 	debugf("resolving stream via fallback providers for %s", sess.Title())
-	stream, err := tryFallbackStream(
+	stream, err = tryFallbackStream(
 		sess.Provider,
 		sess.Content.Title,
 		sess.Content.Type,

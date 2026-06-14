@@ -19,6 +19,12 @@ type detailFetchedMsg struct {
 	detail *media.ContentDetail
 }
 
+// posterFetchedMsg is sent when a poster preview has been fetched/rendered.
+type posterFetchedMsg struct {
+	url    string
+	poster posterPreview
+}
+
 // seasonsFetchedMsg is sent when TV show seasons are fetched.
 type seasonsFetchedMsg []media.Season
 

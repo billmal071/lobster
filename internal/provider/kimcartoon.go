@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -83,6 +84,7 @@ func (k *KimCartoon) Search(query string) ([]media.SearchResult, error) {
 	}
 
 	sortByRelevance(results, query)
+	normalizeResultMediaURLs(k.baseURL(), results)
 
 	return results, nil
 }
@@ -165,12 +167,12 @@ func parseKCResultLink(s *goquery.Selection) (media.SearchResult, bool) {
 	}
 
 	return media.SearchResult{
-		ID:     id,
-		Title:  title,
-		Type:   media.TV, // Cartoons are episodic
-		Year:   year,
-		URL:    href,
-		Poster: posterURL,
+		ID:        id,
+		Title:     title,
+		Type:      media.TV, // Cartoons are episodic
+		Year:      year,
+		URL:       href,
+		PosterURL: firstImageURL(s),
 	}, true
 }
 
@@ -198,7 +200,9 @@ func (k *KimCartoon) GetDetails(id string) (*media.ContentDetail, error) {
 		return nil, fmt.Errorf("getting details: %w", err)
 	}
 
-	return parseKCDetail(doc), nil
+	detail := parseKCDetail(doc)
+	normalizeDetailMediaURLs(k.baseURL(), detail)
+	return detail, nil
 }
 
 // parseKCDetail extracts content details from a kimcartoon show page.
@@ -206,6 +210,7 @@ func parseKCDetail(doc *goquery.Document) *media.ContentDetail {
 	detail := &media.ContentDetail{}
 
 	detail.Description = strings.TrimSpace(doc.Find("div.mindesc").Text())
+	detail.PosterURL = firstImageURL(doc.Selection)
 
 	doc.Find("div.genxed a").Each(func(_ int, s *goquery.Selection) {
 		detail.Genre = append(detail.Genre, strings.TrimSpace(s.Text()))
@@ -329,7 +334,7 @@ func (k *KimCartoon) GetServers(id string, episodeID string) ([]media.Server, er
 	return servers, nil
 }
 
-var vidwishIframeRe = regexp.MustCompile(`<iframe[^>]*src="(https://player\.vidwish\.live[^"]+)"`)
+var vidwishIframeRe = regexp.MustCompile(`(?is)<iframe[^>]+src\s*=\s*['"]([^'"]*vidwish[^'"]*)['"]`)
 
 // GetEmbedURL resolves the stream.php page to get the vidwish.live player URL.
 func (k *KimCartoon) GetEmbedURL(serverID string) (string, error) {
@@ -360,12 +365,20 @@ func (k *KimCartoon) GetEmbedURL(serverID string) (string, error) {
 		return "", fmt.Errorf("reading stream page: %w", err)
 	}
 
-	match := vidwishIframeRe.FindStringSubmatch(string(body))
-	if len(match) < 2 {
+	iframeURL := extractVidwishIframe(string(body), serverID)
+	if iframeURL == "" {
 		return "", fmt.Errorf("no vidwish player URL found")
 	}
 
-	return match[1], nil
+	return iframeURL, nil
+}
+
+func extractVidwishIframe(page, baseURL string) string {
+	match := vidwishIframeRe.FindStringSubmatch(page)
+	if len(match) < 2 {
+		return ""
+	}
+	return resolveMediaURL(baseURL, html.UnescapeString(strings.TrimSpace(match[1])))
 }
 
 // Trending returns trending content from the homepage.
@@ -375,7 +388,9 @@ func (k *KimCartoon) Trending(mediaType media.MediaType) ([]media.SearchResult, 
 		return nil, fmt.Errorf("getting trending: %w", err)
 	}
 
-	return parseKCSearchResults(doc), nil
+	results := parseKCSearchResults(doc)
+	normalizeResultMediaURLs(k.baseURL(), results)
+	return results, nil
 }
 
 // Recent returns recently added content.

@@ -47,7 +47,8 @@ func TestTBCPLSearchAndDetails(t *testing.T) {
 					"media_type": "tv",
 					"overview": "A chemistry teacher starts over.",
 					"first_air_date": "2008-01-20",
-					"vote_average": 8.9
+					"vote_average": 8.9,
+					"poster_path": "/bb.jpg"
 				},
 				{
 					"id": 299536,
@@ -72,6 +73,9 @@ func TestTBCPLSearchAndDetails(t *testing.T) {
 	if results[0].ID != "tv/1396" || results[0].Title != "Breaking Bad" || results[0].Type != media.TV || results[0].Year != "2008" {
 		t.Fatalf("unexpected first result: %+v", results[0])
 	}
+	if results[0].PosterURL != "https://image.tmdb.org/t/p/w342/bb.jpg" {
+		t.Fatalf("poster URL = %q", results[0].PosterURL)
+	}
 	if results[1].ID != "movie/299536" || results[1].Type != media.Movie || results[1].Year != "2018" {
 		t.Fatalf("unexpected second result: %+v", results[1])
 	}
@@ -88,6 +92,9 @@ func TestTBCPLSearchAndDetails(t *testing.T) {
 	}
 	if details.Released != "2008-01-20" {
 		t.Errorf("released = %q, want 2008-01-20", details.Released)
+	}
+	if details.PosterURL != "https://image.tmdb.org/t/p/w342/bb.jpg" {
+		t.Errorf("detail poster URL = %q", details.PosterURL)
 	}
 }
 
@@ -133,8 +140,13 @@ func TestTBCPLSeasonsAndEpisodes(t *testing.T) {
 }
 
 func TestTBCPLWatchMovie(t *testing.T) {
-	const streamURL = "https://cdn.example.test/movie/master.m3u8"
+	var streamURL string
 	p, _, cleanup := newTestTBCPL(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/movie/master.m3u8" {
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			fmt.Fprint(w, "#EXTM3U\n#EXT-X-ENDLIST\n")
+			return
+		}
 		if r.URL.Path != "/api/server" {
 			http.NotFound(w, r)
 			return
@@ -157,6 +169,7 @@ func TestTBCPLWatchMovie(t *testing.T) {
 	})
 	defer cleanup()
 	p.vidzeeKey = "test-key"
+	streamURL = p.vidzeeBaseURL + "/movie/master.m3u8"
 
 	stream, err := p.Watch("movie/1122573", "", "Togi", "1080")
 	if err != nil {
@@ -174,7 +187,13 @@ func TestTBCPLWatchMovie(t *testing.T) {
 }
 
 func TestTBCPLWatchTV(t *testing.T) {
+	var streamURL string
 	p, _, cleanup := newTestTBCPL(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/tv/master.m3u8" {
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			fmt.Fprint(w, "#EXTM3U\n#EXT-X-ENDLIST\n")
+			return
+		}
 		if r.URL.Path != "/api/server" {
 			http.NotFound(w, r)
 			return
@@ -189,10 +208,11 @@ func TestTBCPLWatchTV(t *testing.T) {
 			t.Errorf("ep = %q, want 2", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"url":[{"link":%q}]}`, encryptTBCPLVidzeeLinkForTest(t, "https://cdn.example.test/tv/master.m3u8", "test-key"))
+		fmt.Fprintf(w, `{"url":[{"link":%q}]}`, encryptTBCPLVidzeeLinkForTest(t, streamURL, "test-key"))
 	})
 	defer cleanup()
 	p.vidzeeKey = "test-key"
+	streamURL = p.vidzeeBaseURL + "/tv/master.m3u8"
 
 	stream, err := p.Watch("tv/1399", "1399:1:2", "vidzee:0", "720")
 	if err != nil {
@@ -200,6 +220,30 @@ func TestTBCPLWatchTV(t *testing.T) {
 	}
 	if !strings.Contains(stream.URL, "/tv/") {
 		t.Errorf("unexpected stream URL: %q", stream.URL)
+	}
+}
+
+func TestTBCPLRejectsNonMediaStream(t *testing.T) {
+	var streamURL string
+	p, _, cleanup := newTestTBCPL(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/stale/master.m3u8" {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, "<html><body>404 Not Found</body></html>")
+			return
+		}
+		if r.URL.Path != "/api/server" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"url":[{"link":%q}]}`, encryptTBCPLVidzeeLinkForTest(t, streamURL, "test-key"))
+	})
+	defer cleanup()
+	p.vidzeeKey = "test-key"
+	streamURL = p.vidzeeBaseURL + "/stale/master.m3u8"
+
+	if _, err := p.Watch("movie/1122573", "", "Togi", "1080"); err == nil {
+		t.Fatal("Watch succeeded for non-media response")
 	}
 }
 

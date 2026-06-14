@@ -34,6 +34,8 @@ func ResolveForURL(embedURL, referer string) (Extractor, string) {
 	}
 
 	switch {
+	case strings.Contains(target, "megaplay.buzz") || strings.Contains(target, "mewstream"):
+		return NewMegaPlay(), target
 	case strings.Contains(target, "weneverbeenfree.com"):
 		e := NewByse()
 		if referer != "" {
