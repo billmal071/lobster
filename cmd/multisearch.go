@@ -22,10 +22,7 @@ func multiProviderSearch(primary provider.Provider, fallbacks []provider.Provide
 
 	var mu sync.Mutex
 	var primaryResults []media.SearchResult
-	var fallbackResults [][]media.SearchResult
-
-	// Pre-allocate slice for fallback results to maintain order.
-	fallbackResults = make([][]media.SearchResult, len(fallbacks))
+	fallbackResults := make([][]media.SearchResult, len(fallbacks))
 
 	var wg sync.WaitGroup
 

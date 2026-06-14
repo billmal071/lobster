@@ -15,9 +15,6 @@ import (
 	"lobster/internal/ui"
 )
 
-// cachedServerName is the last working server name, preferred for the next episode.
-var cachedServerName string
-
 // runPlaybackLoop plays the current episode and then loops with a
 // countdown/menu for continuous playback.
 func runPlaybackLoop(sess *playlist.Session) error {
@@ -165,34 +162,47 @@ func episodeListMenu(sess *playlist.Session) error {
 	return nil
 }
 
-// resolveStream resolves a stream for the current episode via fallback providers.
-// Primary provider (FlixHQ) is used for metadata only; streaming goes through
-// Soap2Day and other fallbacks directly.
-func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media.Stream, string, error) {
-	debugf("resolving stream via fallback providers for %s", sess.Title())
-	stream, err := tryFallbackStream(
+// resolveStream resolves a stream for the current episode via embed context (when available),
+// then the primary provider and fallbacks.
+func resolveStream(sess *playlist.Session, excludeProviders map[string]bool) (*media.Stream, string, error) {
+	if sess.SkippedProviders == nil {
+		sess.SkippedProviders = make(map[string]bool)
+	}
+
+	episodeID := ""
+	if sess.Content.Type == media.TV {
+		episodeID = sess.Current().ID
+	}
+
+	if stream, name, err := tryPrimaryEmbedFromContext(sess.Provider, sess.Content.ID, episodeID); err == nil {
+		return stream, name, nil
+	}
+
+	debugf("resolving stream for %s", sess.Title())
+	stream, name, err := tryFallbackStream(
 		sess.Provider,
 		sess.Content.Title,
 		sess.Content.Type,
 		sess.CurrentSeason().Number,
 		sess.Current().Number,
+		excludeProviders,
+		sess.SkippedProviders,
 	)
 	if err != nil {
-		debugf("all fallbacks failed: %v", err)
-		return nil, "", fmt.Errorf("all providers failed for %s: %w", sess.Title(), err)
+		return nil, "", err
 	}
-	return stream, "Fallback", nil
+	return stream, name, nil
 }
 
 // playCurrentEpisode resolves the stream and plays the current episode.
 // If playback fails mid-stream, it retries with a different source.
 func playCurrentEpisode(sess *playlist.Session) error {
 	title := sess.Title()
-	excludeNames := make(map[string]bool)
+	excludeProviders := make(map[string]bool)
 
 	// JSON output mode — no retry needed
 	if flagJSON {
-		stream, _, err := resolveStream(sess, excludeNames)
+		stream, _, err := resolveStream(sess, excludeProviders)
 		if err != nil {
 			return err
 		}
@@ -201,7 +211,7 @@ func playCurrentEpisode(sess *playlist.Session) error {
 
 	// Download mode — no retry needed
 	if flagDownload != "" {
-		stream, _, err := resolveStream(sess, excludeNames)
+		stream, _, err := resolveStream(sess, excludeProviders)
 		if err != nil {
 			return err
 		}
@@ -229,7 +239,7 @@ func playCurrentEpisode(sess *playlist.Session) error {
 	}
 
 	for {
-		stream, serverName, err := resolveStream(sess, excludeNames)
+		stream, providerName, err := resolveStream(sess, excludeProviders)
 		if err != nil {
 			return err
 		}
@@ -249,16 +259,9 @@ func playCurrentEpisode(sess *playlist.Session) error {
 			debugf("playback stopped at %.0fs, will resume from there", result.Position)
 		}
 
-		// If the fallback stream also failed, don't retry endlessly
-		if serverName == "Fallback" {
-			return fmt.Errorf("playback failed: %w", playErr)
-		}
-
-		// Exclude this server and try the next one
-		excludeNames[serverName] = true
-		cachedServerName = ""
+		excludeProviders[providerName] = true
 		fmt.Fprintf(os.Stderr, "Playback stopped, trying another source...\n")
-		debugf("playback error: %v (server %s excluded)", playErr, serverName)
+		debugf("playback error: %v (provider %s excluded)", playErr, providerName)
 	}
 }
 

@@ -1,4 +1,5 @@
 lobster
+*.exe
 dist/
 .worktrees/
 branch_structure.json

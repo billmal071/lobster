@@ -19,8 +19,8 @@ import (
 	"lobster/internal/httputil"
 	"lobster/internal/media"
 	"lobster/internal/player"
-	"lobster/internal/poster"
 	"lobster/internal/playlist"
+	"lobster/internal/poster"
 	"lobster/internal/provider"
 	"lobster/internal/subtitle"
 	"lobster/internal/tui"
@@ -236,7 +236,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// Primary provider can't resolve seasons — try fallback stream
 			debugf("primary provider seasons failed: %v, trying fallbacks", err)
 			fmt.Fprintf(os.Stderr, "Provider has no season data, trying fallbacks...\n")
-			fbStream, fbErr := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
+			fbStream, _, fbErr := tryFallbackStream(p, selected.Title, selected.Type, season, episode, nil, nil)
 			if fbErr != nil {
 				if err != nil {
 					return fmt.Errorf("getting seasons: %w", err)
@@ -385,7 +385,6 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 
 		// Create a playlist session for continuous playback
 		sess := playlist.New(p, selected, seasons, episodes, seasonIdx, episodeIdx)
-		cachedServerName = ""
 		return runPlaybackLoop(sess)
 	}
 
@@ -401,7 +400,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			}
 			// Try fallback immediately
 			fmt.Fprintf(os.Stderr, "Primary provider failed, trying fallback...\n")
-			fbStream, fbErr := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
+			fbStream, _, fbErr := tryFallbackStream(p, selected.Title, selected.Type, season, episode, nil, nil)
 			if fbErr != nil {
 				if err != nil {
 					return fmt.Errorf("getting servers: %w", err)
@@ -431,7 +430,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			stopWatch()
 			// Try fallback providers
 			fmt.Fprintf(os.Stderr, "Primary provider failed, trying fallback...\n")
-			fbStream, err := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
+			fbStream, _, err := tryFallbackStream(p, selected.Title, selected.Type, season, episode, nil, nil)
 			if err != nil {
 				return fmt.Errorf("all servers failed for %s", title)
 			}
@@ -442,11 +441,13 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		return playStream(stream, title, selected, season, episode)
 	}
 
-	// Skip primary provider's embed+extract (unreliable) and go straight to
-	// fallback StreamProviders (Soap2Day, etc.) for stream resolution.
-	debugf("resolving stream via fallback providers for %s", title)
+	// Embed primary: try known content ID first, then full fallback chain.
+	debugf("resolving stream for %s", title)
 	stopStream := ui.StartSpinner(fmt.Sprintf("Fetching %s media stream...", title))
-	fbStream, err := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
+	stream, _, err := tryPrimaryEmbedFromContext(p, selected.ID, episodeID)
+	if err != nil {
+		stream, _, err = tryFallbackStream(p, selected.Title, selected.Type, season, episode, nil, nil)
+	}
 	stopStream()
 	if err != nil {
 		debugf("fallback failed: %v", err)
@@ -456,9 +457,9 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		} else if _, isFlixHQWS := p.(*provider.FlixHQWS); isFlixHQWS {
 			hint = "\nTip: try --base soap2day or --base vaplayer for better stream availability"
 		}
-		return fmt.Errorf("all providers failed for %s: %w%s", title, err, hint)
+		return fmt.Errorf("%w%s", err, hint)
 	}
-	return playStream(fbStream, title, selected, season, episode)
+	return playStream(stream, title, selected, season, episode)
 }
 
 // playStream handles all post-stream-resolution logic: JSON output, subtitle

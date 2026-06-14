@@ -145,7 +145,7 @@ func batchDownload(p provider.Provider, selected media.SearchResult, episodes []
 // downloadSingleEpisode resolves and downloads one episode via fallback providers.
 func downloadSingleEpisode(p provider.Provider, selected media.SearchResult, ep media.Episode, seasonNum int, outputDir, title string) error {
 	debugf("resolving stream via fallback providers for %s", title)
-	stream, err := tryFallbackStream(p, selected.Title, selected.Type, seasonNum, ep.Number)
+	stream, _, err := tryFallbackStream(p, selected.Title, selected.Type, seasonNum, ep.Number, nil, nil)
 	if err != nil {
 		return fmt.Errorf("all providers failed: %w", err)
 	}
@@ -166,25 +166,6 @@ func orderServers(servers []media.Server, preferred string) []media.Server {
 		}
 	}
 
-	return append(ordered, rest...)
-}
-
-// orderServersWithCache orders servers: cached name first, then preferred, then rest.
-func orderServersWithCache(servers []media.Server, preferred, cached string) []media.Server {
-	if cached == "" {
-		return orderServers(servers, preferred)
-	}
-	ordered := make([]media.Server, 0, len(servers))
-	var rest []media.Server
-	for _, s := range servers {
-		if strings.EqualFold(s.Name, cached) {
-			ordered = append([]media.Server{s}, ordered...)
-		} else if strings.EqualFold(s.Name, preferred) {
-			ordered = append(ordered, s)
-		} else {
-			rest = append(rest, s)
-		}
-	}
 	return append(ordered, rest...)
 }
 
