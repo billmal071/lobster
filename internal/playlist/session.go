@@ -11,14 +11,15 @@ import (
 // Session tracks the current position within a TV show's episodes,
 // supporting navigation across episodes and seasons.
 type Session struct {
-	Provider     provider.Provider
-	Content      media.SearchResult
-	Seasons      []media.Season
-	Episodes     []media.Episode // episodes for current season
-	SeasonIdx    int
-	EpisodeIdx   int
-	LastPosition float64 // playback position from most recent play
-	LastDuration float64 // total media duration from most recent play
+	Provider         provider.Provider
+	Content          media.SearchResult
+	Seasons          []media.Season
+	Episodes         []media.Episode // episodes for current season
+	SeasonIdx        int
+	EpisodeIdx       int
+	LastPosition     float64         // playback position from most recent play
+	LastDuration     float64         // total media duration from most recent play
+	SkippedProviders map[string]bool // providers with permanent resolve failures; skip for rest of session
 }
 
 // New creates a Session positioned at the given season and episode.

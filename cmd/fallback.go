@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"lobster/internal/dlmanager"
@@ -54,26 +55,138 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 	return fallbacks
 }
 
-// tryFallbackStream attempts to resolve a stream using fallback providers.
-// It tries each fallback in order — StreamProviders use Watch(), regular
-// Providers use the GetServers + GetEmbedURL + Extract path.
-func tryFallbackStream(primary provider.Provider, title string, mediaType media.MediaType, season, episode int) (*media.Stream, error) {
-	fallbacks := fallbackProviders(primary)
-	if len(fallbacks) == 0 {
-		return nil, fmt.Errorf("no fallback providers available")
+func resolveQuality() string {
+	if cfg != nil && cfg.Quality != "" {
+		return cfg.Quality
+	}
+	return "1080"
+}
+
+func markPermanentSkip(sessionSkip map[string]bool, name string, err error) {
+	if sessionSkip == nil || err == nil || !isPermanentProviderError(err) {
+		return
+	}
+	sessionSkip[name] = true
+}
+
+func logStreamResolved(name string) {
+	if name == "" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Stream resolved via %s\n", name)
+}
+
+func isEmbedPrimary(p provider.Provider) bool {
+	switch p.(type) {
+	case *provider.FlixHQ, *provider.FlixHQWS, *provider.KimCartoon:
+		return true
+	default:
+		return false
+	}
+}
+
+// tryPrimaryEmbedFromContext resolves via GetServers on known content/episode IDs
+// without re-searching by title. Used when the user already picked an episode.
+func tryPrimaryEmbedFromContext(primary provider.Provider, contentID, episodeID string) (*media.Stream, string, error) {
+	if !isEmbedPrimary(primary) || contentID == "" {
+		return nil, "", fmt.Errorf("embed context not available")
+	}
+	stream, err := tryEmbedServers(primary, contentID, episodeID, resolveQuality())
+	if err != nil {
+		return nil, "", err
+	}
+	name := providerDisplayName(primary)
+	logStreamResolved(name)
+	return stream, name, nil
+}
+
+// tryEmbedServers resolves a stream via GetServers + GetEmbedURL + Extract.
+func tryEmbedServers(fb provider.Provider, contentID, episodeID, quality string) (*media.Stream, error) {
+	servers, err := fb.GetServers(contentID, episodeID)
+	if err != nil {
+		return nil, fmt.Errorf("getting servers: %w", err)
+	}
+	if len(servers) == 0 {
+		return nil, fmt.Errorf("no servers found")
 	}
 
+	for _, srv := range servers {
+		debugf("embed trying server: %s (ID: %s)", srv.Name, srv.ID)
+
+		embedURL, err := fb.GetEmbedURL(srv.ID)
+		if err != nil {
+			debugf("embed server %s failed: %v", srv.Name, err)
+			continue
+		}
+
+		ext, resolvedURL := extract.ResolveForURL(embedURL, providerReferer(fb))
+		stream, err := ext.Extract(resolvedURL, quality)
+		if err != nil {
+			debugf("embed server %s extract failed: %v", srv.Name, err)
+			continue
+		}
+
+		debugf("embed stream URL: %s (server: %s)", stream.URL, srv.Name)
+		return stream, nil
+	}
+
+	return nil, fmt.Errorf("all embed servers failed")
+}
+
+// tryFallbackStream resolves a stream using the primary provider, then each
+// fallback in order. A provider is skipped when it appears in transientSkip
+// (e.g. playback failed for it this episode) or sessionSkip (permanent resolve
+// failures earlier this session). Permanent failures are recorded into
+// sessionSkip so later episodes skip dead providers instead of retrying them.
+func tryFallbackStream(primary provider.Provider, title string, mediaType media.MediaType, season, episode int, transientSkip map[string]bool, sessionSkip map[string]bool) (*media.Stream, string, error) {
+	var tries []providerAttempt
+
+	skipped := func(name string) bool {
+		return transientSkip[name] || sessionSkip[name]
+	}
+
+	primaryName := providerDisplayName(primary)
+	if !skipped(primaryName) {
+		debugf("trying primary provider: %T", primary)
+		stream, err := tryFallbackProvider(primary, title, mediaType, season, episode)
+		if err == nil {
+			logStreamResolved(primaryName)
+			return stream, primaryName, nil
+		}
+		debugf("primary %T failed: %v", primary, err)
+		markPermanentSkip(sessionSkip, primaryName, err)
+		tries = append(tries, providerAttempt{
+			Name: primaryName,
+			Role: "primary",
+			Err:  err,
+		})
+	}
+
+	fallbacks := fallbackProviders(primary)
 	for _, fb := range fallbacks {
+		name := providerDisplayName(fb)
+		if skipped(name) {
+			debugf("skipping provider %s (marked skip)", name)
+			continue
+		}
+
 		debugf("trying fallback provider: %T", fb)
 		stream, err := tryFallbackProvider(fb, title, mediaType, season, episode)
 		if err != nil {
 			debugf("fallback %T failed: %v", fb, err)
+			markPermanentSkip(sessionSkip, name, err)
+			tries = append(tries, providerAttempt{
+				Name: name,
+				Role: "fallback",
+				Err:  err,
+			})
 			continue
 		}
-		return stream, nil
+		logStreamResolved(name)
+		return stream, name, nil
 	}
 
-	return nil, fmt.Errorf("all fallback providers failed")
+	return nil, "", newStreamResolveError(episodeLabel(title, season, episode), tries)
 }
 
 // tryFallbackProvider tries a single fallback provider.
@@ -90,10 +203,7 @@ func tryFallbackProvider(fb provider.Provider, title string, mediaType media.Med
 		return nil, fmt.Errorf("no matching result for %q", title)
 	}
 
-	quality := "1080"
-	if cfg != nil && cfg.Quality != "" {
-		quality = cfg.Quality
-	}
+	quality := resolveQuality()
 
 	var lastErr error
 	for i := range candidates {
@@ -211,36 +321,7 @@ func tryEmbedProviderFallback(fb provider.Provider, match *media.SearchResult, m
 		}
 	}
 
-	servers, err := fb.GetServers(match.ID, episodeID)
-	if err != nil {
-		return nil, fmt.Errorf("getting servers: %w", err)
-	}
-	if len(servers) == 0 {
-		return nil, fmt.Errorf("no servers found")
-	}
-
-	// Try each server
-	for _, srv := range servers {
-		debugf("fallback trying server: %s (ID: %s)", srv.Name, srv.ID)
-
-		embedURL, err := fb.GetEmbedURL(srv.ID)
-		if err != nil {
-			debugf("fallback server %s embed failed: %v", srv.Name, err)
-			continue
-		}
-
-		ext, resolvedURL := extract.ResolveForURL(embedURL, providerReferer(fb))
-		stream, err := ext.Extract(resolvedURL, quality)
-		if err != nil {
-			debugf("fallback server %s extract failed: %v", srv.Name, err)
-			continue
-		}
-
-		debugf("fallback stream URL: %s (server: %s)", stream.URL, srv.Name)
-		return stream, nil
-	}
-
-	return nil, fmt.Errorf("all fallback servers failed")
+	return tryEmbedServers(fb, match.ID, episodeID, quality)
 }
 
 // providerReferer returns the Referer URL for a provider's embed requests.
@@ -267,10 +348,9 @@ func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 			mt = media.TV
 		}
 
-		// Use fallback providers to resolve a stream for downloads.
-		fbStream, err := tryFallbackStream(primary, title, mt, season, episode)
+		fbStream, _, err := tryFallbackStream(primary, title, mt, season, episode, nil, nil)
 		if err != nil {
-			return nil, fmt.Errorf("all providers failed: %w", err)
+			return nil, err
 		}
 		return streamToResult(fbStream), nil
 	}
