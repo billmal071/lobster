@@ -13,45 +13,139 @@ import (
 const maxFallbackCandidates = 5
 
 // fallbackProviders returns all available fallback providers, excluding the primary.
-// Both StreamProviders (Soap2Day, Consumet, MovieBox, TBCPL) and regular
-// Providers (FlixHQ, FlixHQWS) are included so the app tries every source
-// before giving up.
+// Keep this list limited to sources that can resolve normal movie/series
+// streams reliably enough for automatic retries.
 func fallbackProviders(primary provider.Provider) []provider.Provider {
 	var fallbacks []provider.Provider
 
-	if _, ok := primary.(*provider.VaPlayer); !ok {
-		fallbacks = append(fallbacks, provider.NewVaPlayer())
+if _, ok := primary.(*provider.TBCPL); !ok {
+		fallbacks = append(fallbacks, provider.NewTBCPL("tbcpl"))
 	}
 
-	if _, ok := primary.(*provider.VidNest); !ok {
-		fallbacks = append(fallbacks, provider.NewVidNest())
-	}
+	// MovieBox removed: play-info endpoint returns 407 (needs app auth).
+	// FlixHQ.to removed from automatic fallback: the host routinely times out.
+	// KimCartoon is category-specific and should not satisfy normal series.
 
 	if _, ok := primary.(*provider.Soap2Day); !ok {
 		fallbacks = append(fallbacks, provider.NewSoap2Day())
-	}
-
-	if _, ok := primary.(*provider.MovieBox); !ok {
-		fallbacks = append(fallbacks, provider.NewMovieBox())
-	}
-
-	if _, ok := primary.(*provider.TBCPL); !ok {
-		fallbacks = append(fallbacks, provider.NewTBCPL("tbcpl"))
 	}
 
 	if _, ok := primary.(*provider.FlixHQWS); !ok {
 		fallbacks = append(fallbacks, provider.NewFlixHQWS("flixhq.ws"))
 	}
 
-	if _, ok := primary.(*provider.FlixHQ); !ok {
-		fallbacks = append(fallbacks, provider.NewFlixHQ("flixhq.to"))
-	}
-
-	if _, ok := primary.(*provider.KimCartoon); !ok {
-		fallbacks = append(fallbacks, provider.NewKimCartoon("kimcartoon.com.co"))
-	}
-
 	return fallbacks
+}
+
+// tryPrimaryStream resolves a stream from the selected provider and exact
+// media/episode IDs before falling back to title search.
+func tryPrimaryStream(p provider.Provider, mediaID, episodeID string, excludeNames map[string]bool) (*media.Stream, string, error) {
+	quality := configuredQuality()
+
+	if sp, ok := p.(provider.StreamProvider); ok {
+		servers, err := p.GetServers(mediaID, episodeID)
+		if err != nil {
+			return nil, "", fmt.Errorf("getting primary servers: %w", err)
+		}
+		if len(servers) == 0 {
+			return nil, "", fmt.Errorf("no primary servers found")
+		}
+
+		ordered := orderServersWithCache(servers, configuredServer(), cachedServerName)
+		var lastErr error
+		for _, srv := range ordered {
+			if serverExcluded(excludeNames, srv.Name) {
+				continue
+			}
+
+			debugf("trying primary server: %s (ID: %s)", srv.Name, srv.ID)
+			stream, err := sp.Watch(mediaID, episodeID, srv.Name, quality)
+			if err == nil {
+				cachedServerName = srv.Name
+				return stream, srv.Name, nil
+			}
+			lastErr = err
+			debugf("primary server %s failed: %v", srv.Name, err)
+		}
+
+		if lastErr == nil {
+			lastErr = fmt.Errorf("no primary servers left to try")
+		}
+		return nil, "", lastErr
+	}
+
+	return tryPrimaryEmbedProvider(p, mediaID, episodeID, quality, excludeNames)
+}
+
+func tryPrimaryEmbedProvider(p provider.Provider, mediaID, episodeID, quality string, excludeNames map[string]bool) (*media.Stream, string, error) {
+	servers, err := p.GetServers(mediaID, episodeID)
+	if err != nil {
+		return nil, "", fmt.Errorf("getting primary servers: %w", err)
+	}
+	if len(servers) == 0 {
+		return nil, "", fmt.Errorf("no primary servers found")
+	}
+
+	ordered := orderServersWithCache(servers, configuredServer(), cachedServerName)
+	var lastErr error
+	for _, srv := range ordered {
+		if serverExcluded(excludeNames, srv.Name) {
+			continue
+		}
+
+		debugf("trying primary embed server: %s (ID: %s)", srv.Name, srv.ID)
+		embedURL, err := p.GetEmbedURL(srv.ID)
+		if err != nil {
+			lastErr = err
+			debugf("primary server %s embed failed: %v", srv.Name, err)
+			continue
+		}
+
+		ext, resolvedURL := extract.ResolveForURL(embedURL)
+		stream, err := ext.Extract(resolvedURL, quality)
+		if err != nil {
+			lastErr = err
+			debugf("primary server %s extract failed: %v", srv.Name, err)
+			continue
+		}
+
+		cachedServerName = srv.Name
+		return stream, srv.Name, nil
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no primary servers left to try")
+	}
+	return nil, "", lastErr
+}
+
+func configuredQuality() string {
+	if cfg != nil && cfg.Quality != "" {
+		return cfg.Quality
+	}
+	return "1080"
+}
+
+func configuredServer() string {
+	if cfg != nil && cfg.Provider != "" {
+		return cfg.Provider
+	}
+	return "Default"
+}
+
+func serverExcluded(excludeNames map[string]bool, name string) bool {
+	if len(excludeNames) == 0 {
+		return false
+	}
+	if excludeNames[name] {
+		return true
+	}
+	for excluded := range excludeNames {
+		if strings.EqualFold(excluded, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // tryFallbackStream attempts to resolve a stream using fallback providers.
@@ -90,10 +184,7 @@ func tryFallbackProvider(fb provider.Provider, title string, mediaType media.Med
 		return nil, fmt.Errorf("no matching result for %q", title)
 	}
 
-	quality := "1080"
-	if cfg != nil && cfg.Quality != "" {
-		quality = cfg.Quality
-	}
+	quality := configuredQuality()
 
 	var lastErr error
 	for i := range candidates {
@@ -267,7 +358,14 @@ func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 			mt = media.TV
 		}
 
-		// Use fallback providers to resolve a stream for downloads.
+		if mediaID != "" && (mt == media.Movie || episodeID != "") {
+			stream, _, err := tryPrimaryStream(primary, mediaID, episodeID, nil)
+			if err == nil {
+				return streamToResult(stream), nil
+			}
+			debugf("primary resolver failed: %v", err)
+		}
+
 		fbStream, err := tryFallbackStream(primary, title, mt, season, episode)
 		if err != nil {
 			return nil, fmt.Errorf("all providers failed: %w", err)

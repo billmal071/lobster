@@ -127,9 +127,16 @@ func runFFmpegDownload(ffmpegPath string, stream *media.Stream, title, subFile, 
 		"-y", // Overwrite output (for partial/empty files)
 	}
 
-	// Pass Referer and headers for CDNs that require them
+	// Pass request headers for CDNs that require them.
+	var headers strings.Builder
 	if stream.Referer != "" {
-		args = append(args, "-headers", "Referer: "+stream.Referer+"\r\n")
+		headers.WriteString("Referer: " + stream.Referer + "\r\n")
+	}
+	if stream.UserAgent != "" {
+		headers.WriteString("User-Agent: " + stream.UserAgent + "\r\n")
+	}
+	if headers.Len() > 0 {
+		args = append(args, "-headers", headers.String())
 	}
 
 	// If resuming, seek past already-downloaded content on the input side.

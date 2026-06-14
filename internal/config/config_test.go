@@ -12,6 +12,9 @@ func TestDefault(t *testing.T) {
 	if cfg.Player != "mpv" {
 		t.Errorf("default player = %q, want mpv", cfg.Player)
 	}
+	if cfg.Base != "tbcpl" {
+		t.Errorf("default base = %q, want tbcpl", cfg.Base)
+	}
 	if cfg.Quality != "1080" {
 		t.Errorf("default quality = %q, want 1080", cfg.Quality)
 	}
@@ -36,6 +39,10 @@ func TestValidate(t *testing.T) {
 		{"empty base", func(c *Config) { c.Base = "" }, true},
 		{"valid vlc", func(c *Config) { c.Player = "vlc" }, false},
 		{"valid upcloud", func(c *Config) { c.Provider = "UpCloud" }, false},
+		{"valid drag", func(c *Config) { c.Provider = "Drag" }, false},
+		{"valid togi", func(c *Config) { c.Provider = "Togi" }, false},
+		{"valid achilles", func(c *Config) { c.Provider = "Achilles" }, false},
+		{"valid nflix", func(c *Config) { c.Provider = "Nflix" }, false},
 		{"valid 720", func(c *Config) { c.Quality = "720" }, false},
 		{"max_concurrent_downloads 0", func(c *Config) { c.MaxConcurrentDownloads = 0 }, true},
 		{"max_concurrent_downloads 6", func(c *Config) { c.MaxConcurrentDownloads = 6 }, true},

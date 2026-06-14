@@ -28,6 +28,7 @@ const (
 	tbcplVidzeeKeyURL    = "https://core.vidzee.wtf/api-key"
 	tbcplVidzeeKeySecret = "c4a8f1d7e2b9a6c3d0f5e8a1b7c4d9e2"
 	tbcplMaxSeasons      = 30
+	tbcplStreamProbeSize = 4096
 )
 
 // TBCPL bridges the TBCPL index to the currently working 1Shows catalog and
@@ -118,6 +119,7 @@ type tbcplCatalogItem struct {
 	ReleaseDate  string  `json:"release_date"`
 	FirstAirDate string  `json:"first_air_date"`
 	VoteAverage  float64 `json:"vote_average"`
+	PosterPath   string  `json:"poster_path"`
 }
 
 func (i tbcplCatalogItem) displayTitle() string {
@@ -165,10 +167,10 @@ type tbcplDirectServer struct {
 }
 
 var tbcplDirectServers = []tbcplDirectServer{
+	{Name: "Drag", SR: "5"},
 	{Name: "Togi", SR: "0"},
 	{Name: "Achilles", SR: "3"},
 	{Name: "Nflix", SR: "4"},
-	{Name: "Drag", SR: "5"},
 }
 
 // Search uses TMDB's no-key web search endpoint for reliable title lookup.
@@ -206,6 +208,7 @@ func (t *TBCPL) GetDetails(id string) (*media.ContentDetail, error) {
 		Description: item.Overview,
 		Rating:      formatTBCPLRating(item.VoteAverage),
 		Released:    item.released(),
+		PosterURL:   tmdbPosterURL(item.PosterPath),
 	}, nil
 }
 
@@ -393,11 +396,12 @@ func (t *TBCPL) parseCatalogResponse(body []byte, fallbackMediaType string) ([]m
 		t.cacheCatalogItem(id, item)
 
 		results = append(results, media.SearchResult{
-			ID:    id,
-			Title: title,
-			Type:  mt,
-			Year:  item.year(),
-			URL:   fmt.Sprintf("%s/%s/%d", t.baseURL(), item.MediaType, item.ID),
+			ID:        id,
+			Title:     title,
+			Type:      mt,
+			Year:      item.year(),
+			URL:       fmt.Sprintf("%s/%s/%d", t.baseURL(), item.MediaType, item.ID),
+			PosterURL: tmdbPosterURL(item.PosterPath),
 		})
 	}
 
@@ -485,22 +489,66 @@ func (t *TBCPL) watchWithServer(mediaID, episodeID string, server tbcplDirectSer
 		if err != nil || streamURL == "" {
 			continue
 		}
+		if err := t.validateStreamURL(streamURL, server, resp.Headers); err != nil {
+			continue
+		}
 
 		return &media.Stream{
 			URL:       streamURL,
 			Quality:   quality,
 			Subtitles: mapTBCPLVidzeeTracks(resp.Tracks),
 			Referer:   strings.TrimRight(t.vidzeeBaseURL, "/") + "/",
+			UserAgent: vidzeeHeader(resp.Headers, "User-Agent"),
 		}, nil
 	}
 
-	return nil, fmt.Errorf("vidzee %s returned no decryptable stream URLs", server.Name)
+	return nil, fmt.Errorf("vidzee %s returned no playable stream URLs", server.Name)
+}
+
+func (t *TBCPL) validateStreamURL(streamURL string, server tbcplDirectServer, headers map[string]string) error {
+	req, err := http.NewRequest(http.MethodGet, streamURL, nil)
+	if err != nil {
+		return fmt.Errorf("creating stream probe: %w", err)
+	}
+	userAgent := vidzeeHeader(headers, "User-Agent")
+	if userAgent == "" {
+		userAgent = "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/121.0"
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "application/vnd.apple.mpegurl, application/x-mpegURL, video/*, */*")
+	req.Header.Set("Referer", strings.TrimRight(t.vidzeeBaseURL, "/")+"/")
+
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("probing Vidzee %s stream: %w", server.Name, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("probing Vidzee %s stream: status %d", server.Name, resp.StatusCode)
+	}
+
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, tbcplStreamProbeSize))
+	if err != nil {
+		return fmt.Errorf("reading Vidzee %s stream probe: %w", server.Name, err)
+	}
+	probe := strings.TrimSpace(string(body))
+	if strings.HasPrefix(probe, "#EXTM3U") ||
+		strings.Contains(contentType, "mpegurl") ||
+		strings.Contains(contentType, "application/vnd.apple") ||
+		strings.Contains(contentType, "video/") {
+		return nil
+	}
+
+	return fmt.Errorf("probing Vidzee %s stream: non-media response", server.Name)
 }
 
 type tbcplVidzeeResponse struct {
-	Error  string              `json:"error"`
-	URL    []tbcplVidzeeSource `json:"url"`
-	Tracks []tbcplVidzeeTrack  `json:"tracks"`
+	Error   string              `json:"error"`
+	Headers map[string]string   `json:"headers"`
+	URL     []tbcplVidzeeSource `json:"url"`
+	Tracks  []tbcplVidzeeTrack  `json:"tracks"`
 }
 
 type tbcplVidzeeSource struct {
@@ -532,6 +580,15 @@ func mapTBCPLVidzeeTracks(tracks []tbcplVidzeeTrack) []media.Subtitle {
 		})
 	}
 	return subs
+}
+
+func vidzeeHeader(headers map[string]string, name string) string {
+	for key, value := range headers {
+		if strings.EqualFold(key, name) {
+			return value
+		}
+	}
+	return ""
 }
 
 func (t *TBCPL) fetchVidzeeKey() (string, error) {

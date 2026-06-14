@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
-	"math"
 
 	"lobster/internal/media"
 )
@@ -32,12 +32,12 @@ func (m *MPV) Available() bool {
 	return err == nil
 }
 
-// Play launches mpv with the given stream and returns the final playback state.
-func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFiles []string) (PlayResult, error) {
+// Play launches mpv with the given stream and returns the final playback position.
+func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFiles []string) (float64, error) {
 	// Create randomized IPC path (Unix socket on Unix, named pipe on Windows)
 	ipc, err := newIPCSocket()
 	if err != nil {
-		return PlayResult{}, err
+		return 0, err
 	}
 	defer ipc.cleanup()
 
@@ -50,10 +50,20 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 		"--network-timeout=15",
 	}
 
+	var headerFields []string
+	var lavfHeaders strings.Builder
 	if stream.Referer != "" {
-		args = append(args, "--http-header-fields=Referer: "+stream.Referer)
-		// Propagate referer to ffmpeg's HLS demuxer for segment requests
-		args = append(args, "--demuxer-lavf-o=headers=Referer: "+stream.Referer+"\r\n")
+		headerFields = append(headerFields, "Referer: "+stream.Referer)
+		lavfHeaders.WriteString("Referer: " + stream.Referer + "\r\n")
+	}
+	if stream.UserAgent != "" {
+		headerFields = append(headerFields, "User-Agent: "+stream.UserAgent)
+		lavfHeaders.WriteString("User-Agent: " + stream.UserAgent + "\r\n")
+	}
+	if len(headerFields) > 0 {
+		args = append(args, "--http-header-fields="+strings.Join(headerFields, ","))
+		// Propagate headers to ffmpeg's HLS demuxer for segment requests.
+		args = append(args, "--demuxer-lavf-o=headers="+lavfHeaders.String())
 		args = append(args, "--tls-verify=no")
 	}
 
@@ -80,78 +90,61 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 	cmd.Stdin = os.Stdin
 
 	if err := cmd.Start(); err != nil {
-		return PlayResult{}, fmt.Errorf("starting mpv: %w", err)
+		return 0, fmt.Errorf("starting mpv: %w", err)
 	}
 
-	// Track position and duration from IPC in a goroutine, using atomics to avoid data race.
-	// The ipcDone channel is used to synchronize the goroutine before reading final values.
-	var posBits, durBits atomic.Uint64
-	ipcDone := make(chan struct{})
+	// Track position from IPC in a goroutine, using atomic to avoid data race
+	var posBits atomic.Uint64
 	startTime := time.Now()
 	go func() {
-		defer close(ipcDone)
-		pos, dur := m.trackPlayback(ipc)
+		pos := m.trackPosition(ipc)
 		posBits.Store(math.Float64bits(pos))
-		durBits.Store(math.Float64bits(dur))
 	}()
 
 	waitErr := cmd.Wait()
-	// Wait for the IPC collector to finish so the final position/duration
-	// values are fully written before we read them.
-	<-ipcDone
 	elapsed := time.Since(startTime)
-	result := PlayResult{
-		Position: math.Float64frombits(posBits.Load()),
-		Duration: math.Float64frombits(durBits.Load()),
-	}
+	lastPos := math.Float64frombits(posBits.Load())
 
 	if waitErr != nil {
 		// mpv returns non-zero on user quit (code 4), which is normal
 		if exitErr, ok := waitErr.(*exec.ExitError); ok && exitErr.ExitCode() == 4 {
-			return result, nil
+			return lastPos, nil
 		}
-		return result, fmt.Errorf("mpv exited: %w", waitErr)
+		return lastPos, fmt.Errorf("mpv exited: %w", waitErr)
 	}
 
 	// If mpv exited almost instantly with no playback progress,
 	// the stream likely failed to load (e.g., CDN unreachable).
-	if result.Position == 0 && elapsed < 5*time.Second {
-		return PlayResult{}, fmt.Errorf("stream failed to load (mpv exited in %s with no playback)", elapsed.Round(time.Millisecond))
+	if lastPos == 0 && elapsed < 5*time.Second {
+		return 0, fmt.Errorf("stream failed to load (mpv exited in %s with no playback)", elapsed.Round(time.Millisecond))
 	}
 
-	return result, nil
+	return lastPos, nil
 }
 
-// trackPlayback polls mpv's IPC for the current playback position and duration.
-func (m *MPV) trackPlayback(ipc *ipcSocket) (float64, float64) {
-	var lastPos, lastDur float64
+// trackPosition polls mpv's IPC for the current playback position.
+func (m *MPV) trackPosition(ipc *ipcSocket) float64 {
+	var lastPos float64
 
 	// Wait for IPC to become available
 	time.Sleep(500 * time.Millisecond)
 
 	conn, err := ipc.dial()
 	if err != nil {
-		return 0, 0
+		return 0
 	}
 	defer conn.Close()
 
 	scanner := bufio.NewScanner(conn)
 
-	// Observe time-pos and duration properties
-	for i, prop := range []string{"time-pos", "duration"} {
-		cmd := map[string]interface{}{
-			"command":    []interface{}{"observe_property", i + 1, prop},
-			"request_id": 100 + i,
-		}
-		data, _ := json.Marshal(cmd)
-		data = append(data, '\n')
-		if _, err := conn.Write(data); err != nil {
-			// IPC write failed — mpv may have exited early or the socket
-			// is broken. Return zero state so the caller can detect this.
-			fmt.Fprintf(os.Stderr, "mpv ipc: failed to observe %s: %v\n", prop, err)
-			return 0, 0
-		}
+	// Start observing time-pos property
+	cmd := map[string]interface{}{
+		"command":    []interface{}{"observe_property", 1, "time-pos"},
+		"request_id": 100,
 	}
+	data, _ := json.Marshal(cmd)
+	data = append(data, '\n')
+	conn.Write(data)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -166,12 +159,9 @@ func (m *MPV) trackPlayback(ipc *ipcSocket) (float64, float64) {
 		if event.Name == "time-pos" && event.Data > 0 {
 			lastPos = event.Data
 		}
-		if event.Name == "duration" && event.Data > 0 {
-			lastDur = event.Data
-		}
 	}
 
-	return lastPos, lastDur
+	return lastPos
 }
 
 // formatDuration formats seconds as HH:MM:SS.

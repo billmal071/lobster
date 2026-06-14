@@ -2,9 +2,11 @@ package extract
 
 import (
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"lobster/internal/httputil"
 	"lobster/internal/media"
@@ -23,7 +25,7 @@ func NewVidWish() *VidWishExtractor {
 	}
 }
 
-var vidwishSourceRe = regexp.MustCompile(`"file"\s*:\s*"(https?://[^"]+\.m3u8[^"]*)"`)
+var vidwishSourceRe = regexp.MustCompile(`(?is)['"]file['"]\s*:\s*['"]([^'"]+\.m3u8[^'"]*)['"]`)
 
 // Extract resolves a vidwish.live player URL into a stream.
 func (v *VidWishExtractor) Extract(embedURL string, preferredQuality string) (*media.Stream, error) {
@@ -49,14 +51,36 @@ func (v *VidWishExtractor) Extract(embedURL string, preferredQuality string) (*m
 		return nil, fmt.Errorf("reading page: %w", err)
 	}
 	html := string(body)
+	if detectVidWishUnavailable(html) {
+		return nil, fmt.Errorf("vidwish player is unavailable: host is stopped or not bound")
+	}
 
-	match := vidwishSourceRe.FindStringSubmatch(html)
-	if len(match) < 2 {
+	streamURL := extractVidWishM3U8(html)
+	if streamURL == "" {
 		return nil, fmt.Errorf("no m3u8 URL found in player page")
 	}
 
 	return &media.Stream{
-		URL:     match[1],
+		URL:     streamURL,
 		Quality: preferredQuality,
+		Referer: embedURL,
 	}, nil
+}
+
+func detectVidWishUnavailable(page string) bool {
+	page = strings.ToLower(page)
+	return strings.Contains(page, "website not found") ||
+		strings.Contains(page, "domain is not bound") ||
+		strings.Contains(page, "website has been stopped") ||
+		strings.Contains(page, "aapanel")
+}
+
+func extractVidWishM3U8(page string) string {
+	match := vidwishSourceRe.FindStringSubmatch(page)
+	if len(match) < 2 {
+		return ""
+	}
+	streamURL := html.UnescapeString(match[1])
+	streamURL = strings.ReplaceAll(streamURL, `\/`, `/`)
+	return strings.TrimSpace(streamURL)
 }

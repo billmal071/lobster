@@ -7,44 +7,34 @@ import (
 )
 
 // newProvider returns the configured content provider.
-// Default is MovieBox (direct API, no scraping required).
-// Legacy providers (FlixHQ, Soap2Day) are available via base config
-// and are always included as fallbacks.
-//
-// For providers that use a base domain, the domain is checked for health
-// at startup. If unreachable, known alternative domains are tried in order
-// (config overrides first, then built-in fallbacks).
+// Default is TBCPL. Legacy/category providers are available via base config
+// and selected stream-capable providers are included as fallbacks.
 func newProvider() provider.Provider {
 	if cfg.APIURL != "" {
 		return provider.NewConsumet(cfg.APIURL)
 	}
 
-	overrides := cfg.DomainOverrides
-
+	if strings.Contains(cfg.Base, "aniwatch") {
+		return provider.NewAniWatch(cfg.Base)
+	}
 	if strings.Contains(cfg.Base, "soap2day") {
 		return provider.NewSoap2Day()
 	}
 	if strings.Contains(cfg.Base, "kimcartoon") {
-		base := provider.ResolveDomain(cfg.Base, "kimcartoon", overrides)
+		base := provider.ResolveDomain(cfg.Base, "kimcartoon", cfg.DomainOverrides)
 		return provider.NewKimCartoon(base)
 	}
 	if strings.Contains(cfg.Base, "flixhq.ws") {
-		base := provider.ResolveDomain(cfg.Base, "flixhqws", overrides)
+		base := provider.ResolveDomain(cfg.Base, "flixhqws", cfg.DomainOverrides)
 		return provider.NewFlixHQWS(base)
 	}
 	if strings.Contains(cfg.Base, "flixhq") {
-		base := provider.ResolveDomain(cfg.Base, "flixhq", overrides)
+		base := provider.ResolveDomain(cfg.Base, "flixhq", cfg.DomainOverrides)
 		return provider.NewFlixHQ(base)
 	}
 	if strings.Contains(cfg.Base, "tbcpl") || strings.Contains(cfg.Base, "1shows") {
 		return provider.NewTBCPL(cfg.Base)
 	}
-	if strings.Contains(cfg.Base, "vidnest") {
-		return provider.NewVidNest()
-	}
-	if strings.Contains(cfg.Base, "vaplayer") {
-		return provider.NewVaPlayer()
-	}
-	// Default: MovieBox
-	return provider.NewMovieBox()
+	// Default: TBCPL (TMDB-backed search, Vidzee streaming)
+	return provider.NewTBCPL("tbcpl")
 }

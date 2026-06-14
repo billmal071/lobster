@@ -280,17 +280,9 @@ type mbSearchItem struct {
 // Metadata is extracted from search results instead.
 
 type mbPlayInfoResponse struct {
-	HLS         []mbHLSEntry      `json:"hls"`
-	Streams     []mbStreamEntry   `json:"streams"`
-	Downloads   []mbDownloadEntry `json:"downloads"`
-	HasResource bool              `json:"hasResource"`
-}
-
-type mbDownloadEntry struct {
-	ID         string `json:"id"`
-	URL        string `json:"url"`
-	Resolution int    `json:"resolution"`
-	Size       int64  `json:"size"`
+	HLS         []mbHLSEntry    `json:"hls"`
+	Streams     []mbStreamEntry `json:"streams"`
+	HasResource bool            `json:"hasResource"`
 }
 
 type mbHLSEntry struct {
@@ -354,13 +346,13 @@ func (m *MovieBox) Search(query string) ([]media.SearchResult, error) {
 			m.mu.Unlock()
 
 			results = append(results, media.SearchResult{
-				ID:       item.SubjectID,
-				Title:    item.Title,
-				Type:     mt,
-				Year:     year,
-				Duration: item.Duration,
-				Seasons:  item.SeNum,
-				Poster:   item.Cover.URL,
+				ID:        item.SubjectID,
+				Title:     item.Title,
+				Type:      mt,
+				Year:      year,
+				Duration:  item.Duration,
+				Seasons:   item.SeNum,
+				PosterURL: item.Cover.URL,
 			})
 		}
 	}
@@ -510,12 +502,13 @@ func (m *MovieBox) fetchTabContent(tabID string) ([]media.SearchResult, error) {
 			year = item.ReleaseDate[:4]
 		}
 		results = append(results, media.SearchResult{
-			ID:       item.SubjectID,
-			Title:    item.Title,
-			Type:     mediaTypeFromSubjectType(item.SubjectType),
-			Year:     year,
-			Duration: item.Duration,
-			Seasons:  item.SeNum,
+			ID:        item.SubjectID,
+			Title:     item.Title,
+			Type:      mediaTypeFromSubjectType(item.SubjectType),
+			Year:      year,
+			Duration:  item.Duration,
+			Seasons:   item.SeNum,
+			PosterURL: item.Cover.URL,
 		})
 	}
 

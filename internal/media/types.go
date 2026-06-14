@@ -22,15 +22,15 @@ func (m MediaType) String() string {
 
 // SearchResult represents a single search result from a provider.
 type SearchResult struct {
-	ID       string    // Provider-specific ID (e.g., "movie/free-the-exorcist-hd-75043")
-	Title    string    // Display title
-	Type     MediaType // Movie or TV
-	Year     string    // Release year
-	Duration string    // Duration string (e.g., "121m" for movies, "EPS 18" for TV)
-	Seasons  int       // Number of seasons (TV only)
-	Episodes int       // Total episodes (TV only)
-	URL      string    // Full URL to the content page
-	Poster   string    // Poster image URL (e.g., TMDB poster path)
+	ID        string    // Provider-specific ID (e.g., "movie/free-the-exorcist-hd-75043")
+	Title     string    // Display title
+	Type      MediaType // Movie or TV
+	Year      string    // Release year
+	Duration  string    // Duration string (e.g., "121m" for movies, "EPS 18" for TV)
+	Seasons   int       // Number of seasons (TV only)
+	Episodes  int       // Total episodes (TV only)
+	URL       string    // Full URL to the content page
+	PosterURL string    // Poster/cover image URL, when available
 }
 
 // ContentDetail contains detailed metadata fetched from a content's detail page.
@@ -42,6 +42,7 @@ type ContentDetail struct {
 	Released    string   // Release date
 	Country     string   // Country of origin
 	Casts       []string // Cast members
+	PosterURL   string   // Poster/cover image URL, when available
 }
 
 // Season represents a TV show season.
@@ -69,6 +70,7 @@ type Stream struct {
 	Subtitles []Subtitle // Available subtitle tracks
 	Quality   string     // Resolved quality
 	Referer   string     // Referer header required by the CDN (if any)
+	UserAgent string     // User-Agent header required by the CDN (if any)
 }
 
 // Subtitle represents a subtitle track.

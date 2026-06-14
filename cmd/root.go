@@ -52,7 +52,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&flagDownload, "download", "d", "", "Download to path instead of playing (default: config download_dir)")
 	rootCmd.PersistentFlags().StringVarP(&flagLanguage, "language", "l", "", "Subtitle language (default: english)")
 	rootCmd.PersistentFlags().BoolVarP(&flagNoSubs, "no-subs", "n", false, "Disable subtitles")
-	rootCmd.PersistentFlags().StringVarP(&flagProvider, "provider", "p", "", "Server provider: Vidcloud | UpCloud")
+	rootCmd.PersistentFlags().StringVarP(&flagProvider, "provider", "p", "", "Server provider: Default | Drag | Togi | Achilles | Nflix | Vidcloud | UpCloud")
 	rootCmd.PersistentFlags().StringVarP(&flagQuality, "quality", "q", "", "Video quality: 360 | 480 | 720 | 1080")
 	rootCmd.PersistentFlags().StringVar(&flagPlayer, "player", "", "Media player: mpv | vlc | iina | celluloid")
 	rootCmd.PersistentFlags().BoolVarP(&flagContinue, "continue", "c", false, "Auto-resume from history")

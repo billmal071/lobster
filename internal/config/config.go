@@ -14,34 +14,34 @@ import (
 
 // Config holds all application configuration.
 type Config struct {
-	Base         string `toml:"base"`
-	APIURL       string `toml:"api_url"`
-	Player       string `toml:"player"`
-	Provider     string `toml:"provider"`
-	SubsLanguage string `toml:"subs_language"`
-	Quality      string `toml:"quality"`
-	History      bool   `toml:"history"`
-	AutoNext     bool   `toml:"auto_next"`
-	DownloadDir  string `toml:"download_dir"`
-	OSAPIKey     string `toml:"opensubtitles_api_key"`
-	SubDLAPIKey  string `toml:"subdl_api_key"`
-	Debug                  bool              `toml:"debug"`
-	MaxConcurrentDownloads int               `toml:"max_concurrent_downloads"`
-	StallTimeout           int               `toml:"stall_timeout"`  // seconds before a stalled download is recovered
-	MaxRetries             int               `toml:"max_retries"`    // retry count for segment/file downloads
+	Base                   string `toml:"base"`
+	APIURL                 string `toml:"api_url"`
+	Player                 string `toml:"player"`
+	Provider               string `toml:"provider"`
+	SubsLanguage           string `toml:"subs_language"`
+	Quality                string `toml:"quality"`
+	History                bool   `toml:"history"`
+	AutoNext               bool   `toml:"auto_next"`
+	DownloadDir            string `toml:"download_dir"`
+	OSAPIKey               string `toml:"opensubtitles_api_key"`
+	SubDLAPIKey            string `toml:"subdl_api_key"`
+	Debug                  bool   `toml:"debug"`
+	MaxConcurrentDownloads int    `toml:"max_concurrent_downloads"`
+	StallTimeout           int    `toml:"stall_timeout"` // seconds before a stalled download is recovered
+	MaxRetries             int    `toml:"max_retries"`    // retry count for segment/file downloads
 	DomainOverrides        map[string][]string `toml:"domain_overrides"` // provider name -> fallback domains
 }
 
 // Default returns the default configuration.
 func Default() *Config {
 	return &Config{
-		Base:         "flixhq.ws",
-		Player:       "mpv",
-		Provider:     "Default",
-		SubsLanguage: "english",
-		Quality:      "1080",
-		History:      true,
-		AutoNext:     true,
+		Base:                   "tbcpl",
+		Player:                 "mpv",
+		Provider:               "Default",
+		SubsLanguage:           "english",
+		Quality:                "1080",
+		History:                true,
+		AutoNext:               true,
 		DownloadDir:            "~/Videos/lobster",
 		Debug:                  false,
 		MaxConcurrentDownloads: 2,
@@ -102,9 +102,10 @@ func (c *Config) Validate() error {
 
 	validProviders := map[string]bool{
 		"vidcloud": true, "upcloud": true, "default": true,
+		"drag": true, "togi": true, "achilles": true, "nflix": true,
 	}
 	if !validProviders[strings.ToLower(c.Provider)] {
-		return fmt.Errorf("unsupported provider %q (valid: Default, Vidcloud, UpCloud)", c.Provider)
+		return fmt.Errorf("unsupported provider %q (valid: Default, Vidcloud, UpCloud, Drag, Togi, Achilles, Nflix)", c.Provider)
 	}
 
 	validQualities := map[string]bool{

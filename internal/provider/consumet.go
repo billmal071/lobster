@@ -69,12 +69,12 @@ func (c *Consumet) Search(query string) ([]media.SearchResult, error) {
 			mt = media.TV
 		}
 		results = append(results, media.SearchResult{
-			ID:      r.ID,
-			Title:   r.Title,
-			Type:    mt,
-			Year:    r.ReleaseDate,
-			Seasons: r.Seasons,
-			Poster:  r.Image,
+			ID:        r.ID,
+			Title:     r.Title,
+			Type:      mt,
+			Year:      r.ReleaseDate,
+			Seasons:   r.Seasons,
+			PosterURL: r.Image,
 		})
 	}
 

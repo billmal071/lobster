@@ -142,10 +142,15 @@ func batchDownload(p provider.Provider, selected media.SearchResult, episodes []
 	return nil
 }
 
-// downloadSingleEpisode resolves and downloads one episode via fallback providers.
+// downloadSingleEpisode resolves and downloads one episode via the selected
+// provider first, then fallback providers.
 func downloadSingleEpisode(p provider.Provider, selected media.SearchResult, ep media.Episode, seasonNum int, outputDir, title string) error {
-	debugf("resolving stream via fallback providers for %s", title)
-	stream, err := tryFallbackStream(p, selected.Title, selected.Type, seasonNum, ep.Number)
+	debugf("resolving stream via primary provider for %s", title)
+	stream, _, err := tryPrimaryStream(p, selected.ID, ep.ID, nil)
+	if err != nil {
+		debugf("primary provider failed: %v", err)
+		stream, err = tryFallbackStream(p, selected.Title, selected.Type, seasonNum, ep.Number)
+	}
 	if err != nil {
 		return fmt.Errorf("all providers failed: %w", err)
 	}
