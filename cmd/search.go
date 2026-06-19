@@ -150,7 +150,7 @@ func printDetail(r media.SearchResult, d *media.ContentDetail) {
 	if posterCols < 15 {
 		posterCols = 15
 	}
-	posterRows := posterCols * 7 / 10
+	posterRows := posterCols * 3 / 4
 
 	textWidth := termWidth - posterCols - 8
 	if r.Poster == "" {

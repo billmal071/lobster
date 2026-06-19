@@ -1,10 +1,12 @@
 // Package poster downloads and renders poster images for terminal display.
-// Uses chafa for high-quality rendering when available, falls back to
-// half-block ANSI art with bicubic downscaling.
+// Uses iTerm2 inline image protocol for pixel-perfect rendering on supported
+// terminals (Warp, iTerm2, WezTerm, mintty), falls back to chafa or
+// half-block ANSI art.
 package poster
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"image"
 	"image/draw"
@@ -15,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -22,8 +25,13 @@ import (
 	xdraw "golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
 
+	"github.com/mattn/go-runewidth"
+
 	"lobster/internal/httputil"
 )
+
+// ansiRe matches both CSI sequences (\x1b[...X) and OSC sequences (\x1b]...\a or \x1b]...\x1b\\).
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\a\x1b]*(?:\a|\x1b\\)`)
 
 var (
 	client = &http.Client{
@@ -34,8 +42,12 @@ var (
 	cacheMu sync.RWMutex
 
 	// chafa detection (cached at startup)
-	chafaPath  string
-	chafaOnce  sync.Once
+	chafaPath string
+	chafaOnce sync.Once
+
+	// iTerm2 inline image support detection (cached at startup)
+	inlineImageSupported bool
+	inlineImageOnce      sync.Once
 )
 
 func findChafa() {
@@ -46,15 +58,49 @@ func findChafa() {
 	})
 }
 
-// Render downloads the poster at the given URL and returns a line-based
-// rendered string for side-by-side layouts.
-// width and height are in terminal columns and rows.
-func Render(url string, width, height int) string {
+// detectInlineImage checks if the terminal supports iTerm2 inline image protocol.
+func detectInlineImage() {
+	inlineImageOnce.Do(func() {
+		tp := os.Getenv("TERM_PROGRAM")
+		switch tp {
+		case "WarpTerminal", "iTerm.app", "WezTerm", "mintty":
+			inlineImageSupported = true
+		}
+	})
+}
+
+// IsInlineImage returns true if the terminal supports pixel-perfect inline images.
+// When true, the TUI should stack poster above text instead of side-by-side,
+// since the inline image escape sequence can't be joined horizontally by lipgloss.
+func IsInlineImage() bool {
+	detectInlineImage()
+	return inlineImageSupported
+}
+
+// upgradeImageURL attempts to get a higher resolution version of the poster.
+// For TMDB URLs, replaces small sizes with w780.
+func upgradeImageURL(url string) string {
+	for _, small := range []string{"/w92/", "/w154/", "/w185/", "/w300/", "/w342/", "/w500/"} {
+		if strings.Contains(url, small) {
+			return strings.Replace(url, small, "/w780/", 1)
+		}
+	}
+	return url
+}
+
+// render is the shared implementation for Render and RenderTUI.
+func render(url string, width, height int, allowInline bool) string {
 	if url == "" || width < 4 || height < 4 {
 		return ""
 	}
 
-	key := fmt.Sprintf("%s:%d:%d", url, width, height)
+	url = upgradeImageURL(url)
+
+	prefix := "tui:"
+	if allowInline {
+		prefix = "cli:"
+	}
+	key := fmt.Sprintf("%s%s:%d:%d", prefix, url, width, height)
 	cacheMu.RLock()
 	if cached, ok := cache[key]; ok {
 		cacheMu.RUnlock()
@@ -69,10 +115,24 @@ func Render(url string, width, height int) string {
 	defer cleanup()
 
 	var result string
-	findChafa()
-	if chafaPath != "" {
-		result = renderChafa(imgPath, width, height)
+
+	// Try iTerm2 inline image protocol first (pixel-perfect rendering).
+	if allowInline {
+		detectInlineImage()
+		if inlineImageSupported {
+			result = renderInlineImage(imgPath, width, height)
+		}
 	}
+
+	// Fall back to chafa symbol art.
+	if result == "" {
+		findChafa()
+		if chafaPath != "" {
+			result = renderChafa(imgPath, width, height)
+		}
+	}
+
+	// Last resort: half-block ANSI art.
 	if result == "" {
 		img, err := decodeFile(imgPath)
 		if err != nil {
@@ -88,8 +148,21 @@ func Render(url string, width, height int) string {
 	return result
 }
 
+// Render downloads the poster at the given URL and returns a line-based
+// rendered string. Tries iTerm2 inline images, then chafa, then half-block.
+// width and height are in terminal columns and rows.
+func Render(url string, width, height int) string {
+	return render(url, width, height, true)
+}
+
+// RenderTUI renders a poster using only character-art renderers (chafa or
+// half-block). Inline image escape sequences are skipped because lipgloss
+// cannot measure their width for horizontal layout.
+func RenderTUI(url string, width, height int) string {
+	return render(url, width, height, false)
+}
+
 // RenderSideBySide renders a poster next to text content.
-// Uses chafa when available for best quality, otherwise half-block art.
 func RenderSideBySide(url string, posterCols, posterRows int, textLines []string) string {
 	if url == "" || posterCols < 4 || posterRows < 4 {
 		return strings.Join(textLines, "\n")
@@ -102,6 +175,38 @@ func RenderSideBySide(url string, posterCols, posterRows int, textLines []string
 
 	posterLines := strings.Split(posterStr, "\n")
 	return joinSideBySide(posterLines, posterCols, textLines, 3)
+}
+
+// renderInlineImage renders a poster using the iTerm2 inline image protocol.
+// This sends the raw image data to the terminal which renders it at full
+// pixel resolution within the specified cell dimensions.
+func renderInlineImage(imagePath string, cols, rows int) string {
+	data, err := os.ReadFile(imagePath)
+	if err != nil {
+		return ""
+	}
+
+	b64 := base64.StdEncoding.EncodeToString(data)
+
+	// iTerm2 inline image: \033]1337;File=inline=1;width=Ncols;height=Nrows;preserveAspectRatio=1:<base64>\a
+	// Each line of output occupies one row. The image escape spans multiple rows
+	// but is a single sequence. We embed it as one line — the terminal handles
+	// the vertical space. Remaining rows are filled with empty lines so that
+	// side-by-side layout works correctly.
+	pad := strings.Repeat(" ", cols)
+
+	var sb strings.Builder
+	// First line: image escape + padding so lipgloss measures it as cols wide.
+	fmt.Fprintf(&sb, "\x1b]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1:%s\a%s",
+		cols, rows, b64, pad)
+
+	// Remaining rows: spaces so side-by-side join reserves the poster column.
+	for i := 1; i < rows; i++ {
+		sb.WriteByte('\n')
+		sb.WriteString(pad)
+	}
+
+	return sb.String()
 }
 
 // downloadToTemp downloads an image URL to a temp file and returns its path
@@ -162,15 +267,16 @@ func decodeFile(path string) (image.Image, error) {
 }
 
 // renderChafa uses the chafa CLI for high-quality terminal image rendering.
-// Uses maximum quality settings: perceptual color space, dithering, and full work level.
 func renderChafa(imagePath string, cols, rows int) string {
 	args := []string{
 		imagePath,
 		"--size", fmt.Sprintf("%dx%d", cols, rows),
 		"--animate", "off",
 		"--format", "symbols",
+		"--symbols", "sextant+half+block",
+		"--colors", "full",
 		"--color-space", "din99d",
-		"--dither", "diffusion",
+		"--color-extractor", "median",
 		"--work", "9",
 		"--optimize", "0",
 	}
@@ -185,14 +291,19 @@ func renderChafa(imagePath string, cols, rows int) string {
 	return strings.TrimRight(string(out), "\n")
 }
 
+// visualWidth returns the visible character count of a string, stripping ANSI escapes.
+func visualWidth(s string) int {
+	return runewidth.StringWidth(ansiRe.ReplaceAllString(s, ""))
+}
+
 // joinSideBySide joins poster lines and text lines horizontally.
+// Accounts for ANSI escape sequences when aligning columns.
 func joinSideBySide(posterLines []string, posterWidth int, textLines []string, gap int) string {
 	maxLines := len(posterLines)
 	if len(textLines) > maxLines {
 		maxLines = len(textLines)
 	}
 
-	pad := strings.Repeat(" ", posterWidth)
 	gapStr := strings.Repeat(" ", gap)
 
 	var sb strings.Builder
@@ -200,11 +311,17 @@ func joinSideBySide(posterLines []string, posterWidth int, textLines []string, g
 		if i > 0 {
 			sb.WriteByte('\n')
 		}
-		pl := pad
 		if i < len(posterLines) {
-			pl = posterLines[i]
+			pl := posterLines[i]
+			sb.WriteString(pl)
+			// Pad to posterWidth based on visual width, not byte length
+			vw := visualWidth(pl)
+			if vw < posterWidth {
+				sb.WriteString(strings.Repeat(" ", posterWidth-vw))
+			}
+		} else {
+			sb.WriteString(strings.Repeat(" ", posterWidth))
 		}
-		sb.WriteString(pl)
 		sb.WriteString(gapStr)
 		if i < len(textLines) {
 			sb.WriteString(textLines[i])

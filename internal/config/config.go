@@ -35,7 +35,7 @@ type Config struct {
 // Default returns the default configuration.
 func Default() *Config {
 	return &Config{
-		Base:         "flixhq.ws",
+		Base:         "moviebox",
 		Player:       "mpv",
 		Provider:     "Default",
 		SubsLanguage: "english",
