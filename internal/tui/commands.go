@@ -194,7 +194,7 @@ func queueSeasonCmd(mgr *dlmanager.Manager, downloads []*store.Download) tea.Cmd
 // fetchPosterCmd fetches and renders a poster image for the detail pane.
 func fetchPosterCmd(id, url string, width, height int) tea.Cmd {
 	return func() tea.Msg {
-		rendered := poster.Render(url, width, height)
+		rendered := poster.RenderTUI(url, width, height)
 		return posterFetchedMsg{id: id, poster: rendered}
 	}
 }
