@@ -579,7 +579,7 @@ func (m AppModel) posterSize() (cols, rows int) {
 	if cols < 15 {
 		cols = 15
 	}
-	rows = cols * 7 / 10
+	rows = cols * 3 / 4
 	if rows < 6 {
 		rows = 6
 	}
