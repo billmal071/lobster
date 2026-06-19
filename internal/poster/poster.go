@@ -25,10 +25,13 @@ import (
 	xdraw "golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
 
+	"github.com/mattn/go-runewidth"
+
 	"lobster/internal/httputil"
 )
 
-var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+// ansiRe matches both CSI sequences (\x1b[...X) and OSC sequences (\x1b]...\a or \x1b]...\x1b\\).
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\a\x1b]*(?:\a|\x1b\\)`)
 
 var (
 	client = &http.Client{
@@ -85,17 +88,19 @@ func upgradeImageURL(url string) string {
 	return url
 }
 
-// Render downloads the poster at the given URL and returns a line-based
-// rendered string for side-by-side layouts.
-// width and height are in terminal columns and rows.
-func Render(url string, width, height int) string {
+// render is the shared implementation for Render and RenderTUI.
+func render(url string, width, height int, allowInline bool) string {
 	if url == "" || width < 4 || height < 4 {
 		return ""
 	}
 
 	url = upgradeImageURL(url)
 
-	key := fmt.Sprintf("%s:%d:%d", url, width, height)
+	prefix := "tui:"
+	if allowInline {
+		prefix = "cli:"
+	}
+	key := fmt.Sprintf("%s%s:%d:%d", prefix, url, width, height)
 	cacheMu.RLock()
 	if cached, ok := cache[key]; ok {
 		cacheMu.RUnlock()
@@ -112,9 +117,11 @@ func Render(url string, width, height int) string {
 	var result string
 
 	// Try iTerm2 inline image protocol first (pixel-perfect rendering).
-	detectInlineImage()
-	if inlineImageSupported {
-		result = renderInlineImage(imgPath, width, height)
+	if allowInline {
+		detectInlineImage()
+		if inlineImageSupported {
+			result = renderInlineImage(imgPath, width, height)
+		}
 	}
 
 	// Fall back to chafa symbol art.
@@ -139,6 +146,20 @@ func Render(url string, width, height int) string {
 	cacheMu.Unlock()
 
 	return result
+}
+
+// Render downloads the poster at the given URL and returns a line-based
+// rendered string. Tries iTerm2 inline images, then chafa, then half-block.
+// width and height are in terminal columns and rows.
+func Render(url string, width, height int) string {
+	return render(url, width, height, true)
+}
+
+// RenderTUI renders a poster using only character-art renderers (chafa or
+// half-block). Inline image escape sequences are skipped because lipgloss
+// cannot measure their width for horizontal layout.
+func RenderTUI(url string, width, height int) string {
+	return render(url, width, height, false)
 }
 
 // RenderSideBySide renders a poster next to text content.
@@ -272,7 +293,7 @@ func renderChafa(imagePath string, cols, rows int) string {
 
 // visualWidth returns the visible character count of a string, stripping ANSI escapes.
 func visualWidth(s string) int {
-	return len([]rune(ansiRe.ReplaceAllString(s, "")))
+	return runewidth.StringWidth(ansiRe.ReplaceAllString(s, ""))
 }
 
 // joinSideBySide joins poster lines and text lines horizontally.
