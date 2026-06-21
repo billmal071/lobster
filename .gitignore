@@ -4,6 +4,10 @@ dist/
 .worktrees/
 branch_structure.json
 
+# Personal notes
+note.txt
+doc/
+
 # IDE/editor artifacts
 .vscode/
 .idea/
@@ -14,7 +18,3 @@ docs/superpowers/
 mpv-shot*.jpg
 
 public/fonts/
-
-# Personal notes
-note.txt
-doc/
