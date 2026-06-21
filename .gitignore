@@ -2,9 +2,6 @@ lobster
 dist/
 .worktrees/
 branch_structure.json
-temp_auto_push.bat
-temp_interactive_push.bat
-.gitignore
 
 # IDE/editor artifacts
 .vscode/
@@ -14,3 +11,5 @@ temp_interactive_push.bat
 .superpowers/
 docs/superpowers/
 mpv-shot*.jpg
+
+public/fonts/
