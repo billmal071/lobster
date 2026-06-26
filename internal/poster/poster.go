@@ -226,8 +226,8 @@ func renderInlineImage(imagePath string, cols, rows int) string {
 
 	var sb strings.Builder
 	// First line: image escape + padding so lipgloss measures it as cols wide.
-	fmt.Fprintf(&sb, "\x1b]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1:%s\a%s",
-		cols, rows, b64, pad)
+	sb.WriteString(inlineImageEscape(cols, rows, b64))
+	sb.WriteString(pad)
 
 	// Remaining rows: spaces so side-by-side join reserves the poster column.
 	for i := 1; i < rows; i++ {

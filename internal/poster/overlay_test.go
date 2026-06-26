@@ -1,6 +1,13 @@
 package poster
 
-import "testing"
+import (
+	"encoding/base64"
+	"image"
+	"image/png"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestBoxDims(t *testing.T) {
 	cases := []struct {
@@ -23,5 +30,50 @@ func TestBoxDims(t *testing.T) {
 					c.bandCols, c.imgW, c.imgH, cols, rows, c.wantCols, c.wantRows)
 			}
 		})
+	}
+}
+
+func TestInlineImageEscape(t *testing.T) {
+	got := inlineImageEscape(10, 8, "QUJD")
+	want := "\x1b]1337;File=inline=1;width=10;height=8;preserveAspectRatio=1:QUJD\a"
+	if got != want {
+		t.Fatalf("inlineImageEscape=%q want %q", got, want)
+	}
+}
+
+func TestPositionedImage(t *testing.T) {
+	got := PositionedImage(4, 3, 10, 8, "QUJD")
+	want := "\x1b7" + "\x1b[4;3H" +
+		"\x1b]1337;File=inline=1;width=10;height=8;preserveAspectRatio=1:QUJD\a" +
+		"\x1b8"
+	if got != want {
+		t.Fatalf("PositionedImage=%q want %q", got, want)
+	}
+}
+
+func TestInlineImageData(t *testing.T) {
+	// 3x5 PNG written to a temp file.
+	dir := t.TempDir()
+	p := filepath.Join(dir, "x.png")
+	img := image.NewRGBA(image.Rect(0, 0, 3, 5))
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(f, img); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	b64, w, h, err := InlineImageData(p)
+	if err != nil {
+		t.Fatalf("InlineImageData err: %v", err)
+	}
+	if w != 3 || h != 5 {
+		t.Fatalf("dims=(%d,%d) want (3,5)", w, h)
+	}
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil || len(raw) == 0 {
+		t.Fatalf("b64 did not decode: %v len=%d", err, len(raw))
 	}
 }
