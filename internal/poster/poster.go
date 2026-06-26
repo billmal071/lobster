@@ -30,7 +30,7 @@ import (
 	"lobster/internal/httputil"
 )
 
-// ansiRe matches both CSI sequences (\x1b[...X) and OSC sequences (\x1b]...\a or \x1b]...\x1b\\).
+// ansiRe matches CSI sequences (\x1b[...X) and OSC sequences (\x1b]...\a or \x1b]...\x1b\\).
 var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\a\x1b]*(?:\a|\x1b\\)`)
 
 var (
@@ -88,19 +88,17 @@ func upgradeImageURL(url string) string {
 	return url
 }
 
-// render is the shared implementation for Render and RenderTUI.
-func render(url string, width, height int, allowInline bool) string {
+// Render downloads the poster at the given URL and returns a line-based
+// rendered string for side-by-side layouts.
+// width and height are in terminal columns and rows.
+func Render(url string, width, height int) string {
 	if url == "" || width < 4 || height < 4 {
 		return ""
 	}
 
 	url = upgradeImageURL(url)
 
-	prefix := "tui:"
-	if allowInline {
-		prefix = "cli:"
-	}
-	key := fmt.Sprintf("%s%s:%d:%d", prefix, url, width, height)
+	key := fmt.Sprintf("%s:%d:%d", url, width, height)
 	cacheMu.RLock()
 	if cached, ok := cache[key]; ok {
 		cacheMu.RUnlock()
@@ -117,11 +115,9 @@ func render(url string, width, height int, allowInline bool) string {
 	var result string
 
 	// Try iTerm2 inline image protocol first (pixel-perfect rendering).
-	if allowInline {
-		detectInlineImage()
-		if inlineImageSupported {
-			result = renderInlineImage(imgPath, width, height)
-		}
+	detectInlineImage()
+	if inlineImageSupported {
+		result = renderInlineImage(imgPath, width, height)
 	}
 
 	// Fall back to chafa symbol art.
@@ -148,18 +144,51 @@ func render(url string, width, height int, allowInline bool) string {
 	return result
 }
 
-// Render downloads the poster at the given URL and returns a line-based
-// rendered string. Tries iTerm2 inline images, then chafa, then half-block.
-// width and height are in terminal columns and rows.
-func Render(url string, width, height int) string {
-	return render(url, width, height, true)
-}
-
 // RenderTUI renders a poster using only character-art renderers (chafa or
-// half-block). Inline image escape sequences are skipped because lipgloss
-// cannot measure their width for horizontal layout.
+// half-block). Inline images are skipped because they cannot be laid out
+// side-by-side with text in a full-screen TUI (bubbletea redraws interfere
+// with inline image cursor positioning).
 func RenderTUI(url string, width, height int) string {
-	return render(url, width, height, false)
+	if url == "" || width < 4 || height < 4 {
+		return ""
+	}
+
+	url = upgradeImageURL(url)
+
+	key := fmt.Sprintf("tui:%s:%d:%d", url, width, height)
+	cacheMu.RLock()
+	if cached, ok := cache[key]; ok {
+		cacheMu.RUnlock()
+		return cached
+	}
+	cacheMu.RUnlock()
+
+	imgPath, cleanup, err := downloadToTemp(url)
+	if err != nil {
+		return ""
+	}
+	defer cleanup()
+
+	var result string
+
+	findChafa()
+	if chafaPath != "" {
+		result = renderChafa(imgPath, width, height)
+	}
+
+	if result == "" {
+		img, err := decodeFile(imgPath)
+		if err != nil {
+			return ""
+		}
+		result = renderHalfBlock(img, width, height)
+	}
+
+	cacheMu.Lock()
+	cache[key] = result
+	cacheMu.Unlock()
+
+	return result
 }
 
 // RenderSideBySide renders a poster next to text content.
@@ -174,7 +203,7 @@ func RenderSideBySide(url string, posterCols, posterRows int, textLines []string
 	}
 
 	posterLines := strings.Split(posterStr, "\n")
-	return joinSideBySide(posterLines, posterCols, textLines, 3)
+	return JoinSideBySide(posterLines, posterCols, textLines, 3)
 }
 
 // renderInlineImage renders a poster using the iTerm2 inline image protocol.
@@ -296,9 +325,9 @@ func visualWidth(s string) int {
 	return runewidth.StringWidth(ansiRe.ReplaceAllString(s, ""))
 }
 
-// joinSideBySide joins poster lines and text lines horizontally.
-// Accounts for ANSI escape sequences when aligning columns.
-func joinSideBySide(posterLines []string, posterWidth int, textLines []string, gap int) string {
+// JoinSideBySide joins poster lines and text lines horizontally.
+// Accounts for ANSI and OSC escape sequences when aligning columns.
+func JoinSideBySide(posterLines []string, posterWidth int, textLines []string, gap int) string {
 	maxLines := len(posterLines)
 	if len(textLines) > maxLines {
 		maxLines = len(textLines)

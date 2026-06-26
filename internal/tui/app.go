@@ -14,6 +14,7 @@ import (
 	"lobster/internal/dlmanager"
 	"lobster/internal/dlmanager/store"
 	"lobster/internal/media"
+	"lobster/internal/poster"
 	"lobster/internal/provider"
 	"lobster/internal/tui/downloads"
 )
@@ -613,12 +614,9 @@ func (m AppModel) renderBrowseContent(mainHeight int) string {
 	var rightPane string
 	rightWidth := m.width - m.width/3 - 4
 	if m.currentItem != nil {
-		// Compute text width accounting for poster
-		textWidth := rightWidth - 4
-		if m.currentPoster != "" {
-			pw, _ := m.posterSize()
-			textWidth = rightWidth - pw - 5
-		}
+		// Always compute text width with poster space reserved to prevent reflow.
+		pw, ph := m.posterSize()
+		textWidth := rightWidth - pw - 6
 		if textWidth < 20 {
 			textWidth = 20
 		}
@@ -698,17 +696,30 @@ func (m AppModel) renderBrowseContent(mainHeight int) string {
 			Height(mainHeight).
 			Padding(0, 2)
 
-		if m.currentPoster != "" {
-			pw, _ := m.posterSize()
-			textWidth := rightWidth - pw - 5
-			if textWidth < 20 {
-				textWidth = 20
+		if poster.IsInlineImage() {
+			// Inline images can't share rows with text in a TUI.
+			// Stack: poster on top, text below.
+			if m.currentPoster != "" {
+				rightPane = rightPaneStyle.Render(
+					lipgloss.JoinVertical(lipgloss.Left, m.currentPoster, "", rightPaneContent))
+			} else {
+				rightPane = rightPaneStyle.Render(rightPaneContent)
 			}
-			posterBlock := lipgloss.NewStyle().MarginRight(2).Render(m.currentPoster)
-			textBlock := lipgloss.NewStyle().Width(textWidth).Render(rightPaneContent)
-			rightPane = rightPaneStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, posterBlock, textBlock))
 		} else {
-			rightPane = rightPaneStyle.Render(rightPaneContent)
+			// Character art (chafa/half-block): side-by-side layout works fine.
+			textBlock := lipgloss.NewStyle().Width(textWidth).Render(rightPaneContent)
+			textLines := strings.Split(textBlock, "\n")
+
+			var posterLines []string
+			if m.currentPoster != "" {
+				posterLines = strings.Split(m.currentPoster, "\n")
+			}
+			for len(posterLines) < ph {
+				posterLines = append(posterLines, "")
+			}
+
+			joined := poster.JoinSideBySide(posterLines, pw, textLines, 2)
+			rightPane = rightPaneStyle.Render(joined)
 		}
 	} else {
 		if len(m.results) == 0 && m.err == nil {
