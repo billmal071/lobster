@@ -62,3 +62,20 @@ func TestResolveAllFailReturnsReport(t *testing.T) {
 		t.Fatalf("expected 2 attempts in report, got %+v", rep)
 	}
 }
+
+func TestResolveAdvancesPastSlowBatch(t *testing.T) {
+	slow := &delayedSP{name: "slow", delay: 500 * time.Millisecond, stream: &media.Stream{URL: "https://cdn/slow.m3u8"}}
+	fast := &delayedSP{name: "fast", delay: 5 * time.Millisecond, stream: &media.Stream{URL: "https://cdn/fast.m3u8"}}
+	r := New([]provider.Provider{slow, fast}, NewHealthStore(), func(string, ...any) {})
+	r.validate = false
+	r.batchSize = 1               // slow in batch 1, fast in batch 2
+	r.attemptTimeout = 50 * time.Millisecond // batch 1 can't finish in time -> abandon -> batch 2
+	start := time.Now()
+	got, _, err := r.Resolve(context.Background(), Request{Title: "Foo", MediaType: media.Movie})
+	if err != nil || got == nil || got.URL != "https://cdn/fast.m3u8" {
+		t.Fatalf("expected fast (batch 2) to win after slow batch abandoned, got %v / %v", got, err)
+	}
+	if elapsed := time.Since(start); elapsed > 400*time.Millisecond {
+		t.Fatalf("resolver waited for the slow provider (%v) instead of advancing after the batch deadline", elapsed)
+	}
+}

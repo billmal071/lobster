@@ -71,6 +71,7 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (*media.Stream, *Re
 			go func() { ch <- r.probe(p, req) }()
 		}
 
+		batchDeadline := time.After(r.attemptTimeout)
 		remaining := len(batch)
 		for remaining > 0 {
 			select {
@@ -78,6 +79,10 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (*media.Stream, *Re
 				report.add(probeResult{Provider: "(resolver)", Stage: "overall-timeout", Err: ctx.Err()})
 				_ = r.health.Save()
 				return nil, report, ctx.Err()
+			case <-batchDeadline:
+				// No winner within attemptTimeout: abandon this batch's stragglers
+				// (their buffered-channel sends won't block) and advance to the next batch.
+				remaining = 0
 			case res := <-ch:
 				remaining--
 				report.add(res)
