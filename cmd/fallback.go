@@ -1,14 +1,31 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
+	"lobster/internal/config"
 	"lobster/internal/dlmanager"
 	"lobster/internal/media"
 	"lobster/internal/provider"
 	"lobster/internal/resolver"
 )
+
+var sharedHealth = func() *resolver.HealthStore {
+	p, err := config.HealthPath()
+	if err != nil {
+		return resolver.NewHealthStore()
+	}
+	return resolver.LoadHealth(p)
+}()
+
+func cfgQuality() string {
+	if cfg != nil && cfg.Quality != "" {
+		return cfg.Quality
+	}
+	return "1080"
+}
 
 // maxFallbackCandidates mirrors resolver.MaxCandidates for backward compatibility
 // with tests that reference it in the cmd package.
@@ -62,23 +79,18 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 	return fallbacks
 }
 
-// tryFallbackStream attempts to resolve a stream using fallback providers.
-// It delegates to resolver.ResolveSequential, which tries each fallback in
-// order. This is a thin adapter; Task 9 will replace its body with the
-// racing Resolver.
+// tryFallbackStream attempts to resolve a stream using the resilient Resolver,
+// which races fallback providers and selects the first valid result.
 func tryFallbackStream(primary provider.Provider, title string, mediaType media.MediaType, season, episode int) (*media.Stream, error) {
-	quality := "1080"
-	if cfg != nil && cfg.Quality != "" {
-		quality = cfg.Quality
+	r := resolver.New(fallbackProviders(primary), sharedHealth, debugf)
+	req := resolver.Request{Title: title, MediaType: mediaType, Season: season, Episode: episode, Quality: cfgQuality()}
+	stream, report, err := r.Resolve(context.Background(), req)
+	if err != nil {
+		debugf("resolve failed: %s", report.Summary())
+		return nil, err
 	}
-	req := resolver.Request{
-		Title:     title,
-		MediaType: mediaType,
-		Season:    season,
-		Episode:   episode,
-		Quality:   quality,
-	}
-	return resolver.ResolveSequential(fallbackProviders(primary), req, debugf)
+	debugf("resolve ok via report: %s", report.Summary())
+	return stream, nil
 }
 
 // makeStreamResolver builds a StreamResolver that tries the primary provider
