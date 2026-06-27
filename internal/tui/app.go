@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -14,6 +15,7 @@ import (
 	"lobster/internal/dlmanager"
 	"lobster/internal/dlmanager/store"
 	"lobster/internal/media"
+	"lobster/internal/poster"
 	"lobster/internal/provider"
 	"lobster/internal/tui/downloads"
 )
@@ -58,6 +60,10 @@ type AppModel struct {
 	currentItem   *media.SearchResult
 	currentDetail *media.ContentDetail
 	currentPoster string
+	posterReady   bool // an inline poster image is loaded and ready to overlay
+	posterB64     string
+	posterImgW    int
+	posterImgH    int
 
 	err              error
 	isSearching      bool
@@ -72,6 +78,9 @@ type AppModel struct {
 
 	// Download dialog for TV show batch downloads
 	dlDialog downloadDialog
+
+	out            *syncWriter // synchronized terminal output; nil in tests
+	drawnPosterKey string      // posterKey of the last successfully painted overlay
 }
 
 // item adapter for list.Model
@@ -132,7 +141,9 @@ func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager, f
 		m.downloadsModel = downloads.New(mgr.Store(), mgr)
 	}
 
-	p2 := tea.NewProgram(m, tea.WithAltScreen())
+	out := newSyncWriter(os.Stdout)
+	m.out = out
+	p2 := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(out))
 	m2, err := p2.Run()
 	if err != nil {
 		return nil, nil, err
@@ -179,6 +190,11 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
+				if !m.dlDialog.active {
+					// dialog just closed — repaint the poster
+					m.drawnPosterKey = ""
+					cmds = append(cmds, m.redrawPoster())
+				}
 				return m, tea.Batch(cmds...)
 			}
 		}
@@ -196,7 +212,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.KeyEsc:
 				m.isSearching = false
 				m.searchInput.Blur()
-				return m, nil
+				return m, m.redrawPoster()
 			}
 			var cmd tea.Cmd
 			m.searchInput, cmd = m.searchInput.Update(msg)
@@ -237,7 +253,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.isSearching = true
 			m.searchInput.Focus()
 			m.searchInput.SetValue("")
-			return m, nil
+			m.drawnPosterKey = ""
+			return m, tea.ClearScreen
 		case "enter":
 			if m.currentItem != nil {
 				m.selectedResult = m.currentItem
@@ -254,6 +271,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 					cmd := m.dlDialog.start(*m.currentItem, m.providerForActiveTab(), m.dlManager, outputDir)
+					m.drawnPosterKey = ""
 					return m, cmd
 				}
 				return m, m.queueCurrentDownload()
@@ -264,11 +282,6 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h, v := docStyle.GetFrameSize()
 		m.width = msg.Width - h
 		m.height = msg.Height - v
-		mainHeight := m.height - 10 // approximate header + footer
-		if mainHeight < 0 {
-			mainHeight = 0
-		}
-		m.downloadsModel.SetSize(m.width, mainHeight)
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -282,6 +295,15 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case resultsFetchedMsg:
 		m.err = nil
 		m.results = msg
+		// Clear all selection-derived state so the previous title's metadata and
+		// poster don't show under the new result until the fresh fetches land.
+		m.currentDetail = nil
+		m.currentPoster = ""
+		m.posterReady = false
+		m.posterB64 = ""
+		m.posterImgW = 0
+		m.posterImgH = 0
+		m.drawnPosterKey = ""
 		items := make([]list.Item, len(msg))
 		for i, v := range msg {
 			items[i] = listItem{result: v}
@@ -292,7 +314,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentItem = &msg[0]
 			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), msg[0].ID))
 			if msg[0].Poster != "" {
-				pw, ph := m.posterSize()
+				pw, ph := poster.BoxDims(m.width, 0, 0)
 				cmds = append(cmds, fetchPosterCmd(msg[0].ID, msg[0].Poster, pw, ph))
 			}
 		} else {
@@ -308,7 +330,16 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case posterFetchedMsg:
 		if m.currentItem != nil && m.currentItem.ID == msg.id {
-			m.currentPoster = msg.poster
+			if msg.inline {
+				m.posterB64 = msg.b64
+				m.posterImgW = msg.imgW
+				m.posterImgH = msg.imgH
+				m.posterReady = msg.b64 != ""
+				m.currentPoster = "" // inline path never renders art in View()
+			} else {
+				m.currentPoster = msg.poster
+				m.posterReady = false
+			}
 		}
 
 	case downloadProgressMsg:
@@ -329,6 +360,13 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case downloadBatchQueuedMsg:
 		m.toast = fmt.Sprintf("Queued %d episodes: %s", msg.count, msg.title)
 		cmds = append(cmds, m.downloadsModel.Init())
+
+	case posterDrawMsg:
+		// Re-validate before writing: drop draws scheduled for a stale state.
+		if m.out != nil && m.posterVisible() && msg.key == m.posterKey() {
+			m.out.WriteString(msg.seq)
+			m.drawnPosterKey = msg.key
+		}
 	}
 
 	// Update browse list and handle item change.
@@ -340,10 +378,12 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentItem = &m.results[m.list.Index()]
 			m.currentDetail = nil
 			m.currentPoster = ""
+			m.posterReady = false
+			m.posterB64 = ""
 			m.err = nil
 			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), m.currentItem.ID))
 			if m.currentItem.Poster != "" {
-				pw, ph := m.posterSize()
+				pw, ph := poster.BoxDims(m.width, 0, 0)
 				cmds = append(cmds, fetchPosterCmd(m.currentItem.ID, m.currentItem.Poster, pw, ph))
 			}
 		}
@@ -357,6 +397,16 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if dlCmd != nil {
 			cmds = append(cmds, dlCmd)
 		}
+	}
+
+	// Redraw the inline poster overlay only when its desired state changed.
+	if m.posterVisible() {
+		if k := m.posterKey(); k != m.drawnPosterKey {
+			m.drawnPosterKey = k // optimistic; the posterDrawMsg handler confirms
+			cmds = append(cmds, m.redrawPoster())
+		}
+	} else {
+		m.drawnPosterKey = ""
 	}
 
 	return m, tea.Batch(cmds...)
@@ -396,11 +446,10 @@ func (m *AppModel) queueCurrentDownload() tea.Cmd {
 	}
 }
 
-func (m AppModel) View() string {
-	if m.width == 0 || m.height == 0 {
-		return "Initializing..."
-	}
-
+// buildHeaderTab constructs the header banner and tab bar strings that appear
+// at the top of every view. It is extracted so both View and redrawPoster can
+// measure their heights consistently.
+func (m AppModel) buildHeaderTab() (string, string) {
 	headerASCII := `
     __    ____  ____  __________________
    / /   / __ \/ __ )/ ___/_  __/ ____/ __
@@ -409,22 +458,27 @@ func (m AppModel) View() string {
 /_____/\____/_____//____//_/ /_____/ (_) `
 
 	header := headerStyle.Render(strings.TrimPrefix(headerASCII, "\n") + "\n  Terminal Media Streamer  \u2022  Search, Play, Download\n")
-
-	// Tab bar
 	tabBar := m.renderTabBar()
+	return header, tabBar
+}
 
-	// Dynamically calculate the main content area bounds
-	mainHeight := m.height - lipgloss.Height(header) - lipgloss.Height(tabBar) - 3
-	if mainHeight < 0 {
-		mainHeight = 0
+func (m AppModel) View() string {
+	if m.width == 0 || m.height == 0 {
+		return "Initializing..."
 	}
+
+	header, tabBar := m.buildHeaderTab()
+
+	headerH := lipgloss.Height(header)
+	tabBarH := lipgloss.Height(tabBar)
+	lm := computeLayout(m.width, m.height, headerH, tabBarH, m.isSearching, m.posterImgW, m.posterImgH)
 
 	var mainContent string
 	if m.activeTab == tabDownloads {
-		m.downloadsModel.SetSize(m.width, mainHeight)
+		m.downloadsModel.SetSize(m.width, lm.mainHeight)
 		mainContent = m.downloadsModel.View()
 	} else {
-		mainContent = m.renderBrowseContent(mainHeight)
+		mainContent = m.renderBrowseContent(headerH, tabBarH)
 	}
 
 	footerStyle := lipgloss.NewStyle().
@@ -533,8 +587,11 @@ func (m AppModel) nextTab() tab {
 }
 
 func (m *AppModel) switchTab(next tab) tea.Cmd {
+	m.drawnPosterKey = ""
+	m.posterReady = false
+	m.posterB64 = ""
 	if next == tabDownloads && m.dlManager == nil {
-		return nil
+		return tea.ClearScreen
 	}
 
 	m.activeTab = next
@@ -546,14 +603,14 @@ func (m *AppModel) switchTab(next tab) tea.Cmd {
 
 	if next == tabDownloads {
 		m.downloadsModel.SetFocused(true)
-		return m.downloadsModel.Init()
+		return tea.Batch(m.downloadsModel.Init(), tea.ClearScreen)
 	}
 
 	m.downloadsModel.SetFocused(false)
 	m.results = nil
 	m.list.SetItems(nil)
 	m.list.Title = m.tabTitle(next)
-	return tea.Batch(fetchTabCmd(m.providerForActiveTab(), next), m.list.StartSpinner())
+	return tea.Batch(fetchTabCmd(m.providerForActiveTab(), next), m.list.StartSpinner(), tea.ClearScreen)
 }
 
 func (m AppModel) tabTitle(t tab) string {
@@ -569,155 +626,138 @@ func (m AppModel) tabTitle(t tab) string {
 	}
 }
 
-// posterSize returns responsive poster dimensions based on current terminal size.
-func (m AppModel) posterSize() (cols, rows int) {
-	rightWidth := m.width - m.width/3 - 4
-	cols = rightWidth * 35 / 100
-	if cols > 40 {
-		cols = 40
-	}
-	if cols < 15 {
-		cols = 15
-	}
-	rows = cols * 3 / 4
-	if rows < 6 {
-		rows = 6
-	}
-	return
-}
+func (m AppModel) renderBrowseContent(headerH, tabBarH int) string {
+	lm := computeLayout(m.width, m.height, headerH, tabBarH, m.isSearching, m.posterImgW, m.posterImgH)
 
-func (m AppModel) renderBrowseContent(mainHeight int) string {
-	m.list.SetSize(m.width/3, mainHeight)
+	// ----- Hero band (poster box + detail text), full width -----
+	band := m.renderHeroBand(lm)
 
-	var leftPane string
+	// ----- Results list, full width below the band -----
+	// Size the list from the band's ACTUAL height (it may have grown to fit the
+	// detail text), not the poster-only estimate in lm.
+	lh := lm.mainHeight - lipgloss.Height(band)
 	if m.isSearching {
-		leftPane = lipgloss.JoinVertical(lipgloss.Left,
+		lh -= searchHeaderRows // search label + input + spacer rendered above the list
+	}
+	if lh < 0 {
+		lh = 0
+	}
+	m.list.SetSize(lm.listWidth, lh)
+	var listView string
+	if m.isSearching {
+		listView = lipgloss.JoinVertical(lipgloss.Left,
 			lipgloss.NewStyle().Foreground(lipgloss.Color("#FF79C6")).Bold(true).Render(" Search Query:"),
 			m.searchInput.View(),
 			"",
 			m.list.View(),
 		)
 	} else {
-		leftPane = m.list.View()
+		listView = m.list.View()
 	}
 
-	leftPaneStyle := lipgloss.NewStyle().
-		Width(m.width/3).
-		Height(mainHeight).
-		Border(lipgloss.RoundedBorder(), false, true, false, false).
+	return lipgloss.JoinVertical(lipgloss.Left, band, listView)
+}
+
+func (m AppModel) renderHeroBand(lm layoutMetrics) string {
+	bandStyle := lipgloss.NewStyle().
+		Width(m.width - 2*bandBorder).
+		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#444444")).
-		PaddingRight(2)
+		Padding(bandPadV, bandPadH)
 
-	leftPane = leftPaneStyle.Render(leftPane)
-
-	var rightPane string
-	rightWidth := m.width - m.width/3 - 4
-	if m.currentItem != nil {
-		// Compute text width accounting for poster
-		textWidth := rightWidth - 4
-		if m.currentPoster != "" {
-			pw, _ := m.posterSize()
-			textWidth = rightWidth - pw - 5
+	if m.currentItem == nil {
+		msg := "No selection"
+		if len(m.results) == 0 && m.err == nil {
+			msg = fmt.Sprintf("%s Fetching content...", m.loader.View())
 		}
-		if textWidth < 20 {
-			textWidth = 20
+		return bandStyle.Height(lm.posterRows).Render(lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render(msg))
+	}
+
+	text := m.renderDetailText(lm.textWidth)
+
+	// Grow the band so the detail text (incl. description) is fully shown, but
+	// never far enough to starve the results list below minListRows. The poster
+	// box stays posterRows tall and top-aligned, so the inline-image overlay
+	// position is unaffected.
+	innerRows := lm.posterRows
+	if th := lipgloss.Height(text); th > innerRows {
+		innerRows = th
+	}
+	maxInner := lm.mainHeight - minListRows - 2*bandBorder
+	if maxInner < lm.posterRows {
+		maxInner = lm.posterRows
+	}
+	if innerRows > maxInner {
+		innerRows = maxInner
+	}
+
+	// Build the poster column.
+	var posterCol string
+	if poster.IsInlineImage() {
+		// Blank box; the OSC-1337 image is painted out-of-band over these cells.
+		posterCol = lipgloss.NewStyle().
+			Width(lm.posterCols).
+			Height(lm.posterRows).
+			Render("")
+	} else if m.currentPoster != "" {
+		posterCol = m.currentPoster
+	} else {
+		posterCol = lipgloss.NewStyle().Width(lm.posterCols).Height(lm.posterRows).Render("")
+	}
+
+	inner := lipgloss.JoinHorizontal(lipgloss.Top,
+		lipgloss.NewStyle().Width(lm.posterCols).Render(posterCol),
+		lipgloss.NewStyle().Width(bandGap).Render(""),
+		lipgloss.NewStyle().Width(lm.textWidth).Render(text),
+	)
+	return bandStyle.Height(innerRows).Render(inner)
+}
+
+func (m AppModel) renderDetailText(textWidth int) string {
+	titleStr := detailTitleStyle.Render(m.currentItem.Title)
+	if m.currentItem.Year != "" {
+		titleStr += " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render("("+m.currentItem.Year+")")
+	}
+	dot := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render(" • ")
+	var typeStr string
+	if m.currentItem.Type == media.TV {
+		typeStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Render("TV Series")
+		if m.currentItem.Seasons > 0 {
+			typeStr += dot + fmt.Sprintf("%d Seasons", m.currentItem.Seasons)
 		}
-
-		// Title + year
-		titleStr := detailTitleStyle.Render(m.currentItem.Title)
-		if m.currentItem.Year != "" {
-			titleStr += " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render("("+m.currentItem.Year+")")
-		}
-
-		// Type badge
-		dot := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render(" • ")
-		var typeStr string
-		if m.currentItem.Type == media.TV {
-			typeStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Render("TV Series")
-			if m.currentItem.Seasons > 0 {
-				typeStr += dot + fmt.Sprintf("%d Seasons", m.currentItem.Seasons)
-			}
-			if m.currentItem.Episodes > 0 {
-				typeStr += dot + fmt.Sprintf("%d Eps", m.currentItem.Episodes)
-			}
-		} else {
-			typeStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Render("Movie")
-			if m.currentItem.Duration != "" {
-				typeStr += dot + m.currentItem.Duration
-			}
-		}
-
-		var extDetails string
-		if m.currentDetail != nil {
-			var parts []string
-
-			// Rating
-			if m.currentDetail.Rating != "" {
-				parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("#F1FA8C")).Render("★ "+m.currentDetail.Rating))
-			}
-
-			// Metadata
-			labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4"))
-			if len(m.currentDetail.Genre) > 0 {
-				parts = append(parts, labelStyle.Render("Genre:")+" "+strings.Join(m.currentDetail.Genre, ", "))
-			}
-			if len(m.currentDetail.Casts) > 0 {
-				parts = append(parts, labelStyle.Render("Cast:")+" "+strings.Join(m.currentDetail.Casts, ", "))
-			}
-
-			// Description
-			if m.currentDetail.Description != "" {
-				desc := lipgloss.NewStyle().
-					Width(textWidth).
-					Foreground(lipgloss.Color("#BFBFBF")).
-					MarginTop(1).
-					Render(m.currentDetail.Description)
-				parts = append(parts, desc)
-			}
-
-			extDetails = strings.Join(parts, "\n")
-		} else {
-			if m.err != nil {
-				extDetails = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555")).MarginTop(1).Render(
-					"Failed to load details. Scroll to retry.")
-			} else {
-				extDetails = lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).MarginTop(1).Render(
-					"Loading details...")
-			}
-		}
-
-		rightPaneContent := lipgloss.JoinVertical(lipgloss.Left,
-			titleStr,
-			typeStr,
-			"",
-			extDetails,
-		)
-
-		rightPaneStyle := lipgloss.NewStyle().
-			Width(rightWidth).
-			Height(mainHeight).
-			Padding(0, 2)
-
-		if m.currentPoster != "" {
-			pw, _ := m.posterSize()
-			textWidth := rightWidth - pw - 5
-			if textWidth < 20 {
-				textWidth = 20
-			}
-			posterBlock := lipgloss.NewStyle().MarginRight(2).Render(m.currentPoster)
-			textBlock := lipgloss.NewStyle().Width(textWidth).Render(rightPaneContent)
-			rightPane = rightPaneStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, posterBlock, textBlock))
-		} else {
-			rightPane = rightPaneStyle.Render(rightPaneContent)
+		if m.currentItem.Episodes > 0 {
+			typeStr += dot + fmt.Sprintf("%d Eps", m.currentItem.Episodes)
 		}
 	} else {
-		if len(m.results) == 0 && m.err == nil {
-			msg := fmt.Sprintf("\n\n  %s Fetching content...", m.loader.View())
-			rightPane = lipgloss.NewStyle().Padding(2).Foreground(lipgloss.Color("#6272A4")).Render(msg)
-		} else {
-			rightPane = lipgloss.NewStyle().Padding(2).Foreground(lipgloss.Color("#6272A4")).Render("No selection")
+		typeStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Render("Movie")
+		if m.currentItem.Duration != "" {
+			typeStr += dot + m.currentItem.Duration
 		}
 	}
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
+	var extDetails string
+	if m.currentDetail != nil {
+		var parts []string
+		if m.currentDetail.Rating != "" {
+			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("#F1FA8C")).Render("★ "+m.currentDetail.Rating))
+		}
+		labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4"))
+		if len(m.currentDetail.Genre) > 0 {
+			parts = append(parts, labelStyle.Render("Genre:")+" "+strings.Join(m.currentDetail.Genre, ", "))
+		}
+		if len(m.currentDetail.Casts) > 0 {
+			parts = append(parts, labelStyle.Render("Cast:")+" "+strings.Join(m.currentDetail.Casts, ", "))
+		}
+		if m.currentDetail.Description != "" {
+			desc := lipgloss.NewStyle().Width(textWidth).Foreground(lipgloss.Color("#BFBFBF")).MarginTop(1).Render(m.currentDetail.Description)
+			parts = append(parts, desc)
+		}
+		extDetails = strings.Join(parts, "\n")
+	} else if m.err != nil {
+		extDetails = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555")).MarginTop(1).Render("Failed to load details. Scroll to retry.")
+	} else {
+		extDetails = lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).MarginTop(1).Render("Loading details...")
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left, titleStr, typeStr, "", extDetails)
 }

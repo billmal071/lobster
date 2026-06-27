@@ -74,6 +74,7 @@ func (r *tmdbSearchResult) year() string {
 	return ""
 }
 
+
 // --- moviesapi types ---
 
 type moviesapiResponse struct {
@@ -137,11 +138,12 @@ func (s *Soap2Day) Search(query string) ([]media.SearchResult, error) {
 		}
 
 		results = append(results, media.SearchResult{
-			ID:    fmt.Sprintf("%s/%d", item.MediaType, item.ID),
-			Title: item.displayTitle(),
-			Type:  mt,
-			Year:  item.year(),
-			URL:   fmt.Sprintf("%s/%s/%d", tmdbSearchBase, item.MediaType, item.ID),
+			ID:     fmt.Sprintf("%s/%d", item.MediaType, item.ID),
+			Title:  item.displayTitle(),
+			Type:   mt,
+			Year:   item.year(),
+			URL:    fmt.Sprintf("%s/%s/%d", tmdbSearchBase, item.MediaType, item.ID),
+			Poster: tmdbPosterURL(item.PosterPath),
 		})
 	}
 
@@ -528,11 +530,12 @@ func (s *Soap2Day) fetchTMDBTrending(mediaType string) ([]media.SearchResult, er
 		}
 
 		results = append(results, media.SearchResult{
-			ID:    fmt.Sprintf("%s/%d", item.MediaType, item.ID),
-			Title: item.displayTitle(),
-			Type:  mt,
-			Year:  item.year(),
-			URL:   fmt.Sprintf("%s/%s/%d", tmdbSearchBase, item.MediaType, item.ID),
+			ID:     fmt.Sprintf("%s/%d", item.MediaType, item.ID),
+			Title:  item.displayTitle(),
+			Type:   mt,
+			Year:   item.year(),
+			URL:    fmt.Sprintf("%s/%s/%d", tmdbSearchBase, item.MediaType, item.ID),
+			Poster: tmdbPosterURL(item.PosterPath),
 		})
 	}
 
