@@ -42,23 +42,6 @@ func New(providers []provider.Provider, health *HealthStore, log func(string, ..
 	}
 }
 
-// Report records every probe attempt made during a Resolve call.
-type Report struct {
-	Attempts []Attempt
-}
-
-// Attempt is a single probe result recorded in a Report.
-type Attempt struct {
-	Provider   string
-	Stage      string
-	Err        error
-	DurationMs int64
-}
-
-// Summary returns a short human-readable summary of the report.
-// Task 10 provides the real implementation; this stub keeps the package compiling.
-func (rep *Report) Summary() string { return "" }
-
 // add appends a probeResult to the report.
 func (rep *Report) add(res probeResult) {
 	rep.Attempts = append(rep.Attempts, Attempt{
