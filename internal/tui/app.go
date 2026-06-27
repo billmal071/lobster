@@ -79,7 +79,8 @@ type AppModel struct {
 	// Download dialog for TV show batch downloads
 	dlDialog downloadDialog
 
-	out *syncWriter // synchronized terminal output; nil in tests
+	out            *syncWriter // synchronized terminal output; nil in tests
+	drawnPosterKey string      // posterKey of the last successfully painted overlay
 }
 
 // item adapter for list.Model
@@ -343,6 +344,9 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case downloadBatchQueuedMsg:
 		m.toast = fmt.Sprintf("Queued %d episodes: %s", msg.count, msg.title)
 		cmds = append(cmds, m.downloadsModel.Init())
+
+	case posterDrawnMsg:
+		m.drawnPosterKey = msg.key
 	}
 
 	// Update browse list and handle item change.
@@ -373,6 +377,15 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if dlCmd != nil {
 			cmds = append(cmds, dlCmd)
 		}
+	}
+
+	// Redraw the inline poster overlay only when its desired state changed.
+	if m.posterVisible() {
+		if k := m.posterKey(); k != m.drawnPosterKey {
+			cmds = append(cmds, m.redrawPoster())
+		}
+	} else {
+		m.drawnPosterKey = ""
 	}
 
 	return m, tea.Batch(cmds...)
@@ -412,11 +425,10 @@ func (m *AppModel) queueCurrentDownload() tea.Cmd {
 	}
 }
 
-func (m AppModel) View() string {
-	if m.width == 0 || m.height == 0 {
-		return "Initializing..."
-	}
-
+// buildHeaderTab constructs the header banner and tab bar strings that appear
+// at the top of every view. It is extracted so both View and redrawPoster can
+// measure their heights consistently.
+func (m AppModel) buildHeaderTab() (string, string) {
 	headerASCII := `
     __    ____  ____  __________________
    / /   / __ \/ __ )/ ___/_  __/ ____/ __
@@ -425,9 +437,16 @@ func (m AppModel) View() string {
 /_____/\____/_____//____//_/ /_____/ (_) `
 
 	header := headerStyle.Render(strings.TrimPrefix(headerASCII, "\n") + "\n  Terminal Media Streamer  \u2022  Search, Play, Download\n")
-
-	// Tab bar
 	tabBar := m.renderTabBar()
+	return header, tabBar
+}
+
+func (m AppModel) View() string {
+	if m.width == 0 || m.height == 0 {
+		return "Initializing..."
+	}
+
+	header, tabBar := m.buildHeaderTab()
 
 	headerH := lipgloss.Height(header)
 	tabBarH := lipgloss.Height(tabBar)
