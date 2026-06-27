@@ -64,8 +64,8 @@ func TestResolveAllFailReturnsReport(t *testing.T) {
 }
 
 func TestResolveAdvancesPastSlowBatch(t *testing.T) {
-	slow := &delayedSP{name: "slow", delay: 500 * time.Millisecond, stream: &media.Stream{URL: "https://cdn/slow.m3u8"}}
-	fast := &delayedSP{name: "fast", delay: 5 * time.Millisecond, stream: &media.Stream{URL: "https://cdn/fast.m3u8"}}
+	slow := &delayedSP{fakeSP: &fakeSP{}, name: "slow", delay: 500 * time.Millisecond, stream: &media.Stream{URL: "https://cdn/slow.m3u8"}}
+	fast := &delayedSP{fakeSP: &fakeSP{}, name: "fast", delay: 5 * time.Millisecond, stream: &media.Stream{URL: "https://cdn/fast.m3u8"}}
 	r := New([]provider.Provider{slow, fast}, NewHealthStore(), func(string, ...any) {})
 	r.validate = false
 	r.batchSize = 1               // slow in batch 1, fast in batch 2
