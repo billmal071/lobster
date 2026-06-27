@@ -11,6 +11,7 @@ const (
 	bandPadH         = 2
 	bandGap          = 2 // gap between poster box and detail text within the band
 	minListRows      = 6 // minimum rows always reserved for the results list
+	searchHeaderRows = 3 // search label + input + spacer rendered above the list
 )
 
 type layoutMetrics struct {

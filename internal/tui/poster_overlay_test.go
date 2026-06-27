@@ -3,12 +3,17 @@ package tui
 import (
 	"io"
 	"testing"
+
+	"lobster/internal/media"
 )
 
 func TestPosterKeyChanges(t *testing.T) {
+	itemA := &media.SearchResult{ID: "movie/1", Poster: "https://img/a.jpg"}
+	itemB := &media.SearchResult{ID: "movie/2", Poster: "https://img/b.jpg"}
 	base := AppModel{
 		activeTab:   tabMovies,
 		posterReady: true,
+		currentItem: itemA,
 		posterB64:   "abc",
 		posterImgW:  2,
 		posterImgH:  3,
@@ -17,11 +22,11 @@ func TestPosterKeyChanges(t *testing.T) {
 	}
 	k1 := base.posterKey()
 
-	// Changing posterB64 changes key (len changes).
+	// A different poster (different URL) changes the key.
 	m2 := base
-	m2.posterB64 = "xyzxyzxyz"
+	m2.currentItem = itemB
 	if m2.posterKey() == k1 {
-		t.Error("expected key to change when posterB64 changes")
+		t.Error("expected key to change when the poster (item) changes")
 	}
 
 	// Changing width changes key.

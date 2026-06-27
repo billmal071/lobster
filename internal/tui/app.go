@@ -295,8 +295,14 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case resultsFetchedMsg:
 		m.err = nil
 		m.results = msg
+		// Clear all selection-derived state so the previous title's metadata and
+		// poster don't show under the new result until the fresh fetches land.
+		m.currentDetail = nil
+		m.currentPoster = ""
 		m.posterReady = false
 		m.posterB64 = ""
+		m.posterImgW = 0
+		m.posterImgH = 0
 		m.drawnPosterKey = ""
 		items := make([]list.Item, len(msg))
 		for i, v := range msg {
@@ -630,6 +636,9 @@ func (m AppModel) renderBrowseContent(headerH, tabBarH int) string {
 	// Size the list from the band's ACTUAL height (it may have grown to fit the
 	// detail text), not the poster-only estimate in lm.
 	lh := lm.mainHeight - lipgloss.Height(band)
+	if m.isSearching {
+		lh -= searchHeaderRows // search label + input + spacer rendered above the list
+	}
 	if lh < 0 {
 		lh = 0
 	}

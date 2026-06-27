@@ -113,11 +113,13 @@ func Render(url string, width, height int) string {
 	defer cleanup()
 
 	var result string
+	usedInline := false
 
 	// Try iTerm2 inline image protocol first (pixel-perfect rendering).
 	detectInlineImage()
 	if inlineImageSupported {
 		result = renderInlineImage(imgPath, width, height)
+		usedInline = result != ""
 	}
 
 	// Fall back to chafa symbol art.
@@ -137,9 +139,14 @@ func Render(url string, width, height int) string {
 		result = renderHalfBlock(img, width, height)
 	}
 
-	cacheMu.Lock()
-	cache[key] = result
-	cacheMu.Unlock()
+	// Don't cache inline results — they embed the full base64 image (hundreds of
+	// KB to MB each) and would grow the unbounded cache without limit. Only the
+	// compact chafa/half-block art is worth caching.
+	if !usedInline {
+		cacheMu.Lock()
+		cache[key] = result
+		cacheMu.Unlock()
+	}
 
 	return result
 }

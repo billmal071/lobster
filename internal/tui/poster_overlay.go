@@ -18,10 +18,17 @@ type posterDrawMsg struct {
 }
 
 // posterKey identifies the desired overlay state so identical redraws are
-// skipped. It includes width/height so a resize forces a reposition.
+// skipped. It keys on the poster URL (a stable per-image identity, unlike the
+// base64 length which could collide between different posters) plus the
+// rendered dimensions, so a new image, a resize, or a visibility change all
+// produce a different key.
 func (m AppModel) posterKey() string {
-	return fmt.Sprintf("%d:%d:%d:%d:%d:%t",
-		len(m.posterB64), m.posterImgW, m.posterImgH, m.width, m.height, m.posterVisible())
+	posterID := ""
+	if m.currentItem != nil {
+		posterID = m.currentItem.Poster
+	}
+	return fmt.Sprintf("%s:%d:%d:%d:%d:%t",
+		posterID, m.posterImgW, m.posterImgH, m.width, m.height, m.posterVisible())
 }
 
 // redrawPoster computes the current header/tab heights and returns the overlay
