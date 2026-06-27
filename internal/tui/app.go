@@ -274,11 +274,6 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h, v := docStyle.GetFrameSize()
 		m.width = msg.Width - h
 		m.height = msg.Height - v
-		mainHeight := m.height - 10 // approximate header + footer
-		if mainHeight < 0 {
-			mainHeight = 0
-		}
-		m.downloadsModel.SetSize(m.width, mainHeight)
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -302,7 +297,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentItem = &msg[0]
 			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), msg[0].ID))
 			if msg[0].Poster != "" {
-				pw, ph := m.posterSize()
+				pw, ph := poster.BoxDims(m.width, 0, 0)
 				cmds = append(cmds, fetchPosterCmd(msg[0].ID, msg[0].Poster, pw, ph))
 			}
 		} else {
@@ -364,7 +359,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = nil
 			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), m.currentItem.ID))
 			if m.currentItem.Poster != "" {
-				pw, ph := m.posterSize()
+				pw, ph := poster.BoxDims(m.width, 0, 0)
 				cmds = append(cmds, fetchPosterCmd(m.currentItem.ID, m.currentItem.Poster, pw, ph))
 			}
 		}
@@ -434,18 +429,16 @@ func (m AppModel) View() string {
 	// Tab bar
 	tabBar := m.renderTabBar()
 
-	// Dynamically calculate the main content area bounds
-	mainHeight := m.height - lipgloss.Height(header) - lipgloss.Height(tabBar) - 3
-	if mainHeight < 0 {
-		mainHeight = 0
-	}
+	headerH := lipgloss.Height(header)
+	tabBarH := lipgloss.Height(tabBar)
+	lm := computeLayout(m.width, m.height, headerH, tabBarH, m.isSearching, m.posterImgW, m.posterImgH)
 
 	var mainContent string
 	if m.activeTab == tabDownloads {
-		m.downloadsModel.SetSize(m.width, mainHeight)
+		m.downloadsModel.SetSize(m.width, lm.mainHeight)
 		mainContent = m.downloadsModel.View()
 	} else {
-		mainContent = m.renderBrowseContent(mainHeight)
+		mainContent = m.renderBrowseContent(headerH, tabBarH)
 	}
 
 	footerStyle := lipgloss.NewStyle().
@@ -590,165 +583,118 @@ func (m AppModel) tabTitle(t tab) string {
 	}
 }
 
-// posterSize returns responsive poster dimensions based on current terminal size.
-func (m AppModel) posterSize() (cols, rows int) {
-	rightWidth := m.width - m.width/3 - 4
-	cols = rightWidth * 35 / 100
-	if cols > 40 {
-		cols = 40
-	}
-	if cols < 15 {
-		cols = 15
-	}
-	rows = cols * 3 / 4
-	if rows < 6 {
-		rows = 6
-	}
-	return
-}
+func (m AppModel) renderBrowseContent(headerH, tabBarH int) string {
+	lm := computeLayout(m.width, m.height, headerH, tabBarH, m.isSearching, m.posterImgW, m.posterImgH)
 
-func (m AppModel) renderBrowseContent(mainHeight int) string {
-	m.list.SetSize(m.width/3, mainHeight)
+	// ----- Hero band (poster box + detail text), full width -----
+	band := m.renderHeroBand(lm)
 
-	var leftPane string
+	// ----- Results list, full width below the band -----
+	lh := lm.listHeight
+	if lh < 0 {
+		lh = 0
+	}
+	m.list.SetSize(lm.listWidth, lh)
+	var listView string
 	if m.isSearching {
-		leftPane = lipgloss.JoinVertical(lipgloss.Left,
+		listView = lipgloss.JoinVertical(lipgloss.Left,
 			lipgloss.NewStyle().Foreground(lipgloss.Color("#FF79C6")).Bold(true).Render(" Search Query:"),
 			m.searchInput.View(),
 			"",
 			m.list.View(),
 		)
 	} else {
-		leftPane = m.list.View()
+		listView = m.list.View()
 	}
 
-	leftPaneStyle := lipgloss.NewStyle().
-		Width(m.width/3).
-		Height(mainHeight).
-		Border(lipgloss.RoundedBorder(), false, true, false, false).
+	return lipgloss.JoinVertical(lipgloss.Left, band, listView)
+}
+
+func (m AppModel) renderHeroBand(lm layoutMetrics) string {
+	bandStyle := lipgloss.NewStyle().
+		Width(m.width - 2*bandBorder).
+		Height(lm.bandHeight - 2*bandBorder).
+		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#444444")).
-		PaddingRight(2)
+		Padding(bandPadV, bandPadH)
 
-	leftPane = leftPaneStyle.Render(leftPane)
-
-	var rightPane string
-	rightWidth := m.width - m.width/3 - 4
-	if m.currentItem != nil {
-		// Always compute text width with poster space reserved to prevent reflow.
-		pw, ph := m.posterSize()
-		textWidth := rightWidth - pw - 6
-		if textWidth < 20 {
-			textWidth = 20
+	if m.currentItem == nil {
+		msg := "No selection"
+		if len(m.results) == 0 && m.err == nil {
+			msg = fmt.Sprintf("%s Fetching content...", m.loader.View())
 		}
+		return bandStyle.Render(lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render(msg))
+	}
 
-		// Title + year
-		titleStr := detailTitleStyle.Render(m.currentItem.Title)
-		if m.currentItem.Year != "" {
-			titleStr += " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render("("+m.currentItem.Year+")")
+	text := m.renderDetailText(lm.textWidth)
+
+	// Build the poster column.
+	var posterCol string
+	if poster.IsInlineImage() {
+		// Blank box; the OSC-1337 image is painted out-of-band over these cells.
+		posterCol = lipgloss.NewStyle().
+			Width(lm.posterCols).
+			Height(lm.posterRows).
+			Render("")
+	} else if m.currentPoster != "" {
+		posterCol = m.currentPoster
+	} else {
+		posterCol = lipgloss.NewStyle().Width(lm.posterCols).Height(lm.posterRows).Render("")
+	}
+
+	inner := lipgloss.JoinHorizontal(lipgloss.Top,
+		lipgloss.NewStyle().Width(lm.posterCols).Render(posterCol),
+		lipgloss.NewStyle().Width(bandGap).Render(""),
+		lipgloss.NewStyle().Width(lm.textWidth).Render(text),
+	)
+	return bandStyle.Render(inner)
+}
+
+func (m AppModel) renderDetailText(textWidth int) string {
+	titleStr := detailTitleStyle.Render(m.currentItem.Title)
+	if m.currentItem.Year != "" {
+		titleStr += " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render("("+m.currentItem.Year+")")
+	}
+	dot := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render(" • ")
+	var typeStr string
+	if m.currentItem.Type == media.TV {
+		typeStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Render("TV Series")
+		if m.currentItem.Seasons > 0 {
+			typeStr += dot + fmt.Sprintf("%d Seasons", m.currentItem.Seasons)
 		}
-
-		// Type badge
-		dot := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render(" • ")
-		var typeStr string
-		if m.currentItem.Type == media.TV {
-			typeStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Render("TV Series")
-			if m.currentItem.Seasons > 0 {
-				typeStr += dot + fmt.Sprintf("%d Seasons", m.currentItem.Seasons)
-			}
-			if m.currentItem.Episodes > 0 {
-				typeStr += dot + fmt.Sprintf("%d Eps", m.currentItem.Episodes)
-			}
-		} else {
-			typeStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Render("Movie")
-			if m.currentItem.Duration != "" {
-				typeStr += dot + m.currentItem.Duration
-			}
-		}
-
-		var extDetails string
-		if m.currentDetail != nil {
-			var parts []string
-
-			// Rating
-			if m.currentDetail.Rating != "" {
-				parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("#F1FA8C")).Render("★ "+m.currentDetail.Rating))
-			}
-
-			// Metadata
-			labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4"))
-			if len(m.currentDetail.Genre) > 0 {
-				parts = append(parts, labelStyle.Render("Genre:")+" "+strings.Join(m.currentDetail.Genre, ", "))
-			}
-			if len(m.currentDetail.Casts) > 0 {
-				parts = append(parts, labelStyle.Render("Cast:")+" "+strings.Join(m.currentDetail.Casts, ", "))
-			}
-
-			// Description
-			if m.currentDetail.Description != "" {
-				desc := lipgloss.NewStyle().
-					Width(textWidth).
-					Foreground(lipgloss.Color("#BFBFBF")).
-					MarginTop(1).
-					Render(m.currentDetail.Description)
-				parts = append(parts, desc)
-			}
-
-			extDetails = strings.Join(parts, "\n")
-		} else {
-			if m.err != nil {
-				extDetails = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555")).MarginTop(1).Render(
-					"Failed to load details. Scroll to retry.")
-			} else {
-				extDetails = lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).MarginTop(1).Render(
-					"Loading details...")
-			}
-		}
-
-		rightPaneContent := lipgloss.JoinVertical(lipgloss.Left,
-			titleStr,
-			typeStr,
-			"",
-			extDetails,
-		)
-
-		rightPaneStyle := lipgloss.NewStyle().
-			Width(rightWidth).
-			Height(mainHeight).
-			Padding(0, 2)
-
-		if poster.IsInlineImage() {
-			// Inline images can't share rows with text in a TUI.
-			// Stack: poster on top, text below.
-			if m.currentPoster != "" {
-				rightPane = rightPaneStyle.Render(
-					lipgloss.JoinVertical(lipgloss.Left, m.currentPoster, "", rightPaneContent))
-			} else {
-				rightPane = rightPaneStyle.Render(rightPaneContent)
-			}
-		} else {
-			// Character art (chafa/half-block): side-by-side layout works fine.
-			textBlock := lipgloss.NewStyle().Width(textWidth).Render(rightPaneContent)
-			textLines := strings.Split(textBlock, "\n")
-
-			var posterLines []string
-			if m.currentPoster != "" {
-				posterLines = strings.Split(m.currentPoster, "\n")
-			}
-			for len(posterLines) < ph {
-				posterLines = append(posterLines, "")
-			}
-
-			joined := poster.JoinSideBySide(posterLines, pw, textLines, 2)
-			rightPane = rightPaneStyle.Render(joined)
+		if m.currentItem.Episodes > 0 {
+			typeStr += dot + fmt.Sprintf("%d Eps", m.currentItem.Episodes)
 		}
 	} else {
-		if len(m.results) == 0 && m.err == nil {
-			msg := fmt.Sprintf("\n\n  %s Fetching content...", m.loader.View())
-			rightPane = lipgloss.NewStyle().Padding(2).Foreground(lipgloss.Color("#6272A4")).Render(msg)
-		} else {
-			rightPane = lipgloss.NewStyle().Padding(2).Foreground(lipgloss.Color("#6272A4")).Render("No selection")
+		typeStr = lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Render("Movie")
+		if m.currentItem.Duration != "" {
+			typeStr += dot + m.currentItem.Duration
 		}
 	}
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
+	var extDetails string
+	if m.currentDetail != nil {
+		var parts []string
+		if m.currentDetail.Rating != "" {
+			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color("#F1FA8C")).Render("★ "+m.currentDetail.Rating))
+		}
+		labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4"))
+		if len(m.currentDetail.Genre) > 0 {
+			parts = append(parts, labelStyle.Render("Genre:")+" "+strings.Join(m.currentDetail.Genre, ", "))
+		}
+		if len(m.currentDetail.Casts) > 0 {
+			parts = append(parts, labelStyle.Render("Cast:")+" "+strings.Join(m.currentDetail.Casts, ", "))
+		}
+		if m.currentDetail.Description != "" {
+			desc := lipgloss.NewStyle().Width(textWidth).Foreground(lipgloss.Color("#BFBFBF")).MarginTop(1).Render(m.currentDetail.Description)
+			parts = append(parts, desc)
+		}
+		extDetails = strings.Join(parts, "\n")
+	} else if m.err != nil {
+		extDetails = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555")).MarginTop(1).Render("Failed to load details. Scroll to retry.")
+	} else {
+		extDetails = lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).MarginTop(1).Render("Loading details...")
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left, titleStr, typeStr, "", extDetails)
 }
