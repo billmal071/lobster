@@ -39,6 +39,7 @@ type ProviderHealth struct {
 
 type HealthStore struct {
 	mu      sync.RWMutex
+	saveMu  sync.Mutex
 	records map[string]*ProviderHealth
 	path    string // set by LoadHealth (Task 4); empty => no persistence
 }
@@ -102,23 +103,36 @@ func (h *HealthStore) Order(providers []provider.Provider, now time.Time, batchS
 	if batchSize < 1 {
 		batchSize = 1
 	}
-	h.mu.RLock()
 	ranked := make([]provider.Provider, len(providers))
 	copy(ranked, providers)
-	score := func(p provider.Provider) float64 { return effectiveScore(h.records[ProviderName(p)], now) }
-	lat := func(p provider.Provider) int {
-		if r := h.records[ProviderName(p)]; r != nil {
-			return r.LatencyMs
+
+	// Snapshot the comparison keys UNDER the lock so the sort comparator never
+	// reads the shared records map/structs (concurrent map read+write is a fatal
+	// runtime panic, not just a race).
+	type sortKey struct {
+		score float64
+		lat   int
+	}
+	keys := make(map[string]sortKey, len(providers))
+	h.mu.RLock()
+	for _, p := range providers {
+		name := ProviderName(p)
+		rec := h.records[name]
+		lat := 1 << 30
+		if rec != nil {
+			lat = rec.LatencyMs
 		}
-		return 1 << 30
+		keys[name] = sortKey{score: effectiveScore(rec, now), lat: lat}
 	}
 	h.mu.RUnlock()
+
 	sort.SliceStable(ranked, func(i, j int) bool {
-		si, sj := score(ranked[i]), score(ranked[j])
-		if si != sj {
-			return si > sj
+		ki := keys[ProviderName(ranked[i])]
+		kj := keys[ProviderName(ranked[j])]
+		if ki.score != kj.score {
+			return ki.score > kj.score
 		}
-		return lat(ranked[i]) < lat(ranked[j])
+		return ki.lat < kj.lat
 	})
 	var batches [][]provider.Provider
 	for i := 0; i < len(ranked); i += batchSize {
@@ -146,25 +160,32 @@ func LoadHealth(path string) *HealthStore {
 	return h
 }
 
-// Save atomically writes the store to its path (temp file + rename). It holds
-// the store lock for the whole read-modify-write so concurrent resolves can't
-// corrupt the file. No-op when path is empty.
+// Save atomically writes the store to its path (temp file + rename). The records
+// are snapshotted and marshalled under the records lock, then file I/O happens
+// outside it (serialized by saveMu) so a slow disk write can't block concurrent
+// Record calls. No-op when path is empty.
 func (h *HealthStore) Save() error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.path == "" {
+	h.mu.RLock()
+	path := h.path
+	if path == "" {
+		h.mu.RUnlock()
 		return nil
 	}
 	data, err := json.MarshalIndent(h.records, "", "  ")
+	h.mu.RUnlock()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(h.path), 0o755); err != nil {
+	// Disk I/O outside the records lock; saveMu serializes concurrent file writes
+	// so two resolves can't clobber the temp file or race the rename.
+	h.saveMu.Lock()
+	defer h.saveMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	tmp := h.path + ".tmp"
+	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, h.path)
+	return os.Rename(tmp, path)
 }
