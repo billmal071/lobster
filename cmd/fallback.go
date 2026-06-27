@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"lobster/internal/config"
 	"lobster/internal/dlmanager"
@@ -12,13 +13,22 @@ import (
 	"lobster/internal/resolver"
 )
 
-var sharedHealth = func() *resolver.HealthStore {
-	p, err := config.HealthPath()
-	if err != nil {
-		return resolver.NewHealthStore()
-	}
-	return resolver.LoadHealth(p)
-}()
+var (
+	sharedHealthOnce  sync.Once
+	sharedHealthStore *resolver.HealthStore
+)
+
+func sharedHealth() *resolver.HealthStore {
+	sharedHealthOnce.Do(func() {
+		p, err := config.HealthPath()
+		if err != nil {
+			sharedHealthStore = resolver.NewHealthStore()
+			return
+		}
+		sharedHealthStore = resolver.LoadHealth(p)
+	})
+	return sharedHealthStore
+}
 
 func cfgQuality() string {
 	if cfg != nil && cfg.Quality != "" {
@@ -82,7 +92,7 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 // tryFallbackStream attempts to resolve a stream using the resilient Resolver,
 // which races fallback providers and selects the first valid result.
 func tryFallbackStream(primary provider.Provider, title string, mediaType media.MediaType, season, episode int) (*media.Stream, error) {
-	r := resolver.New(fallbackProviders(primary), sharedHealth, debugf)
+	r := resolver.New(fallbackProviders(primary), sharedHealth(), debugf)
 	req := resolver.Request{Title: title, MediaType: mediaType, Season: season, Episode: episode, Quality: cfgQuality()}
 	stream, report, err := r.Resolve(context.Background(), req)
 	if err != nil {

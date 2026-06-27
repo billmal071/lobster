@@ -77,6 +77,18 @@ func TestLoadCorruptIsBestEffort(t *testing.T) {
 	}
 }
 
+func TestOrderConcurrentWithRecordNoPanic(t *testing.T) {
+	h := NewHealthStore()
+	provs := []provider.Provider{provider.NewSoap2Day(), provider.NewMovieBox(), provider.NewTBCPL("tbcpl")}
+	var wg sync.WaitGroup
+	for i := 0; i < 300; i++ {
+		wg.Add(2)
+		go func(n int) { defer wg.Done(); h.Record(ProviderName(provs[n%len(provs)]), n%2 == 0, time.Millisecond) }(i)
+		go func() { defer wg.Done(); _ = h.Order(provs, time.Now(), 3) }()
+	}
+	wg.Wait()
+}
+
 func TestConcurrentRecordSaveNoRace(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "health.json")
 	h := LoadHealth(path)
