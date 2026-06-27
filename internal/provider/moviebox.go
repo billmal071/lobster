@@ -44,11 +44,15 @@ func NewMovieBox() *MovieBox {
 
 // baseURL returns the current API base URL.
 func (m *MovieBox) baseURL() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.baseURLs[m.pos%len(m.baseURLs)]
 }
 
 // rotateHost advances to the next host.
 func (m *MovieBox) rotateHost() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.pos++
 }
 
