@@ -1,6 +1,9 @@
 package resolver
 
 import (
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,4 +50,44 @@ func TestOrderRanksHealthyFirstAndBatches(t *testing.T) {
 	if len(batches) != 2 || ProviderName(batches[0][0]) != ProviderName(good) {
 		t.Fatalf("expected healthy provider first, got %v", batches)
 	}
+}
+
+func TestSaveLoadRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "health.json")
+	h := LoadHealth(path) // missing file -> empty
+	h.Record("MovieBox", true, 200*time.Millisecond)
+	if err := h.Save(); err != nil {
+		t.Fatal(err)
+	}
+	h2 := LoadHealth(path)
+	if h2.records["MovieBox"] == nil || h2.records["MovieBox"].Score <= healthNeutral {
+		t.Fatalf("reloaded store missing recorded health: %+v", h2.records["MovieBox"])
+	}
+}
+
+func TestLoadCorruptIsBestEffort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "health.json")
+	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := LoadHealth(path) // must not panic; returns empty usable store
+	h.Record("A", true, 0) // still usable
+	if h.records["A"] == nil {
+		t.Fatal("store unusable after corrupt load")
+	}
+}
+
+func TestConcurrentRecordSaveNoRace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "health.json")
+	h := LoadHealth(path)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			h.Record("P"+string(rune('A'+n%5)), n%2 == 0, time.Millisecond)
+			_ = h.Save()
+		}(i)
+	}
+	wg.Wait()
 }
