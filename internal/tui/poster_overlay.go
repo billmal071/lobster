@@ -9,7 +9,13 @@ import (
 	"lobster/internal/poster"
 )
 
-type posterDrawnMsg struct{ key string }
+// posterDrawMsg carries a prepared overlay sequence to be written (after
+// re-validation) from Update, so a draw scheduled for a now-stale state is
+// dropped instead of painted.
+type posterDrawMsg struct {
+	seq string
+	key string
+}
 
 // posterKey identifies the desired overlay state so identical redraws are
 // skipped. It includes width/height so a resize forces a reposition.
@@ -35,9 +41,7 @@ func (m AppModel) redrawPosterCmd(headerH, tabBarH int) tea.Cmd {
 	lm := computeLayout(m.width, m.height, headerH, tabBarH, m.isSearching, m.posterImgW, m.posterImgH)
 	seq := poster.PositionedImage(lm.bandRow, lm.bandCol, lm.posterCols, lm.posterRows, m.posterB64)
 	key := m.posterKey()
-	out := m.out
 	return tea.Tick(16*time.Millisecond, func(time.Time) tea.Msg {
-		out.WriteString(seq)
-		return posterDrawnMsg{key: key}
+		return posterDrawMsg{seq: seq, key: key}
 	})
 }

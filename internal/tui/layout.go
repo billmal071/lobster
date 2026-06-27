@@ -10,7 +10,6 @@ const (
 	bandPadV         = 0
 	bandPadH         = 2
 	bandGap          = 2 // gap between poster box and detail text within the band
-	searchHeaderRows = 3 // search label + input + blank line, when isSearching
 )
 
 type layoutMetrics struct {
@@ -35,22 +34,44 @@ func computeLayout(width, height, headerH, tabBarH int, searching bool, imgW, im
 	}
 
 	lm.posterCols, lm.posterRows = poster.BoxDims(width, imgW, imgH)
+
+	// Budget the band's vertical space so it never starves the results list.
+	const minListRows = 6
+	maxPosterRows := lm.mainHeight - minListRows - 2*bandBorder
+	if maxPosterRows < 6 {
+		maxPosterRows = 6
+	}
+	if lm.posterRows > maxPosterRows {
+		lm.posterRows = maxPosterRows
+		// Re-derive cols from the clamped rows to preserve the image aspect.
+		if imgW > 0 && imgH > 0 {
+			lm.posterCols = lm.posterRows * imgW * poster.CellAspectDen / (imgH * poster.CellAspectNum)
+		} else {
+			lm.posterCols = lm.posterRows * 4 / 3
+		}
+		if lm.posterCols < 15 {
+			lm.posterCols = 15
+		}
+		if lm.posterCols > 40 {
+			lm.posterCols = 40
+		}
+	}
+
 	lm.bandHeight = lm.posterRows + 2*bandBorder
 
 	lm.listWidth = width
 	lm.listHeight = lm.mainHeight - lm.bandHeight
+	if lm.listHeight < 0 {
+		lm.listHeight = 0
+	}
 
 	lm.textWidth = width - 2*bandBorder - 2*bandPadH - lm.posterCols - bandGap
 	if lm.textWidth < 20 {
 		lm.textWidth = 20
 	}
 
-	searchShift := 0
-	if searching {
-		searchShift = searchHeaderRows
-	}
 	// +1 converts the 0-based offset into a 1-based CUP coordinate.
-	lm.bandRow = docMarginV + headerH + tabBarH + searchShift + bandBorder + 1
+	lm.bandRow = docMarginV + headerH + tabBarH + bandBorder + 1
 	lm.bandCol = docMarginH + bandBorder + bandPadH + 1
 	return lm
 }

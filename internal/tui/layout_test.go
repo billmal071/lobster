@@ -37,11 +37,16 @@ func TestComputeLayout(t *testing.T) {
 	}
 }
 
-func TestComputeLayoutSearchShiftsBandRow(t *testing.T) {
-	base := computeLayout(120, 40, 6, 1, false, 0, 0)
-	srch := computeLayout(120, 40, 6, 1, true, 0, 0)
-	if srch.bandRow != base.bandRow+searchHeaderRows {
-		t.Fatalf("search bandRow=%d want %d", srch.bandRow, base.bandRow+searchHeaderRows)
+func TestComputeLayoutBoundsBandToFit(t *testing.T) {
+	// Short and normal terminals must both leave a usable (positive) list.
+	for _, tc := range []struct{ w, h int }{{80, 24}, {100, 30}, {120, 40}} {
+		lm := computeLayout(tc.w, tc.h, 6, 1, false, 0, 0)
+		if lm.bandHeight > lm.mainHeight {
+			t.Fatalf("%dx%d: bandHeight %d exceeds mainHeight %d", tc.w, tc.h, lm.bandHeight, lm.mainHeight)
+		}
+		if lm.listHeight <= 0 {
+			t.Fatalf("%dx%d: listHeight %d not positive (list starved)", tc.w, tc.h, lm.listHeight)
+		}
 	}
 }
 

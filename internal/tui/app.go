@@ -295,6 +295,9 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case resultsFetchedMsg:
 		m.err = nil
 		m.results = msg
+		m.posterReady = false
+		m.posterB64 = ""
+		m.drawnPosterKey = ""
 		items := make([]list.Item, len(msg))
 		for i, v := range msg {
 			items[i] = listItem{result: v}
@@ -352,8 +355,12 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.toast = fmt.Sprintf("Queued %d episodes: %s", msg.count, msg.title)
 		cmds = append(cmds, m.downloadsModel.Init())
 
-	case posterDrawnMsg:
-		m.drawnPosterKey = msg.key
+	case posterDrawMsg:
+		// Re-validate before writing: drop draws scheduled for a stale state.
+		if m.out != nil && m.posterVisible() && msg.key == m.posterKey() {
+			m.out.WriteString(msg.seq)
+			m.drawnPosterKey = msg.key
+		}
 	}
 
 	// Update browse list and handle item change.
@@ -389,6 +396,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Redraw the inline poster overlay only when its desired state changed.
 	if m.posterVisible() {
 		if k := m.posterKey(); k != m.drawnPosterKey {
+			m.drawnPosterKey = k // optimistic; the posterDrawMsg handler confirms
 			cmds = append(cmds, m.redrawPoster())
 		}
 	} else {
@@ -574,8 +582,10 @@ func (m AppModel) nextTab() tab {
 
 func (m *AppModel) switchTab(next tab) tea.Cmd {
 	m.drawnPosterKey = ""
+	m.posterReady = false
+	m.posterB64 = ""
 	if next == tabDownloads && m.dlManager == nil {
-		return nil
+		return tea.ClearScreen
 	}
 
 	m.activeTab = next
@@ -587,14 +597,14 @@ func (m *AppModel) switchTab(next tab) tea.Cmd {
 
 	if next == tabDownloads {
 		m.downloadsModel.SetFocused(true)
-		return m.downloadsModel.Init()
+		return tea.Batch(m.downloadsModel.Init(), tea.ClearScreen)
 	}
 
 	m.downloadsModel.SetFocused(false)
 	m.results = nil
 	m.list.SetItems(nil)
 	m.list.Title = m.tabTitle(next)
-	return tea.Batch(fetchTabCmd(m.providerForActiveTab(), next), m.list.StartSpinner())
+	return tea.Batch(fetchTabCmd(m.providerForActiveTab(), next), m.list.StartSpinner(), tea.ClearScreen)
 }
 
 func (m AppModel) tabTitle(t tab) string {
