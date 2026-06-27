@@ -190,6 +190,11 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
+				if !m.dlDialog.active {
+					// dialog just closed — repaint the poster
+					m.drawnPosterKey = ""
+					cmds = append(cmds, m.redrawPoster())
+				}
 				return m, tea.Batch(cmds...)
 			}
 		}
@@ -207,7 +212,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.KeyEsc:
 				m.isSearching = false
 				m.searchInput.Blur()
-				return m, nil
+				return m, m.redrawPoster()
 			}
 			var cmd tea.Cmd
 			m.searchInput, cmd = m.searchInput.Update(msg)
@@ -248,7 +253,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.isSearching = true
 			m.searchInput.Focus()
 			m.searchInput.SetValue("")
-			return m, nil
+			m.drawnPosterKey = ""
+			return m, tea.ClearScreen
 		case "enter":
 			if m.currentItem != nil {
 				m.selectedResult = m.currentItem
@@ -265,6 +271,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 					cmd := m.dlDialog.start(*m.currentItem, m.providerForActiveTab(), m.dlManager, outputDir)
+					m.drawnPosterKey = ""
 					return m, cmd
 				}
 				return m, m.queueCurrentDownload()
@@ -566,6 +573,7 @@ func (m AppModel) nextTab() tab {
 }
 
 func (m *AppModel) switchTab(next tab) tea.Cmd {
+	m.drawnPosterKey = ""
 	if next == tabDownloads && m.dlManager == nil {
 		return nil
 	}
