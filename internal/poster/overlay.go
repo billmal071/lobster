@@ -52,6 +52,21 @@ func PositionedImage(row, col, cols, rows int, b64 string) string {
 		inlineImageEscape(cols, rows, b64) + decrc
 }
 
+// FetchInlineImage downloads an image and returns base64 data + pixel dims,
+// ready for out-of-band OSC-1337 rendering. Returns ("",0,0,err) on failure.
+func FetchInlineImage(url string) (string, int, int, error) {
+	if url == "" {
+		return "", 0, 0, fmt.Errorf("empty url")
+	}
+	url = upgradeImageURL(url)
+	imgPath, cleanup, err := downloadToTemp(url)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	defer cleanup()
+	return InlineImageData(imgPath)
+}
+
 // InlineImageData reads an image file and returns its base64 data and pixel size.
 func InlineImageData(imagePath string) (string, int, int, error) {
 	data, err := os.ReadFile(imagePath)

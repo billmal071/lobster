@@ -60,6 +60,9 @@ type AppModel struct {
 	currentDetail *media.ContentDetail
 	currentPoster string
 	posterReady   bool // an inline poster image is loaded and ready to overlay
+	posterB64     string
+	posterImgW    int
+	posterImgH    int
 
 	err              error
 	isSearching      bool
@@ -310,7 +313,16 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case posterFetchedMsg:
 		if m.currentItem != nil && m.currentItem.ID == msg.id {
-			m.currentPoster = msg.poster
+			if msg.inline {
+				m.posterB64 = msg.b64
+				m.posterImgW = msg.imgW
+				m.posterImgH = msg.imgH
+				m.posterReady = msg.b64 != ""
+				m.currentPoster = "" // inline path never renders art in View()
+			} else {
+				m.currentPoster = msg.poster
+				m.posterReady = false
+			}
 		}
 
 	case downloadProgressMsg:
@@ -342,6 +354,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentItem = &m.results[m.list.Index()]
 			m.currentDetail = nil
 			m.currentPoster = ""
+			m.posterReady = false
+			m.posterB64 = ""
 			m.err = nil
 			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), m.currentItem.ID))
 			if m.currentItem.Poster != "" {

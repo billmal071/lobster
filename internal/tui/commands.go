@@ -194,6 +194,13 @@ func queueSeasonCmd(mgr *dlmanager.Manager, downloads []*store.Download) tea.Cmd
 // fetchPosterCmd fetches and renders a poster image for the detail pane.
 func fetchPosterCmd(id, url string, width, height int) tea.Cmd {
 	return func() tea.Msg {
+		if poster.IsInlineImage() {
+			b64, w, h, err := poster.FetchInlineImage(url)
+			if err != nil {
+				return posterFetchedMsg{id: id, inline: true} // empty -> placeholder box
+			}
+			return posterFetchedMsg{id: id, inline: true, b64: b64, imgW: w, imgH: h}
+		}
 		rendered := poster.RenderTUI(url, width, height)
 		return posterFetchedMsg{id: id, poster: rendered}
 	}

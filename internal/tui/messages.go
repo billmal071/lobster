@@ -53,8 +53,14 @@ type downloadProgressMsg dlmanager.ProgressUpdate
 // downloadListUpdatedMsg signals the downloads list should refresh from store.
 type downloadListUpdatedMsg struct{}
 
-// posterFetchedMsg is sent when a poster image has been rendered.
+// posterFetchedMsg is sent when a poster image has been prepared.
+// For char-art terminals, `poster` holds the rendered cell-art.
+// For inline terminals, `inline` is true and `b64`/`imgW`/`imgH` hold the image.
 type posterFetchedMsg struct {
 	id     string
 	poster string
+	b64    string
+	imgW   int
+	imgH   int
+	inline bool
 }
