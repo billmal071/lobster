@@ -10,6 +10,7 @@ const (
 	bandPadV         = 0
 	bandPadH         = 2
 	bandGap          = 2 // gap between poster box and detail text within the band
+	minListRows      = 6 // minimum rows always reserved for the results list
 )
 
 type layoutMetrics struct {
@@ -36,7 +37,6 @@ func computeLayout(width, height, headerH, tabBarH int, searching bool, imgW, im
 	lm.posterCols, lm.posterRows = poster.BoxDims(width, imgW, imgH)
 
 	// Budget the band's vertical space so it never starves the results list.
-	const minListRows = 6
 	maxPosterRows := lm.mainHeight - minListRows - 2*bandBorder
 	if maxPosterRows < 6 {
 		maxPosterRows = 6

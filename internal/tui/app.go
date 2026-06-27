@@ -627,7 +627,9 @@ func (m AppModel) renderBrowseContent(headerH, tabBarH int) string {
 	band := m.renderHeroBand(lm)
 
 	// ----- Results list, full width below the band -----
-	lh := lm.listHeight
+	// Size the list from the band's ACTUAL height (it may have grown to fit the
+	// detail text), not the poster-only estimate in lm.
+	lh := lm.mainHeight - lipgloss.Height(band)
 	if lh < 0 {
 		lh = 0
 	}
@@ -650,7 +652,6 @@ func (m AppModel) renderBrowseContent(headerH, tabBarH int) string {
 func (m AppModel) renderHeroBand(lm layoutMetrics) string {
 	bandStyle := lipgloss.NewStyle().
 		Width(m.width - 2*bandBorder).
-		Height(lm.bandHeight - 2*bandBorder).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#444444")).
 		Padding(bandPadV, bandPadH)
@@ -660,10 +661,26 @@ func (m AppModel) renderHeroBand(lm layoutMetrics) string {
 		if len(m.results) == 0 && m.err == nil {
 			msg = fmt.Sprintf("%s Fetching content...", m.loader.View())
 		}
-		return bandStyle.Render(lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render(msg))
+		return bandStyle.Height(lm.posterRows).Render(lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render(msg))
 	}
 
 	text := m.renderDetailText(lm.textWidth)
+
+	// Grow the band so the detail text (incl. description) is fully shown, but
+	// never far enough to starve the results list below minListRows. The poster
+	// box stays posterRows tall and top-aligned, so the inline-image overlay
+	// position is unaffected.
+	innerRows := lm.posterRows
+	if th := lipgloss.Height(text); th > innerRows {
+		innerRows = th
+	}
+	maxInner := lm.mainHeight - minListRows - 2*bandBorder
+	if maxInner < lm.posterRows {
+		maxInner = lm.posterRows
+	}
+	if innerRows > maxInner {
+		innerRows = maxInner
+	}
 
 	// Build the poster column.
 	var posterCol string
@@ -684,7 +701,7 @@ func (m AppModel) renderHeroBand(lm layoutMetrics) string {
 		lipgloss.NewStyle().Width(bandGap).Render(""),
 		lipgloss.NewStyle().Width(lm.textWidth).Render(text),
 	)
-	return bandStyle.Render(inner)
+	return bandStyle.Height(innerRows).Render(inner)
 }
 
 func (m AppModel) renderDetailText(textWidth int) string {
