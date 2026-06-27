@@ -59,6 +59,7 @@ type AppModel struct {
 	currentItem   *media.SearchResult
 	currentDetail *media.ContentDetail
 	currentPoster string
+	posterReady   bool // an inline poster image is loaded and ready to overlay
 
 	err              error
 	isSearching      bool

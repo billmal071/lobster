@@ -44,3 +44,29 @@ func TestComputeLayoutSearchShiftsBandRow(t *testing.T) {
 		t.Fatalf("search bandRow=%d want %d", srch.bandRow, base.bandRow+searchHeaderRows)
 	}
 }
+
+func TestPosterVisible(t *testing.T) {
+	base := AppModel{activeTab: tabMovies, posterReady: true}
+	if !base.posterVisible() {
+		t.Fatal("expected visible in browse tab with ready poster")
+	}
+
+	cases := []struct {
+		name string
+		mut  func(*AppModel)
+	}{
+		{"downloads tab hides", func(m *AppModel) { m.activeTab = tabDownloads }},
+		{"dialog hides", func(m *AppModel) { m.dlDialog.active = true }},
+		{"searching hides", func(m *AppModel) { m.isSearching = true }},
+		{"not ready hides", func(m *AppModel) { m.posterReady = false }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := base
+			c.mut(&m)
+			if m.posterVisible() {
+				t.Fatalf("%s: expected NOT visible", c.name)
+			}
+		})
+	}
+}

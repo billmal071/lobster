@@ -54,3 +54,14 @@ func computeLayout(width, height, headerH, tabBarH int, searching bool, imgW, im
 	lm.bandCol = docMarginH + bandBorder + bandPadH + 1
 	return lm
 }
+
+// posterVisible reports whether an inline poster image should currently be
+// painted. It must be false whenever anything could cover the hero band.
+// posterReady is only set on inline-capable terminals, so no terminal check
+// is needed here.
+func (m AppModel) posterVisible() bool {
+	return m.activeTab != tabDownloads &&
+		!m.dlDialog.active &&
+		!m.isSearching &&
+		m.posterReady
+}
