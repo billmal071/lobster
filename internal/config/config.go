@@ -155,6 +155,15 @@ func HistoryPath() (string, error) {
 	return filepath.Join(dir, "history.tsv"), nil
 }
 
+// HealthPath returns the path to the provider-health state file.
+func HealthPath() (string, error) {
+	dir, err := dataDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "health.json"), nil
+}
+
 // DownloadsDBPath returns the path to the downloads SQLite database.
 func DownloadsDBPath() (string, error) {
 	dir, err := dataDir()

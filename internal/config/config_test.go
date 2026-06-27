@@ -169,3 +169,14 @@ func TestExpandDownloadDir(t *testing.T) {
 		t.Errorf("got %q, want %q", dir, want)
 	}
 }
+
+func TestHealthPath(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "/tmp/lobtest-data")
+	p, err := HealthPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p != "/tmp/lobtest-data/lobster/health.json" {
+		t.Fatalf("HealthPath=%q want /tmp/lobtest-data/lobster/health.json", p)
+	}
+}
