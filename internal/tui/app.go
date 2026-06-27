@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -77,6 +78,8 @@ type AppModel struct {
 
 	// Download dialog for TV show batch downloads
 	dlDialog downloadDialog
+
+	out *syncWriter // synchronized terminal output; nil in tests
 }
 
 // item adapter for list.Model
@@ -137,7 +140,9 @@ func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager, f
 		m.downloadsModel = downloads.New(mgr.Store(), mgr)
 	}
 
-	p2 := tea.NewProgram(m, tea.WithAltScreen())
+	out := newSyncWriter(os.Stdout)
+	m.out = out
+	p2 := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(out))
 	m2, err := p2.Run()
 	if err != nil {
 		return nil, nil, err
