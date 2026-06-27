@@ -2,7 +2,9 @@ package resolver
 
 import (
 	"errors"
+	"net/http"
 	"testing"
+	"time"
 
 	"lobster/internal/media"
 )
@@ -42,5 +44,41 @@ func TestResolveWithProviderSearchFailStage(t *testing.T) {
 	_, stage, err := resolveWithProvider(f, Request{Title: "Foo", MediaType: media.Movie}, func(string, ...any) {})
 	if err == nil || stage != "search" {
 		t.Fatalf("expected search-stage failure, got stage=%q err=%v", stage, err)
+	}
+}
+
+// flakySP fails the first Watch with a transient error, then succeeds.
+type flakySP struct {
+	*fakeSP
+	failFirst bool
+	stream    *media.Stream
+	calls     *int
+}
+
+func (s *flakySP) Search(string) ([]media.SearchResult, error) {
+	return []media.SearchResult{{ID: "movie/1", Title: "Foo", Type: media.Movie}}, nil
+}
+func (s *flakySP) Watch(a, b, c, d string) (*media.Stream, error) {
+	*s.calls++
+	if s.failFirst && *s.calls == 1 {
+		return nil, errors.New("connection reset by peer")
+	}
+	return s.stream, nil
+}
+
+func TestProbeRetriesTransientThenSucceeds(t *testing.T) {
+	calls := 0
+	f := &fakeSP{} // override Search via a closure-backed fake
+	fr := &flakySP{fakeSP: f, failFirst: true, stream: &media.Stream{URL: "https://cdn/x.m3u8"}, calls: &calls}
+	r := &Resolver{health: NewHealthStore(), client: http.DefaultClient, attemptTimeout: 2 * time.Second, log: func(string, ...any) {}, validate: false}
+	res := r.probe(fr, Request{Title: "Foo", MediaType: media.Movie})
+	if res.Err != nil || res.Stream == nil {
+		t.Fatalf("expected success after retry, got %+v", res)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 attempts (1 transient retry), got %d", calls)
+	}
+	if r.health.records["flakySP"] == nil {
+		t.Fatal("probe did not record health")
 	}
 }

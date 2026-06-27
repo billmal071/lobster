@@ -2,11 +2,42 @@ package resolver
 
 import (
 	"fmt"
+	"time"
 
 	"lobster/internal/extract"
 	"lobster/internal/media"
 	"lobster/internal/provider"
 )
+
+// probeResult is the outcome of a single probe call.
+type probeResult struct {
+	Stream   *media.Stream
+	Provider string
+	Stage    string
+	Err      error
+	Latency  time.Duration
+}
+
+// probe runs resolveWithProvider for provider p, retrying once on a transient
+// error, optionally validating the stream, and recording health.
+func (r *Resolver) probe(p provider.Provider, req Request) probeResult {
+	name := ProviderName(p)
+	start := time.Now()
+	stream, stage, err := resolveWithProvider(p, req, r.log)
+	if err != nil && isTransient(err) {
+		time.Sleep(250 * time.Millisecond)
+		stream, stage, err = resolveWithProvider(p, req, r.log)
+	}
+	if err == nil && r.validate {
+		if verr := validateStream(r.client, stream); verr != nil {
+			err, stage = verr, "validate"
+			stream = nil
+		}
+	}
+	latency := time.Since(start)
+	r.health.Record(name, err == nil, latency)
+	return probeResult{Stream: stream, Provider: name, Stage: stage, Err: err, Latency: latency}
+}
 
 // MaxCandidates is the maximum number of search candidates to try per provider.
 const MaxCandidates = 5
