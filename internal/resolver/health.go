@@ -1,8 +1,11 @@
 package resolver
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -126,4 +129,42 @@ func (h *HealthStore) Order(providers []provider.Provider, now time.Time, batchS
 		batches = append(batches, ranked[i:end])
 	}
 	return batches
+}
+
+// LoadHealth reads the health file if present; on any error it returns an
+// empty, usable store with the path set so Save() can persist later.
+func LoadHealth(path string) *HealthStore {
+	h := &HealthStore{records: make(map[string]*ProviderHealth), path: path}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return h
+	}
+	var recs map[string]*ProviderHealth
+	if json.Unmarshal(data, &recs) == nil && recs != nil {
+		h.records = recs
+	}
+	return h
+}
+
+// Save atomically writes the store to its path (temp file + rename). It holds
+// the store lock for the whole read-modify-write so concurrent resolves can't
+// corrupt the file. No-op when path is empty.
+func (h *HealthStore) Save() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.path == "" {
+		return nil
+	}
+	data, err := json.MarshalIndent(h.records, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(h.path), 0o755); err != nil {
+		return err
+	}
+	tmp := h.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, h.path)
 }
