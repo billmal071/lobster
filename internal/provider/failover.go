@@ -3,6 +3,7 @@ package provider
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -39,7 +40,7 @@ func ResolveDomain(configured string, providerName string, overrides map[string]
 	if checkDomainHealth(configured) {
 		return configured
 	}
-	fmt.Printf("[failover] %s (%s) is unreachable, trying alternatives...\n", configured, providerName)
+	fmt.Fprintf(os.Stderr, "[failover] %s (%s) is unreachable, trying alternatives...\n", configured, providerName)
 
 	// Build candidate list: config overrides first, then built-in known domains.
 	// Override keys are matched case-insensitively.
@@ -60,11 +61,11 @@ func ResolveDomain(configured string, providerName string, overrides map[string]
 			continue // already tried
 		}
 		if checkDomainHealth(domain) {
-			fmt.Printf("[failover] switching %s to %s\n", providerName, domain)
+			fmt.Fprintf(os.Stderr, "[failover] switching %s to %s\n", providerName, domain)
 			return domain
 		}
 	}
 
-	fmt.Printf("[failover] no healthy domain found for %s, using %s anyway\n", providerName, configured)
+	fmt.Fprintf(os.Stderr, "[failover] no healthy domain found for %s, using %s anyway\n", providerName, configured)
 	return configured
 }
