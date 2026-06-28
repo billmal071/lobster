@@ -99,28 +99,33 @@ func (a *AllAnime) graphql(query string, vars map[string]any, out any) error {
 	return json.Unmarshal(data, out)
 }
 
-func (a *AllAnime) Search(query string) ([]media.SearchResult, error) {
+// allanimeEdge is one show node from the shows query.
+type allanimeEdge struct {
+	ID                string         `json:"_id"`
+	Name              string         `json:"name"`
+	EnglishName       string         `json:"englishName"`
+	Thumbnail         string         `json:"thumbnail"`
+	AvailableEpisodes map[string]int `json:"availableEpisodes"`
+}
+
+// queryShows runs the shows GraphQL query with the given search input and maps
+// the edges to SearchResults (Type=TV; AllAnime has no movie/season concept).
+func (a *AllAnime) queryShows(search map[string]any, limit int, country string) ([]media.SearchResult, error) {
 	var r struct {
 		Data struct {
 			Shows struct {
-				Edges []struct {
-					ID                string         `json:"_id"`
-					Name              string         `json:"name"`
-					EnglishName       string         `json:"englishName"`
-					Thumbnail         string         `json:"thumbnail"`
-					AvailableEpisodes map[string]int `json:"availableEpisodes"`
-				} `json:"edges"`
+				Edges []allanimeEdge `json:"edges"`
 			} `json:"shows"`
 		} `json:"data"`
 	}
 	vars := map[string]any{
-		"search": map[string]any{"allowAdult": false, "allowUnknown": false, "query": query},
-		"limit":  40, "page": 1, "translationType": a.trans, "countryOrigin": "ALL",
+		"search": search, "limit": limit, "page": 1,
+		"translationType": a.trans, "countryOrigin": country,
 	}
 	if err := a.graphql(allanimeSearchQuery, vars, &r); err != nil {
-		return nil, fmt.Errorf("search: %w", err)
+		return nil, err
 	}
-	var out []media.SearchResult
+	out := make([]media.SearchResult, 0, len(r.Data.Shows.Edges))
 	for _, e := range r.Data.Shows.Edges {
 		title := e.EnglishName
 		if title == "" {
@@ -130,6 +135,14 @@ func (a *AllAnime) Search(query string) ([]media.SearchResult, error) {
 			ID: e.ID, Title: title, Type: media.TV, Poster: e.Thumbnail,
 			Episodes: e.AvailableEpisodes[a.trans], URL: a.cfg.refererSite + "/anime/" + e.ID,
 		})
+	}
+	return out, nil
+}
+
+func (a *AllAnime) Search(query string) ([]media.SearchResult, error) {
+	out, err := a.queryShows(map[string]any{"allowAdult": false, "allowUnknown": false, "query": query}, 40, "ALL")
+	if err != nil {
+		return nil, fmt.Errorf("search: %w", err)
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no anime found for %q", query)
@@ -328,5 +341,13 @@ func (a *AllAnime) GetServers(id, episodeID string) ([]media.Server, error) {
 func (a *AllAnime) GetEmbedURL(serverID string) (string, error) {
 	return "", fmt.Errorf("use Watch instead")
 }
-func (a *AllAnime) Trending(mt media.MediaType) ([]media.SearchResult, error) { return nil, nil }
-func (a *AllAnime) Recent(mt media.MediaType) ([]media.SearchResult, error)   { return nil, nil }
+
+// Trending populates the anime tab on open with recently-updated Japanese anime
+// (so the tab isn't blank). "Recent" is AllAnime's recently-active sort.
+func (a *AllAnime) Trending(mt media.MediaType) ([]media.SearchResult, error) {
+	return a.queryShows(map[string]any{"allowAdult": false, "allowUnknown": false, "sortBy": "Recent"}, 30, "JP")
+}
+
+func (a *AllAnime) Recent(mt media.MediaType) ([]media.SearchResult, error) {
+	return a.queryShows(map[string]any{"allowAdult": false, "allowUnknown": false, "sortBy": "Recent"}, 30, "JP")
+}
