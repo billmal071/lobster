@@ -79,3 +79,32 @@ func TestResolveAdvancesPastSlowBatch(t *testing.T) {
 		t.Fatalf("resolver waited for the slow provider (%v) instead of advancing after the batch deadline", elapsed)
 	}
 }
+
+// A provider that exceeds the batch deadline must be recorded as a FAILURE (so a
+// chronically-slow provider is deprioritized), not rewarded by a late
+// self-reported success, and must appear in the report.
+func TestResolveRecordsTimeoutAsFailure(t *testing.T) {
+	slow := &delayedSP{fakeSP: &fakeSP{}, name: "slow", delay: 200 * time.Millisecond, stream: &media.Stream{URL: "https://cdn/slow.m3u8"}}
+	h := NewHealthStore()
+	r := New([]provider.Provider{slow}, h, func(string, ...any) {})
+	r.validate = false
+	r.batchSize = 1
+	r.attemptTimeout = 20 * time.Millisecond // slower than 20ms -> abandoned as timeout
+	_, rep, err := r.Resolve(context.Background(), Request{Title: "Foo", MediaType: media.Movie})
+	if err == nil {
+		t.Fatal("expected failure when the only provider is too slow")
+	}
+	rec := h.records[ProviderName(slow)]
+	if rec == nil || rec.Score >= healthNeutral {
+		t.Fatalf("expected slow provider recorded as failure (score < %.2f), got %+v", healthNeutral, rec)
+	}
+	foundTimeout := false
+	for _, a := range rep.Attempts {
+		if a.Stage == "batch-timeout" && a.Provider == ProviderName(slow) {
+			foundTimeout = true
+		}
+	}
+	if !foundTimeout {
+		t.Fatalf("expected a batch-timeout attempt for the slow provider in the report, got %+v", rep.Attempts)
+	}
+}

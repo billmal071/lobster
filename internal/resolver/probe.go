@@ -35,7 +35,9 @@ func (r *Resolver) probe(p provider.Provider, req Request) probeResult {
 		}
 	}
 	latency := time.Since(start)
-	r.health.Record(name, err == nil, latency)
+	// Health is recorded by Resolve on the receive side, not here: an abandoned
+	// probe that finishes after its batch deadline must NOT self-report a late
+	// success (which would keep a chronically-slow provider ranked first forever).
 	return probeResult{Stream: stream, Provider: name, Stage: stage, Err: err, Latency: latency}
 }
 
@@ -172,9 +174,6 @@ func tryEmbedProviderFallback(fb provider.Provider, match *media.SearchResult, m
 				seasonID = s.ID
 				break
 			}
-		}
-		if seasonID == "" && len(seasons) > 0 {
-			seasonID = seasons[0].ID
 		}
 		if seasonID == "" {
 			return nil, fmt.Errorf("season %d not found", season)

@@ -66,8 +66,12 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (*media.Stream, *Re
 		// Buffered to exactly len(batch) so abandoned-loser goroutines never
 		// block on send when the racer returns early.
 		ch := make(chan probeResult, len(batch))
+		// pending tracks providers whose probe hasn't been received yet, so the
+		// resolver can record a timeout for any it abandons at the batch deadline.
+		pending := make(map[string]bool, len(batch))
 		for _, p := range batch {
 			p := p
+			pending[ProviderName(p)] = true
 			go func() { ch <- r.probe(p, req) }()
 		}
 
@@ -76,16 +80,22 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (*media.Stream, *Re
 		for remaining > 0 {
 			select {
 			case <-ctx.Done():
+				r.recordPending(pending, report)
 				report.add(probeResult{Provider: "(resolver)", Stage: "overall-timeout", Err: ctx.Err()})
 				_ = r.health.Save()
 				return nil, report, ctx.Err()
 			case <-batchDeadline:
-				// No winner within attemptTimeout: abandon this batch's stragglers
-				// (their buffered-channel sends won't block) and advance to the next batch.
+				// No winner within attemptTimeout: record the still-pending
+				// providers as timeouts so chronically-slow providers are
+				// deprioritized (not rewarded by a late self-reported success),
+				// abandon their stragglers, and advance to the next batch.
+				r.recordPending(pending, report)
 				remaining = 0
 			case res := <-ch:
 				remaining--
+				delete(pending, res.Provider)
 				report.add(res)
+				r.health.Record(res.Provider, res.Err == nil, res.Latency)
 				if res.Err == nil && res.Stream != nil {
 					_ = r.health.Save()
 					return res.Stream, report, nil // abandon the rest
@@ -96,4 +106,20 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (*media.Stream, *Re
 
 	_ = r.health.Save()
 	return nil, report, fmt.Errorf("all providers failed: %s", report.Summary())
+}
+
+// recordPending marks every provider still running when its batch was abandoned
+// (batch deadline or overall timeout) as a timeout failure, deprioritizing it
+// for next time, and notes it in the report. Abandoned probe goroutines no
+// longer self-report, so this is their only health signal.
+func (r *Resolver) recordPending(pending map[string]bool, report *Report) {
+	for name := range pending {
+		r.health.Record(name, false, r.attemptTimeout)
+		report.add(probeResult{
+			Provider: name,
+			Stage:    "batch-timeout",
+			Err:      fmt.Errorf("no result within %s", r.attemptTimeout),
+			Latency:  r.attemptTimeout,
+		})
+	}
 }
