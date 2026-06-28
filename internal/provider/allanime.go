@@ -6,8 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
+	"strings"
 
+	"lobster/internal/extract"
 	"lobster/internal/httputil"
 	"lobster/internal/media"
 )
@@ -67,6 +71,7 @@ func (a *AllAnime) SetTranslation(t string) { a.trans = t }
 const (
 	allanimeSearchQuery   = `query($search: SearchInput, $limit: Int, $page: Int, $translationType: VaildTranslationTypeEnumType, $countryOrigin: VaildCountryOriginEnumType) { shows(search:$search, limit:$limit, page:$page, translationType:$translationType, countryOrigin:$countryOrigin) { edges { _id name englishName thumbnail availableEpisodes } } }`
 	allanimeEpisodesQuery = `query($showId: String!) { show(_id:$showId) { _id availableEpisodesDetail } }`
+	allanimeSourcesQuery  = `query($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode(showId:$showId, translationType:$translationType, episodeString:$episodeString) { episodeString sourceUrls } }`
 )
 
 // graphql POSTs a query+variables and decodes data into out.
@@ -180,9 +185,132 @@ func epNumber(es string, ordinal int) int {
 	return ordinal
 }
 
-// Watch stub — filled in by Task 5.
 func (a *AllAnime) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
-	return nil, fmt.Errorf("not implemented")
+	showID, episodeString, trans, ok := parseEpisodeID(episodeID)
+	if !ok {
+		return nil, fmt.Errorf("bad episode id %q", episodeID)
+	}
+
+	// 1) Persisted-query GET for the encrypted source list (Origin gates tobeparsed).
+	vars, _ := json.Marshal(map[string]any{"showId": showID, "translationType": trans, "episodeString": episodeString})
+	ext, _ := json.Marshal(map[string]any{"persistedQuery": map[string]any{"version": 1, "sha256Hash": a.cfg.pqHash}})
+	u := fmt.Sprintf("%s?variables=%s&extensions=%s", a.cfg.apiBase, url.QueryEscape(string(vars)), url.QueryEscape(string(ext)))
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", a.cfg.userAgent)
+	req.Header.Set("Referer", a.cfg.sourcesOrigin)
+	req.Header.Set("Origin", a.cfg.sourcesOrigin)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	var sr struct {
+		Data struct {
+			Tobeparsed string `json:"tobeparsed"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &sr); err != nil || sr.Data.Tobeparsed == "" {
+		return nil, fmt.Errorf("no sources for %s ep %s", showID, episodeString)
+	}
+
+	// 2) Decrypt -> sourceUrls.
+	plain, err := decryptTobeparsed(sr.Data.Tobeparsed, a.cfg.passphrase)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt: %w", err)
+	}
+	var dec struct {
+		Episode struct {
+			SourceUrls []struct {
+				SourceURL  string  `json:"sourceUrl"`
+				SourceName string  `json:"sourceName"`
+				Priority   float64 `json:"priority"`
+			} `json:"sourceUrls"`
+		} `json:"episode"`
+	}
+	if err := json.Unmarshal(plain, &dec); err != nil {
+		return nil, fmt.Errorf("parse sources: %w", err)
+	}
+	srcs := dec.Episode.SourceUrls
+	sort.SliceStable(srcs, func(i, j int) bool { return srcs[i].Priority > srcs[j].Priority })
+
+	// 3) Try each candidate: internal CDN (--/clock.json) first, else embed extractor.
+	var lastErr error
+	for _, s := range srcs {
+		if clockURL := decodeSourceURL(s.SourceURL, a.cfg.xorByte, a.cfg.clockBase); clockURL != "" {
+			if st, err := a.resolveClock(clockURL); err == nil {
+				return st, nil
+			} else {
+				lastErr = err
+			}
+			continue
+		}
+		// plain embed host -> reuse lobster's extractors
+		ex, resolved := extract.ResolveForURL(s.SourceURL, a.cfg.refererSite)
+		if st, err := ex.Extract(resolved, quality); err == nil && st != nil && st.URL != "" {
+			return st, nil
+		} else if err != nil {
+			lastErr = err
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no playable source")
+	}
+	return nil, fmt.Errorf("allanime watch %s ep %s: %w", showID, episodeString, lastErr)
+}
+
+// resolveClock fetches a /clock.json document and maps it to a Stream.
+func (a *AllAnime) resolveClock(clockURL string) (*media.Stream, error) {
+	req, err := http.NewRequest(http.MethodGet, clockURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", a.cfg.userAgent)
+	req.Header.Set("Referer", a.cfg.refererSite)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	var c struct {
+		Links []struct {
+			Link string `json:"link"`
+			HLS  struct {
+				URL string `json:"url"`
+			} `json:"hls"`
+		} `json:"links"`
+		Subtitles []struct {
+			Lang  string `json:"lang"`
+			Label string `json:"label"`
+			Src   string `json:"src"`
+		} `json:"subtitles"`
+		Referer string `json:"Referer"`
+	}
+	if err := json.Unmarshal(body, &c); err != nil {
+		return nil, err
+	}
+	for _, l := range c.Links {
+		u := l.Link
+		if u == "" {
+			u = l.HLS.URL
+		}
+		if u == "" {
+			continue
+		}
+		st := &media.Stream{URL: u, Referer: c.Referer}
+		for _, s := range c.Subtitles {
+			if strings.EqualFold(s.Label, "Thumbnails") || strings.EqualFold(s.Lang, "Thumbnails") {
+				continue
+			}
+			st.Subtitles = append(st.Subtitles, media.Subtitle{Language: s.Lang, Label: s.Label, URL: s.Src})
+		}
+		return st, nil
+	}
+	return nil, fmt.Errorf("clock.json had no playable link")
 }
 
 // Stable trivial methods.
