@@ -23,12 +23,12 @@ type tmdbSearchResponse struct {
 
 type tmdbSearchResult struct {
 	ID           int     `json:"id"`
-	Title        string  `json:"title"`          // movie
-	Name         string  `json:"name"`            // tv
-	MediaType    string  `json:"media_type"`      // "movie" or "tv"
+	Title        string  `json:"title"`      // movie
+	Name         string  `json:"name"`       // tv
+	MediaType    string  `json:"media_type"` // "movie" or "tv"
 	Overview     string  `json:"overview"`
-	ReleaseDate  string  `json:"release_date"`    // movie
-	FirstAirDate string  `json:"first_air_date"`  // tv
+	ReleaseDate  string  `json:"release_date"`   // movie
+	FirstAirDate string  `json:"first_air_date"` // tv
 	VoteAverage  float64 `json:"vote_average"`
 	PosterPath   string  `json:"poster_path"`
 }
@@ -125,7 +125,7 @@ var (
 // no confident match. Memoized per (title|year|isTV) for the process, including
 // negative results so a miss is never re-queried.
 func TMDBPoster(title, year string, isTV bool) string {
-	key := fmt.Sprintf("%s|%s|%t", strings.ToLower(strings.TrimSpace(title)), year, isTV)
+	key := fmt.Sprintf("%s|%s|%t", strings.ToLower(strings.TrimSpace(title)), strings.TrimSpace(year), isTV)
 	if v, ok := tmdbPosterMemo.Load(key); ok {
 		return v.(string)
 	}
@@ -141,8 +141,9 @@ func tmdbPosterLookup(title, year string, isTV bool) string {
 	if err != nil {
 		return ""
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/121.0")
 	req.Header.Set("Accept", "application/json, text/html, */*")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 	req.Header.Set("Referer", strings.TrimRight(tmdbBaseURL, "/")+"/")
 	resp, err := tmdbClient.Do(req)
 	if err != nil {

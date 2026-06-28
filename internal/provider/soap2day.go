@@ -17,11 +17,11 @@ import (
 )
 
 const (
-	moviesapiBase  = "https://ww2.moviesapi.to"
-	flixcdnBase    = "https://flixcdn.cyou"
-	hd4uBase       = "https://hd4u.sbs"
-	flixcdnKey     = "kiemtienmua911ca"
-	flixcdnIV      = "1234567890oiuytr"
+	moviesapiBase = "https://ww2.moviesapi.to"
+	flixcdnBase   = "https://flixcdn.cyou"
+	hd4uBase      = "https://hd4u.sbs"
+	flixcdnKey    = "kiemtienmua911ca"
+	flixcdnIV     = "1234567890oiuytr"
 )
 
 // Soap2Day implements the StreamProvider interface using TMDB for search
@@ -100,11 +100,12 @@ func (s *Soap2Day) Search(query string) ([]media.SearchResult, error) {
 		}
 
 		results = append(results, media.SearchResult{
-			ID:    fmt.Sprintf("%s/%d", item.MediaType, item.ID),
-			Title: item.displayTitle(),
-			Type:  mt,
-			Year:  item.year(),
-			URL:   fmt.Sprintf("%s/%s/%d", tmdbSearchBase, item.MediaType, item.ID),
+			ID:     fmt.Sprintf("%s/%d", item.MediaType, item.ID),
+			Title:  item.displayTitle(),
+			Type:   mt,
+			Year:   item.year(),
+			URL:    fmt.Sprintf("%s/%s/%d", tmdbSearchBase, item.MediaType, item.ID),
+			Poster: tmdbPosterURL(item.PosterPath),
 		})
 	}
 
@@ -334,7 +335,9 @@ func (s *Soap2Day) decryptCDN(base, embedID string) (string, []media.Subtitle, e
 	// Check for JSON error responses (e.g. {"message": "Video not found or deleted"})
 	trimmed := strings.TrimSpace(string(body))
 	if len(trimmed) > 0 && trimmed[0] == '{' {
-		var errResp struct{ Message string `json:"message"` }
+		var errResp struct {
+			Message string `json:"message"`
+		}
 		if json.Unmarshal([]byte(trimmed), &errResp) == nil && errResp.Message != "" {
 			return "", nil, fmt.Errorf("%s", errResp.Message)
 		}
@@ -483,11 +486,12 @@ func (s *Soap2Day) fetchTMDBTrending(mediaType string) ([]media.SearchResult, er
 		}
 
 		results = append(results, media.SearchResult{
-			ID:    fmt.Sprintf("%s/%d", item.MediaType, item.ID),
-			Title: item.displayTitle(),
-			Type:  mt,
-			Year:  item.year(),
-			URL:   fmt.Sprintf("%s/%s/%d", tmdbSearchBase, item.MediaType, item.ID),
+			ID:     fmt.Sprintf("%s/%d", item.MediaType, item.ID),
+			Title:  item.displayTitle(),
+			Type:   mt,
+			Year:   item.year(),
+			URL:    fmt.Sprintf("%s/%s/%d", tmdbSearchBase, item.MediaType, item.ID),
+			Poster: tmdbPosterURL(item.PosterPath),
 		})
 	}
 
