@@ -127,7 +127,7 @@ func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager, f
 		state:             stateTrending,
 		provider:          p,
 		cartoonProvider:   provider.NewKimCartoon(provider.ResolveDomain("kimcartoon.com.co", "kimcartoon", cfg.DomainOverrides)),
-		animeProvider:     provider.NewVaPlayer(),
+		animeProvider:     provider.NewAllAnime(cfg.AnimeDub),
 		fallbackProviders: fallbacks,
 		config:            cfg,
 		list:              l,
@@ -263,6 +263,19 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "d":
+			if m.activeTab == tabAnime {
+				if aa, ok := m.animeProvider.(*provider.AllAnime); ok {
+					if aa.Translation() == "dub" {
+						aa.SetTranslation("sub")
+					} else {
+						aa.SetTranslation("dub")
+					}
+					m.toast = "Anime audio: " + aa.Translation()
+					m.results = nil
+					m.currentItem = nil
+					return m, tea.Batch(fetchTabCmd(m.providerForActiveTab(), m.activeTab), m.list.StartSpinner())
+				}
+			}
 			if m.dlManager != nil && m.currentItem != nil {
 				if m.currentItem.Type == media.TV {
 					outputDir, err := m.config.ExpandDownloadDir()
