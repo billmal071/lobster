@@ -23,16 +23,26 @@ type probeResult struct {
 func (r *Resolver) probe(p provider.Provider, req Request) probeResult {
 	name := ProviderName(p)
 	start := time.Now()
-	stream, stage, err := resolveWithProvider(p, req, r.log)
-	if err != nil && isTransient(err) {
-		time.Sleep(250 * time.Millisecond)
+	var (
+		stream *media.Stream
+		stage  string
+		err    error
+	)
+	// Up to one retry on a transient failure — covering both resolution AND the
+	// validation hop, since validation is itself a network call that can fail
+	// transiently and discard an otherwise-good stream.
+	for attempt := 0; attempt < 2; attempt++ {
 		stream, stage, err = resolveWithProvider(p, req, r.log)
-	}
-	if err == nil && r.validate {
-		if verr := validateStream(r.client, stream); verr != nil {
-			err, stage = verr, "validate"
-			stream = nil
+		if err == nil && r.validate {
+			if verr := validateStream(r.client, stream); verr != nil {
+				err, stage = verr, "validate"
+				stream = nil
+			}
 		}
+		if err == nil || !isTransient(err) || attempt == 1 {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
 	latency := time.Since(start)
 	// Health is recorded by Resolve on the receive side, not here: an abandoned
@@ -220,7 +230,7 @@ func tryEmbedProviderFallback(fb provider.Provider, match *media.SearchResult, m
 			continue
 		}
 
-		log("fallback stream URL: %s (server: %s)", stream.URL, srv.Name)
+		log("fallback stream resolved (server: %s)", srv.Name)
 		return stream, nil
 	}
 
