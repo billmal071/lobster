@@ -208,7 +208,16 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.results = nil // Clear current results to show loader
 				m.currentItem = nil
 				cmds = append(cmds, m.list.StartSpinner())
-				return m, tea.Batch(searchCmd(m.providerForActiveTab(), m.searchInput.Value(), m.fallbackProviders...), m.list.StartSpinner())
+				// Only the Movies/Series tabs fan out to the movies fallback
+				// providers. Anime/Cartoons have their own dedicated provider, so
+				// searching them must NOT wait on the (often slow/dead) movies
+				// fallbacks — that was adding the multi-search timeout to every
+				// anime search.
+				fallbacks := m.fallbackProviders
+				if m.activeTab == tabAnime || m.activeTab == tabCartoons {
+					fallbacks = nil
+				}
+				return m, tea.Batch(searchCmd(m.providerForActiveTab(), m.searchInput.Value(), fallbacks...), m.list.StartSpinner())
 			case tea.KeyEsc:
 				m.isSearching = false
 				m.searchInput.Blur()
