@@ -169,3 +169,15 @@ func TestExpandDownloadDir(t *testing.T) {
 		t.Errorf("got %q, want %q", dir, want)
 	}
 }
+
+func TestHealthPath(t *testing.T) {
+	p, err := HealthPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// dataDir is platform-specific (XDG on Unix, AppData on Windows), so assert
+	// the stable contract: a file named health.json under a "lobster" dir.
+	if filepath.Base(p) != "health.json" || filepath.Base(filepath.Dir(p)) != "lobster" {
+		t.Fatalf("HealthPath=%q want .../lobster/health.json", p)
+	}
+}
