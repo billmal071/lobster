@@ -90,7 +90,7 @@ func TestAllAnimeWatchClockPath(t *testing.T) {
 	plain := `{"episode":{"sourceUrls":[{"sourceUrl":"--175b54575b53","sourceName":"S-mp4","priority":9}]}}`
 	blob := makeBlob(plain, "Xot36i3lK3:v1")
 	a := newTestAllAnime(map[string]string{
-		`episodeString`: `{"data":{"tobeparsed":"` + blob + `"}}`,      // sources query
+		`episodeString`: `{"data":{"tobeparsed":"` + blob + `"}}`, // sources query
 		`/clock.json`:   `{"links":[{"link":"https://cdn/master.m3u8"}],"subtitles":[{"lang":"en","label":"English","src":"https://cdn/en.vtt"}]}`,
 	})
 	st, err := a.Watch("ReH", "ReH|1|sub", "Default", "1080")
@@ -102,5 +102,20 @@ func TestAllAnimeWatchClockPath(t *testing.T) {
 	}
 	if len(st.Subtitles) != 1 || st.Subtitles[0].URL != "https://cdn/en.vtt" {
 		t.Fatalf("subtitles wrong: %+v", st.Subtitles)
+	}
+}
+
+func TestAllAnimeTrending(t *testing.T) {
+	a := newTestAllAnime(map[string]string{
+		`"sortBy":"Recent"`: `{"data":{"shows":{"edges":[
+			{"_id":"X1","name":"Show One","thumbnail":"http://img/1.jpg","availableEpisodes":{"sub":12,"dub":0,"raw":0}}
+		]}}}`,
+	})
+	res, err := a.Trending(media.TV)
+	if err != nil || len(res) != 1 {
+		t.Fatalf("trending: %v / %+v", err, res)
+	}
+	if res[0].ID != "X1" || res[0].Title != "Show One" || res[0].Type != media.TV || res[0].Episodes != 12 {
+		t.Fatalf("mapped trending wrong: %+v", res[0])
 	}
 }
