@@ -17,7 +17,6 @@ import (
 )
 
 const (
-	tmdbSearchBase = "https://www.themoviedb.org"
 	moviesapiBase  = "https://ww2.moviesapi.to"
 	flixcdnBase    = "https://flixcdn.cyou"
 	hd4uBase       = "https://hd4u.sbs"
@@ -37,43 +36,6 @@ func NewSoap2Day() *Soap2Day {
 		client: httputil.NewClient(),
 	}
 }
-
-// --- TMDB search types ---
-
-type tmdbSearchResponse struct {
-	Results []json.RawMessage `json:"results"`
-}
-
-type tmdbSearchResult struct {
-	ID           int     `json:"id"`
-	Title        string  `json:"title"`        // movie
-	Name         string  `json:"name"`         // tv
-	MediaType    string  `json:"media_type"`   // "movie" or "tv"
-	Overview     string  `json:"overview"`
-	ReleaseDate  string  `json:"release_date"` // movie
-	FirstAirDate string  `json:"first_air_date"` // tv
-	VoteAverage  float64 `json:"vote_average"`
-	PosterPath   string  `json:"poster_path"`
-}
-
-func (r *tmdbSearchResult) displayTitle() string {
-	if r.Name != "" {
-		return r.Name
-	}
-	return r.Title
-}
-
-func (r *tmdbSearchResult) year() string {
-	date := r.ReleaseDate
-	if date == "" {
-		date = r.FirstAirDate
-	}
-	if len(date) >= 4 {
-		return date[:4]
-	}
-	return ""
-}
-
 
 // --- moviesapi types ---
 
@@ -138,12 +100,11 @@ func (s *Soap2Day) Search(query string) ([]media.SearchResult, error) {
 		}
 
 		results = append(results, media.SearchResult{
-			ID:     fmt.Sprintf("%s/%d", item.MediaType, item.ID),
-			Title:  item.displayTitle(),
-			Type:   mt,
-			Year:   item.year(),
-			URL:    fmt.Sprintf("%s/%s/%d", tmdbSearchBase, item.MediaType, item.ID),
-			Poster: tmdbPosterURL(item.PosterPath),
+			ID:    fmt.Sprintf("%s/%d", item.MediaType, item.ID),
+			Title: item.displayTitle(),
+			Type:  mt,
+			Year:  item.year(),
+			URL:   fmt.Sprintf("%s/%s/%d", tmdbSearchBase, item.MediaType, item.ID),
 		})
 	}
 
@@ -343,14 +304,6 @@ func (s *Soap2Day) Watch(mediaID, episodeID, server, quality string) (*media.Str
 	return nil, fmt.Errorf("stream resolution failed: %w", lastErr)
 }
 
-// extractTMDBID extracts the numeric TMDB ID from a provider ID like "tv/79744" or "movie/299534".
-func extractTMDBID(id string) string {
-	if idx := strings.LastIndex(id, "/"); idx >= 0 {
-		return id[idx+1:]
-	}
-	return id
-}
-
 // extractEmbedID extracts the embed ID from a flixcdn video_url.
 func extractEmbedID(videoURL string) (string, error) {
 	idx := strings.Index(videoURL, "#")
@@ -530,12 +483,11 @@ func (s *Soap2Day) fetchTMDBTrending(mediaType string) ([]media.SearchResult, er
 		}
 
 		results = append(results, media.SearchResult{
-			ID:     fmt.Sprintf("%s/%d", item.MediaType, item.ID),
-			Title:  item.displayTitle(),
-			Type:   mt,
-			Year:   item.year(),
-			URL:    fmt.Sprintf("%s/%s/%d", tmdbSearchBase, item.MediaType, item.ID),
-			Poster: tmdbPosterURL(item.PosterPath),
+			ID:    fmt.Sprintf("%s/%d", item.MediaType, item.ID),
+			Title: item.displayTitle(),
+			Type:  mt,
+			Year:  item.year(),
+			URL:   fmt.Sprintf("%s/%s/%d", tmdbSearchBase, item.MediaType, item.ID),
 		})
 	}
 
