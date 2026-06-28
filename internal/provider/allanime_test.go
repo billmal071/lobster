@@ -84,3 +84,23 @@ func TestAllAnimeGetEpisodes(t *testing.T) {
 		t.Fatalf("dub episodes wrong: %+v", dub)
 	}
 }
+
+func TestAllAnimeWatchClockPath(t *testing.T) {
+	// sources query (persisted GET) returns a tobeparsed blob whose plaintext lists one "--" source.
+	plain := `{"episode":{"sourceUrls":[{"sourceUrl":"--175b54575b53","sourceName":"S-mp4","priority":9}]}}`
+	blob := makeBlob(plain, "Xot36i3lK3:v1")
+	a := newTestAllAnime(map[string]string{
+		`episodeString`: `{"data":{"tobeparsed":"` + blob + `"}}`,      // sources query
+		`/clock.json`:   `{"links":[{"link":"https://cdn/master.m3u8"}],"subtitles":[{"lang":"en","label":"English","src":"https://cdn/en.vtt"}]}`,
+	})
+	st, err := a.Watch("ReH", "ReH|1|sub", "Default", "1080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.URL != "https://cdn/master.m3u8" {
+		t.Fatalf("stream URL = %q", st.URL)
+	}
+	if len(st.Subtitles) != 1 || st.Subtitles[0].URL != "https://cdn/en.vtt" {
+		t.Fatalf("subtitles wrong: %+v", st.Subtitles)
+	}
+}
