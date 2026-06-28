@@ -210,7 +210,7 @@ func fetchPosterForItemCmd(item media.SearchResult, width, height int) tea.Cmd {
 	return func() tea.Msg {
 		url := posterURLForItem(item, provider.TMDBPoster)
 		if url == "" {
-			return posterFetchedMsg{id: item.ID}
+			return posterFetchedMsg{id: item.ID, inline: poster.IsInlineImage()}
 		}
 		if poster.IsInlineImage() {
 			b64, w, h, err := poster.FetchInlineImage(url)

@@ -129,17 +129,25 @@ func TMDBPoster(title, year string, isTV bool) string {
 	if v, ok := tmdbPosterMemo.Load(key); ok {
 		return v.(string)
 	}
-	res := tmdbPosterLookup(title, year, isTV)
-	tmdbPosterMemo.Store(key, res)
+	res, cacheable := tmdbPosterLookup(title, year, isTV)
+	if cacheable {
+		// Only memoize deterministic outcomes (a parsed response — match or not).
+		// Transient errors are NOT cached, so a momentary TMDB blip doesn't stick
+		// a permanent miss for this title for the rest of the session.
+		tmdbPosterMemo.Store(key, res)
+	}
 	return res
 }
 
-func tmdbPosterLookup(title, year string, isTV bool) string {
+// tmdbPosterLookup returns the matched poster URL (or "" for a genuine no-match)
+// and whether the outcome is cacheable. A network/parse error returns ("", false)
+// so the caller retries on the next selection instead of caching the failure.
+func tmdbPosterLookup(title, year string, isTV bool) (string, bool) {
 	endpoint := fmt.Sprintf("%s/search/trending?query=%s",
 		strings.TrimRight(tmdbBaseURL, "/"), url.QueryEscape(title))
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/121.0")
 	req.Header.Set("Accept", "application/json, text/html, */*")
@@ -147,16 +155,16 @@ func tmdbPosterLookup(title, year string, isTV bool) string {
 	req.Header.Set("Referer", strings.TrimRight(tmdbBaseURL, "/")+"/")
 	resp, err := tmdbClient.Do(req)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return ""
+		return "", false
 	}
 	var sr tmdbSearchResponse
 	if json.Unmarshal(data, &sr) != nil {
-		return ""
+		return "", false
 	}
 	objs := make([]tmdbSearchResult, 0, len(sr.Results))
 	for _, raw := range sr.Results {
@@ -168,5 +176,5 @@ func tmdbPosterLookup(title, year string, isTV bool) string {
 			objs = append(objs, item)
 		}
 	}
-	return pickPoster(objs, title, year, isTV)
+	return pickPoster(objs, title, year, isTV), true
 }
