@@ -187,5 +187,8 @@ func (h *HealthStore) Save() error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
+	// os.Rename can't overwrite an existing file on Windows; remove the target
+	// first. health.json is best-effort, so the brief non-atomic window is fine.
+	_ = os.Remove(path)
 	return os.Rename(tmp, path)
 }

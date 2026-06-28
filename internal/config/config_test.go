@@ -171,13 +171,13 @@ func TestExpandDownloadDir(t *testing.T) {
 }
 
 func TestHealthPath(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", "/tmp/lobtest-data")
 	p, err := HealthPath()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join("/tmp/lobtest-data", "lobster", "health.json")
-	if p != want {
-		t.Fatalf("HealthPath=%q want %q", p, want)
+	// dataDir is platform-specific (XDG on Unix, AppData on Windows), so assert
+	// the stable contract: a file named health.json under a "lobster" dir.
+	if filepath.Base(p) != "health.json" || filepath.Base(filepath.Dir(p)) != "lobster" {
+		t.Fatalf("HealthPath=%q want .../lobster/health.json", p)
 	}
 }
