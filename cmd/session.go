@@ -181,6 +181,17 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 		if stream, err := sp.Watch(sess.Content.ID, ep.ID, "Default", cfg.Quality); err == nil && stream != nil {
 			return stream, "Primary", nil
 		}
+		// AllAnime can't reliably stream FINISHED series (its CDN goes 500/404),
+		// so fall back to AniPub by title + episode number (AniPub has its own
+		// IDs; match by title). Airing shows resolve above and never reach here.
+		if aa, isAnime := sess.Provider.(*provider.AllAnime); isAnime && !excludeNames["AniPub"] {
+			if stream, err := provider.NewAniPub().ResolveByTitle(
+				sess.Content.Title, sess.Current().Number, aa.Translation() == "dub",
+			); err == nil && stream != nil {
+				debugf("AniPub fallback resolved %s ep %d", sess.Content.Title, sess.Current().Number)
+				return stream, "AniPub", nil
+			}
+		}
 	}
 
 	debugf("resolving stream via fallback providers for %s", sess.Title())
