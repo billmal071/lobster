@@ -78,9 +78,14 @@ func TestTMDBPosterFetchAndMemo(t *testing.T) {
 	if c := atomic.LoadInt32(&calls); c != 1 {
 		t.Fatalf("expected 1 server call (memoized), got %d", c)
 	}
-	// Negative result is also cached.
-	tmdbBaseURL = srv.URL
+	// Negative result is also cached: prime the miss, then a second identical
+	// call must not hit the server again.
 	if miss := TMDBPoster("Bleach", "2004", true); miss != "" {
 		t.Fatalf("expected miss, got %q", miss)
+	}
+	afterMiss := atomic.LoadInt32(&calls)
+	_ = TMDBPoster("Bleach", "2004", true)
+	if c := atomic.LoadInt32(&calls); c != afterMiss {
+		t.Fatalf("negative result not memoized: server calls %d -> %d", afterMiss, c)
 	}
 }
