@@ -11,6 +11,7 @@ import (
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/playlist"
+	"lobster/internal/provider"
 	"lobster/internal/subtitle"
 	"lobster/internal/ui"
 )
@@ -169,6 +170,16 @@ func episodeListMenu(sess *playlist.Session) error {
 // Primary provider (FlixHQ) is used for metadata only; streaming goes through
 // Soap2Day and other fallbacks directly.
 func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media.Stream, string, error) {
+	// Primary StreamProvider gets first crack with the native episode ID from the
+	// session — lets providers like AllAnime (opaque IDs "showId|1.5|sub") reach
+	// their own Watch verbatim, bypassing tmdbID:season:episode reconstruction.
+	if sp, ok := sess.Provider.(provider.StreamProvider); ok {
+		ep := sess.Current()
+		if stream, err := sp.Watch(sess.Content.ID, ep.ID, "Default", cfg.Quality); err == nil && stream != nil {
+			return stream, "Primary", nil
+		}
+	}
+
 	debugf("resolving stream via fallback providers for %s", sess.Title())
 	stream, err := tryFallbackStream(
 		sess.Provider,
