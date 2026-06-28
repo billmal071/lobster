@@ -7,9 +7,10 @@ import (
 )
 
 // newProvider returns the configured content provider.
-// Default is MovieBox (direct API, no scraping required).
-// Legacy providers (FlixHQ, Soap2Day) are available via base config
-// and are always included as fallbacks.
+// If APIURL is set, it overrides Base entirely and uses the Consumet API.
+// Otherwise Base selects the scraping provider (default "flixhq.to" -> FlixHQ;
+// Soap2Day, KimCartoon, etc. by their Base value); an unrecognized Base falls
+// back to MovieBox (direct API, no scraping).
 //
 // For providers that use a base domain, the domain is checked for health
 // at startup. If unreachable, known alternative domains are tried in order

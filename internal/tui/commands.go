@@ -153,6 +153,19 @@ func tuiResultScore(r media.SearchResult) int {
 	return score
 }
 
+// posterURLForItem chooses the poster URL to render: upgrade an empty or
+// non-TMDB poster to a confidently-matched TMDB one, else keep what the item
+// already has (e.g. FlixHQ's own thumbnail). lookup is injected for testing.
+func posterURLForItem(item media.SearchResult, lookup func(title, year string, isTV bool) string) string {
+	u := item.Poster
+	if u == "" || !strings.Contains(u, "image.tmdb.org") {
+		if tu := lookup(item.Title, item.Year, item.Type == media.TV); tu != "" {
+			u = tu
+		}
+	}
+	return u
+}
+
 // fetchDetailCmd fetches detailed metadata for a specific item.
 func fetchDetailCmd(p provider.Provider, id string) tea.Cmd {
 	return func() tea.Msg {
@@ -191,18 +204,25 @@ func queueSeasonCmd(mgr *dlmanager.Manager, downloads []*store.Download) tea.Cmd
 	}
 }
 
-// fetchPosterCmd fetches and renders a poster image for the detail pane.
-func fetchPosterCmd(id, url string, width, height int) tea.Cmd {
+// fetchPosterForItemCmd resolves the best poster URL for item (upgrading to a
+// TMDB high-res poster when the caller's lookup policy allows) and renders it
+// for the detail pane. lookup is supplied per-tab so only the Movies/Series
+// (FlixHQ) views opt into TMDB enrichment; other tabs keep their own posters.
+func fetchPosterForItemCmd(item media.SearchResult, width, height int, lookup func(title, year string, isTV bool) string) tea.Cmd {
 	return func() tea.Msg {
+		url := posterURLForItem(item, lookup)
+		if url == "" {
+			return posterFetchedMsg{id: item.ID, inline: poster.IsInlineImage()}
+		}
 		if poster.IsInlineImage() {
 			b64, w, h, err := poster.FetchInlineImage(url)
 			if err != nil {
-				return posterFetchedMsg{id: id, inline: true} // empty -> placeholder box
+				return posterFetchedMsg{id: item.ID, inline: true} // empty -> placeholder box
 			}
-			return posterFetchedMsg{id: id, inline: true, b64: b64, imgW: w, imgH: h}
+			return posterFetchedMsg{id: item.ID, inline: true, b64: b64, imgW: w, imgH: h}
 		}
 		rendered := poster.RenderTUI(url, width, height)
-		return posterFetchedMsg{id: id, poster: rendered}
+		return posterFetchedMsg{id: item.ID, poster: rendered}
 	}
 }
 

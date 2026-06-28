@@ -17,12 +17,11 @@ import (
 )
 
 const (
-	tmdbSearchBase = "https://www.themoviedb.org"
-	moviesapiBase  = "https://ww2.moviesapi.to"
-	flixcdnBase    = "https://flixcdn.cyou"
-	hd4uBase       = "https://hd4u.sbs"
-	flixcdnKey     = "kiemtienmua911ca"
-	flixcdnIV      = "1234567890oiuytr"
+	moviesapiBase = "https://ww2.moviesapi.to"
+	flixcdnBase   = "https://flixcdn.cyou"
+	hd4uBase      = "https://hd4u.sbs"
+	flixcdnKey    = "kiemtienmua911ca"
+	flixcdnIV     = "1234567890oiuytr"
 )
 
 // Soap2Day implements the StreamProvider interface using TMDB for search
@@ -37,43 +36,6 @@ func NewSoap2Day() *Soap2Day {
 		client: httputil.NewClient(),
 	}
 }
-
-// --- TMDB search types ---
-
-type tmdbSearchResponse struct {
-	Results []json.RawMessage `json:"results"`
-}
-
-type tmdbSearchResult struct {
-	ID           int     `json:"id"`
-	Title        string  `json:"title"`        // movie
-	Name         string  `json:"name"`         // tv
-	MediaType    string  `json:"media_type"`   // "movie" or "tv"
-	Overview     string  `json:"overview"`
-	ReleaseDate  string  `json:"release_date"` // movie
-	FirstAirDate string  `json:"first_air_date"` // tv
-	VoteAverage  float64 `json:"vote_average"`
-	PosterPath   string  `json:"poster_path"`
-}
-
-func (r *tmdbSearchResult) displayTitle() string {
-	if r.Name != "" {
-		return r.Name
-	}
-	return r.Title
-}
-
-func (r *tmdbSearchResult) year() string {
-	date := r.ReleaseDate
-	if date == "" {
-		date = r.FirstAirDate
-	}
-	if len(date) >= 4 {
-		return date[:4]
-	}
-	return ""
-}
-
 
 // --- moviesapi types ---
 
@@ -343,14 +305,6 @@ func (s *Soap2Day) Watch(mediaID, episodeID, server, quality string) (*media.Str
 	return nil, fmt.Errorf("stream resolution failed: %w", lastErr)
 }
 
-// extractTMDBID extracts the numeric TMDB ID from a provider ID like "tv/79744" or "movie/299534".
-func extractTMDBID(id string) string {
-	if idx := strings.LastIndex(id, "/"); idx >= 0 {
-		return id[idx+1:]
-	}
-	return id
-}
-
 // extractEmbedID extracts the embed ID from a flixcdn video_url.
 func extractEmbedID(videoURL string) (string, error) {
 	idx := strings.Index(videoURL, "#")
@@ -381,7 +335,9 @@ func (s *Soap2Day) decryptCDN(base, embedID string) (string, []media.Subtitle, e
 	// Check for JSON error responses (e.g. {"message": "Video not found or deleted"})
 	trimmed := strings.TrimSpace(string(body))
 	if len(trimmed) > 0 && trimmed[0] == '{' {
-		var errResp struct{ Message string `json:"message"` }
+		var errResp struct {
+			Message string `json:"message"`
+		}
 		if json.Unmarshal([]byte(trimmed), &errResp) == nil && errResp.Message != "" {
 			return "", nil, fmt.Errorf("%s", errResp.Message)
 		}
