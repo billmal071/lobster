@@ -205,10 +205,12 @@ func queueSeasonCmd(mgr *dlmanager.Manager, downloads []*store.Download) tea.Cmd
 }
 
 // fetchPosterForItemCmd resolves the best poster URL for item (upgrading to a
-// TMDB high-res poster when possible) and renders it for the detail pane.
-func fetchPosterForItemCmd(item media.SearchResult, width, height int) tea.Cmd {
+// TMDB high-res poster when the caller's lookup policy allows) and renders it
+// for the detail pane. lookup is supplied per-tab so only the Movies/Series
+// (FlixHQ) views opt into TMDB enrichment; other tabs keep their own posters.
+func fetchPosterForItemCmd(item media.SearchResult, width, height int, lookup func(title, year string, isTV bool) string) tea.Cmd {
 	return func() tea.Msg {
-		url := posterURLForItem(item, provider.TMDBPoster)
+		url := posterURLForItem(item, lookup)
 		if url == "" {
 			return posterFetchedMsg{id: item.ID, inline: poster.IsInlineImage()}
 		}

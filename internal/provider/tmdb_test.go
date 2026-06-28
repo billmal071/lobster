@@ -9,10 +9,12 @@ import (
 )
 
 func mkResult(id int, name, mediaType, year, poster string) tmdbSearchResult {
-	r := tmdbSearchResult{ID: id, Name: name, MediaType: mediaType, PosterPath: poster}
+	r := tmdbSearchResult{ID: id, MediaType: mediaType, PosterPath: poster}
 	if mediaType == "tv" {
+		r.Name = name // TMDB puts the TV title in "name"
 		r.FirstAirDate = year + "-01-01"
 	} else {
+		r.Title = name // ...and the movie title in "title"
 		r.ReleaseDate = year + "-01-01"
 	}
 	return r
@@ -87,5 +89,33 @@ func TestTMDBPosterFetchAndMemo(t *testing.T) {
 	_ = TMDBPoster("Bleach", "2004", true)
 	if c := atomic.LoadInt32(&calls); c != afterMiss {
 		t.Fatalf("negative result not memoized: server calls %d -> %d", afterMiss, c)
+	}
+}
+
+// A non-2xx response (rate-limit/proxy error) must NOT be cached as a miss, so a
+// later selection of the same title retries instead of being stuck blank.
+func TestTMDBPosterDoesNotCacheNon2xx(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"rate limited"}`)) // parses with results==nil
+	}))
+	defer srv.Close()
+
+	old := tmdbBaseURL
+	tmdbBaseURL = srv.URL
+	defer func() { tmdbBaseURL = old }()
+	tmdbPosterMemo = sync.Map{}
+
+	if got := TMDBPoster("Naruto", "2002", true); got != "" {
+		t.Fatalf("expected empty on non-2xx, got %q", got)
+	}
+	// Not cached: a second call must hit the server again.
+	if got := TMDBPoster("Naruto", "2002", true); got != "" {
+		t.Fatalf("expected empty on retry, got %q", got)
+	}
+	if c := atomic.LoadInt32(&calls); c != 2 {
+		t.Fatalf("non-2xx must not be cached: expected 2 server calls, got %d", c)
 	}
 }

@@ -42,7 +42,7 @@ const (
 
 // AppModel struct holding state
 type AppModel struct {
-	state           state
+	state             state
 	provider          provider.Provider
 	cartoonProvider   provider.Provider
 	animeProvider     provider.Provider
@@ -314,7 +314,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentItem = &msg[0]
 			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), msg[0].ID))
 			pw, ph := poster.BoxDims(m.width, 0, 0)
-			cmds = append(cmds, fetchPosterForItemCmd(msg[0], pw, ph))
+			cmds = append(cmds, fetchPosterForItemCmd(msg[0], pw, ph, m.posterLookup()))
 		} else {
 			m.currentItem = nil
 			m.currentDetail = nil
@@ -381,7 +381,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = nil
 			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), m.currentItem.ID))
 			pw, ph := poster.BoxDims(m.width, 0, 0)
-			cmds = append(cmds, fetchPosterForItemCmd(*m.currentItem, pw, ph))
+			cmds = append(cmds, fetchPosterForItemCmd(*m.currentItem, pw, ph, m.posterLookup()))
 		}
 		cmds = append(cmds, listCmd)
 	}
@@ -564,6 +564,16 @@ func (m AppModel) providerForActiveTab() provider.Provider {
 	}
 }
 
+// posterLookup returns the poster-enrichment policy for the active tab: a TMDB
+// high-res upgrade on the Movies/Series (FlixHQ) tabs, and none elsewhere so
+// Cartoons/Anime keep their own posters and skip needless TMDB lookups.
+func (m AppModel) posterLookup() func(title, year string, isTV bool) string {
+	if m.activeTab == tabMovies || m.activeTab == tabSeries {
+		return provider.TMDBPoster
+	}
+	return func(string, string, bool) string { return "" }
+}
+
 func (m AppModel) nextTab() tab {
 	switch m.activeTab {
 	case tabMovies:
@@ -656,7 +666,7 @@ func (m AppModel) renderBrowseContent(headerH, tabBarH int) string {
 
 func (m AppModel) renderHeroBand(lm layoutMetrics) string {
 	bandStyle := lipgloss.NewStyle().
-		Width(m.width - 2*bandBorder).
+		Width(m.width-2*bandBorder).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#444444")).
 		Padding(bandPadV, bandPadH)

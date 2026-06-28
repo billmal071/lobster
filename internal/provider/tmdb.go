@@ -158,6 +158,9 @@ func tmdbPosterLookup(title, year string, isTV bool) (string, bool) {
 		return "", false
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", false // non-2xx (rate-limit/proxy error): transient, don't cache
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", false
