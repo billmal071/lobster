@@ -513,14 +513,6 @@ func vidnestHasStreams(data []byte) bool {
 	return len(probe.Sources) > 0 || len(probe.Streams) > 0 || len(probe.Data) > 0
 }
 
-// tmdbPosterURL builds a full TMDB poster image URL from a poster path.
-func tmdbPosterURL(posterPath string) string {
-	if posterPath == "" {
-		return ""
-	}
-	return "https://image.tmdb.org/t/p/w500" + posterPath
-}
-
 // fetchTMDB performs a GET request to TMDB with appropriate headers.
 func (v *VidNest) fetchTMDB(rawURL string) ([]byte, error) {
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
