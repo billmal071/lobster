@@ -21,8 +21,8 @@ func TestDefault(t *testing.T) {
 	if !cfg.History {
 		t.Error("default history should be true")
 	}
-	if cfg.Base != "flixhq.to" {
-		t.Fatalf("Base=%q want flixhq.to", cfg.Base)
+	if cfg.Base != "flixhq.ws" {
+		t.Fatalf("Base=%q want flixhq.ws", cfg.Base)
 	}
 }
 
