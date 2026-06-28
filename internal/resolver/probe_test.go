@@ -78,7 +78,9 @@ func TestProbeRetriesTransientThenSucceeds(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("expected 2 attempts (1 transient retry), got %d", calls)
 	}
-	if r.health.records["flakySP"] == nil {
-		t.Fatal("probe did not record health")
+	// probe no longer records health itself; the result it returns carries the
+	// outcome, and Resolve records it on the receive side.
+	if res.Provider != "flakySP" {
+		t.Fatalf("expected provider name flakySP, got %q", res.Provider)
 	}
 }

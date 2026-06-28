@@ -176,7 +176,8 @@ func TestHealthPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p != "/tmp/lobtest-data/lobster/health.json" {
-		t.Fatalf("HealthPath=%q want /tmp/lobtest-data/lobster/health.json", p)
+	want := filepath.Join("/tmp/lobtest-data", "lobster", "health.json")
+	if p != want {
+		t.Fatalf("HealthPath=%q want %q", p, want)
 	}
 }
