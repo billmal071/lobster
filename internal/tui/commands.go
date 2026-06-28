@@ -153,6 +153,19 @@ func tuiResultScore(r media.SearchResult) int {
 	return score
 }
 
+// posterURLForItem chooses the poster URL to render: upgrade an empty or
+// non-TMDB poster to a confidently-matched TMDB one, else keep what the item
+// already has (e.g. FlixHQ's own thumbnail). lookup is injected for testing.
+func posterURLForItem(item media.SearchResult, lookup func(title, year string, isTV bool) string) string {
+	u := item.Poster
+	if u == "" || !strings.Contains(u, "image.tmdb.org") {
+		if tu := lookup(item.Title, item.Year, item.Type == media.TV); tu != "" {
+			u = tu
+		}
+	}
+	return u
+}
+
 // fetchDetailCmd fetches detailed metadata for a specific item.
 func fetchDetailCmd(p provider.Provider, id string) tea.Cmd {
 	return func() tea.Msg {
