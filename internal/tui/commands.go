@@ -204,18 +204,23 @@ func queueSeasonCmd(mgr *dlmanager.Manager, downloads []*store.Download) tea.Cmd
 	}
 }
 
-// fetchPosterCmd fetches and renders a poster image for the detail pane.
-func fetchPosterCmd(id, url string, width, height int) tea.Cmd {
+// fetchPosterForItemCmd resolves the best poster URL for item (upgrading to a
+// TMDB high-res poster when possible) and renders it for the detail pane.
+func fetchPosterForItemCmd(item media.SearchResult, width, height int) tea.Cmd {
 	return func() tea.Msg {
+		url := posterURLForItem(item, provider.TMDBPoster)
+		if url == "" {
+			return posterFetchedMsg{id: item.ID}
+		}
 		if poster.IsInlineImage() {
 			b64, w, h, err := poster.FetchInlineImage(url)
 			if err != nil {
-				return posterFetchedMsg{id: id, inline: true} // empty -> placeholder box
+				return posterFetchedMsg{id: item.ID, inline: true} // empty -> placeholder box
 			}
-			return posterFetchedMsg{id: id, inline: true, b64: b64, imgW: w, imgH: h}
+			return posterFetchedMsg{id: item.ID, inline: true, b64: b64, imgW: w, imgH: h}
 		}
 		rendered := poster.RenderTUI(url, width, height)
-		return posterFetchedMsg{id: id, poster: rendered}
+		return posterFetchedMsg{id: item.ID, poster: rendered}
 	}
 }
 
