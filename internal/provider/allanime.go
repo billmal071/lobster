@@ -71,7 +71,6 @@ func (a *AllAnime) SetTranslation(t string) { a.trans = t }
 const (
 	allanimeSearchQuery   = `query($search: SearchInput, $limit: Int, $page: Int, $translationType: VaildTranslationTypeEnumType, $countryOrigin: VaildCountryOriginEnumType) { shows(search:$search, limit:$limit, page:$page, translationType:$translationType, countryOrigin:$countryOrigin) { edges { _id name englishName thumbnail availableEpisodes } } }`
 	allanimeEpisodesQuery = `query($showId: String!) { show(_id:$showId) { _id availableEpisodesDetail } }`
-	allanimeSourcesQuery  = `query($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode(showId:$showId, translationType:$translationType, episodeString:$episodeString) { episodeString sourceUrls } }`
 )
 
 // graphql POSTs a query+variables and decodes data into out.
@@ -115,8 +114,8 @@ func (a *AllAnime) Search(query string) ([]media.SearchResult, error) {
 		} `json:"data"`
 	}
 	vars := map[string]any{
-		"search":          map[string]any{"allowAdult": false, "allowUnknown": false, "query": query},
-		"limit":           40, "page": 1, "translationType": a.trans, "countryOrigin": "ALL",
+		"search": map[string]any{"allowAdult": false, "allowUnknown": false, "query": query},
+		"limit":  40, "page": 1, "translationType": a.trans, "countryOrigin": "ALL",
 	}
 	if err := a.graphql(allanimeSearchQuery, vars, &r); err != nil {
 		return nil, fmt.Errorf("search: %w", err)
@@ -207,6 +206,9 @@ func (a *AllAnime) Watch(mediaID, episodeID, server, quality string) (*media.Str
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("allanime sources: status %d (origin gate?)", resp.StatusCode)
+	}
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	var sr struct {
 		Data struct {
@@ -275,6 +277,9 @@ func (a *AllAnime) resolveClock(clockURL string) (*media.Stream, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("clock.json: status %d", resp.StatusCode)
+	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	var c struct {
 		Links []struct {
