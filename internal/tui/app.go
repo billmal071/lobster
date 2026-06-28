@@ -313,10 +313,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msg) > 0 {
 			m.currentItem = &msg[0]
 			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), msg[0].ID))
-			if msg[0].Poster != "" {
-				pw, ph := poster.BoxDims(m.width, 0, 0)
-				cmds = append(cmds, fetchPosterCmd(msg[0].ID, msg[0].Poster, pw, ph))
-			}
+			pw, ph := poster.BoxDims(m.width, 0, 0)
+			cmds = append(cmds, fetchPosterForItemCmd(msg[0], pw, ph))
 		} else {
 			m.currentItem = nil
 			m.currentDetail = nil
@@ -382,10 +380,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.posterB64 = ""
 			m.err = nil
 			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), m.currentItem.ID))
-			if m.currentItem.Poster != "" {
-				pw, ph := poster.BoxDims(m.width, 0, 0)
-				cmds = append(cmds, fetchPosterCmd(m.currentItem.ID, m.currentItem.Poster, pw, ph))
-			}
+			pw, ph := poster.BoxDims(m.width, 0, 0)
+			cmds = append(cmds, fetchPosterForItemCmd(*m.currentItem, pw, ph))
 		}
 		cmds = append(cmds, listCmd)
 	}
