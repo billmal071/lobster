@@ -24,6 +24,9 @@ func TestDefault(t *testing.T) {
 	if cfg.Base != "flixhq.ws" {
 		t.Fatalf("Base=%q want flixhq.ws", cfg.Base)
 	}
+	if cfg.AnimeDub {
+		t.Error("default AnimeDub should be false (sub)")
+	}
 }
 
 func TestValidate(t *testing.T) {

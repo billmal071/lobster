@@ -30,6 +30,7 @@ type Config struct {
 	StallTimeout           int               `toml:"stall_timeout"`  // seconds before a stalled download is recovered
 	MaxRetries             int               `toml:"max_retries"`    // retry count for segment/file downloads
 	DomainOverrides        map[string][]string `toml:"domain_overrides"` // provider name -> fallback domains
+	AnimeDub               bool                `toml:"anime_dub"`
 }
 
 // Default returns the default configuration.
