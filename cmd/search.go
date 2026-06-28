@@ -76,9 +76,9 @@ func playFlow(p provider.Provider, query string) error {
 
 	// If primary returned few results, search fallback providers in parallel.
 	// The merged results may originate from fallback providers, but playback
-	// still uses the primary provider (p) because all providers share TMDB IDs
-	// as their universal content identifier — so any provider can resolve
-	// streams for results discovered by another.
+	// still uses the primary provider (p). Providers use their own ID formats
+	// (FlixHQ uses slugs, soap2day uses TMDB IDs). Stream resolution is
+	// title-based via the resolver, so cross-provider fallback works.
 	if len(results) < 3 {
 		debugf("primary returned %d results, searching fallback providers...", len(results))
 		stop = ui.StartSpinner("Searching more providers...")
@@ -452,9 +452,9 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		debugf("fallback failed: %v", err)
 		hint := ""
 		if _, isFlixHQ := p.(*provider.FlixHQ); isFlixHQ {
-			hint = "\nTip: try --base soap2day or --base vaplayer for better stream availability"
+			hint = "\nTip: try --base moviebox or --base vaplayer for better stream availability"
 		} else if _, isFlixHQWS := p.(*provider.FlixHQWS); isFlixHQWS {
-			hint = "\nTip: try --base soap2day or --base vaplayer for better stream availability"
+			hint = "\nTip: try --base moviebox or --base vaplayer for better stream availability"
 		}
 		return fmt.Errorf("all providers failed for %s: %w%s", title, err, hint)
 	}
