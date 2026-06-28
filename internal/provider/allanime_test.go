@@ -119,3 +119,22 @@ func TestAllAnimeTrending(t *testing.T) {
 		t.Fatalf("mapped trending wrong: %+v", res[0])
 	}
 }
+
+func TestAllAnimeSearchRanksMainSeriesFirst(t *testing.T) {
+	// AllAnime returns specials first; the relevance sort must surface the main
+	// series (exact title, most episodes), not a 1-episode special.
+	a := newTestAllAnime(map[string]string{
+		`"query":"Death Note"`: `{"data":{"shows":{"edges":[
+			{"_id":"A","name":"Death Note Rewrite","availableEpisodes":{"sub":1}},
+			{"_id":"B","name":"Death Note","availableEpisodes":{"sub":37}},
+			{"_id":"C","name":"Death Note: Relight","availableEpisodes":{"sub":1}}
+		]}}}`,
+	})
+	res, err := a.Search("Death Note")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res[0].Title != "Death Note" || res[0].Episodes != 37 {
+		t.Fatalf("expected main series first, got %q (%d eps)", res[0].Title, res[0].Episodes)
+	}
+}

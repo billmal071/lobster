@@ -147,6 +147,18 @@ func (a *AllAnime) Search(query string) ([]media.SearchResult, error) {
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no anime found for %q", query)
 	}
+	// AllAnime returns specials/spinoffs (1 episode) ahead of the main series, so
+	// "Death Note" lands on a 1-ep special instead of the 37-ep show. Rank exact
+	// title matches first, then by episode count (the main series has the most).
+	q := strings.TrimSpace(query)
+	sort.SliceStable(out, func(i, j int) bool {
+		ei := strings.EqualFold(strings.TrimSpace(out[i].Title), q)
+		ej := strings.EqualFold(strings.TrimSpace(out[j].Title), q)
+		if ei != ej {
+			return ei // exact title matches first
+		}
+		return out[i].Episodes > out[j].Episodes
+	})
 	return out, nil
 }
 
