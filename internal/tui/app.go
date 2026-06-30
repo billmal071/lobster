@@ -70,6 +70,8 @@ type AppModel struct {
 	isSearching      bool
 	selectedResult   *media.SearchResult
 	selectedProvider provider.Provider
+	selectedLineup   []media.SearchResult // full Live TV category lineup for surf; nil otherwise
+	selectedIndex    int                  // start index into selectedLineup
 
 	// Tab and download manager state
 	activeTab      tab
@@ -117,7 +119,7 @@ var (
 )
 
 // StartApp launches the TUI. If mgr is nil, download features are disabled.
-func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager, fallbacks ...provider.Provider) (*media.SearchResult, provider.Provider, error) {
+func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager, fallbacks ...provider.Provider) (*media.SearchResult, []media.SearchResult, int, provider.Provider, error) {
 	ti := textinput.New()
 	ti.Placeholder = "Search..."
 	ti.CharLimit = 156
@@ -158,13 +160,13 @@ func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager, f
 	p2 := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(out))
 	m2, err := p2.Run()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, nil, err
 	}
 	appModel := m2.(AppModel)
 	if appModel.selectedProvider == nil {
 		appModel.selectedProvider = p
 	}
-	return appModel.selectedResult, appModel.selectedProvider, nil
+	return appModel.selectedResult, appModel.selectedLineup, appModel.selectedIndex, appModel.selectedProvider, nil
 }
 
 func (m AppModel) Init() tea.Cmd {
@@ -306,9 +308,23 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.liveCategory = cat
 					return m, tea.Batch(fetchChannelsCmd(m.liveTVProvider, cat), m.list.StartSpinner())
 				}
-				// level 1: play the selected channel.
+				// level 1: play the selected channel, with the full category
+				// lineup so the play layer can surf past dead channels.
+				lineup := make([]media.SearchResult, len(m.liveMaster))
+				for idx, r := range m.liveMaster {
+					lineup[idx] = r.result
+				}
+				startIdx := 0
+				for idx := range lineup {
+					if lineup[idx].ID == m.currentItem.ID {
+						startIdx = idx
+						break
+					}
+				}
 				m.selectedResult = m.currentItem
 				m.selectedProvider = m.liveTVProvider
+				m.selectedLineup = lineup
+				m.selectedIndex = startIdx
 				return m, tea.Quit
 			}
 			if m.currentItem != nil {
