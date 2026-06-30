@@ -187,3 +187,37 @@ func TestHealthPath(t *testing.T) {
 		t.Fatalf("HealthPath=%q want .../lobster/health.json", p)
 	}
 }
+
+func TestLiveTVDefaultsOn(t *testing.T) {
+	if !Default().LiveTV.IPTVOrg {
+		t.Fatal("LiveTV.IPTVOrg should default to true")
+	}
+}
+
+func TestLiveTVSources(t *testing.T) {
+	c := LiveTVConfig{
+		IPTVOrg:   true,
+		Playlists: []string{"https://x/p.m3u", "/home/u/local.m3u"},
+		Xtream:    XtreamConfig{Server: "h:8080", Username: "u s", Password: "p&p"},
+	}
+	got := c.Sources()
+	if len(got) != 4 {
+		t.Fatalf("want 4 sources, got %d: %v", len(got), got)
+	}
+	if got[0] != "https://iptv-org.github.io/iptv/index.category.m3u" {
+		t.Fatalf("iptv-org first, got %q", got[0])
+	}
+	if got[1] != "https://x/p.m3u" || got[2] != "/home/u/local.m3u" {
+		t.Fatalf("playlists out of order: %v", got)
+	}
+	if got[3] != "http://h:8080/get.php?username=u+s&password=p%26p&type=m3u_plus&output=m3u8" {
+		t.Fatalf("xtream url wrong: %q", got[3])
+	}
+}
+
+func TestLiveTVSourcesOmitsIPTVOrgWhenOff(t *testing.T) {
+	c := LiveTVConfig{IPTVOrg: false}
+	if len(c.Sources()) != 0 {
+		t.Fatalf("want no sources, got %v", c.Sources())
+	}
+}
