@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -224,6 +225,58 @@ func fetchPosterForItemCmd(item media.SearchResult, width, height int, lookup fu
 		rendered := poster.RenderTUI(url, width, height)
 		return posterFetchedMsg{id: item.ID, poster: rendered}
 	}
+}
+
+// liveRow is one displayable Live TV item plus its description override.
+type liveRow struct {
+	result media.SearchResult
+	desc   string
+}
+
+// fetchCategoriesCmd loads the Live TV category list.
+func fetchCategoriesCmd(p *provider.LiveTV) tea.Cmd {
+	return func() tea.Msg {
+		cats, err := p.Categories()
+		if err != nil {
+			return errMsg{err}
+		}
+		rows := make([]liveRow, len(cats))
+		for i, c := range cats {
+			rows[i] = liveRow{result: c, desc: fmt.Sprintf("%d channels", c.Episodes)}
+		}
+		return liveItemsFetchedMsg{rows: rows, level: 0, title: "Live TV"}
+	}
+}
+
+// fetchChannelsCmd loads the channels in a Live TV category.
+func fetchChannelsCmd(p *provider.LiveTV, category string) tea.Cmd {
+	return func() tea.Msg {
+		chans, err := p.Channels(category)
+		if err != nil {
+			return errMsg{err}
+		}
+		rows := make([]liveRow, len(chans))
+		for i, c := range chans {
+			rows[i] = liveRow{result: c, desc: category}
+		}
+		return liveItemsFetchedMsg{rows: rows, level: 1, title: category}
+	}
+}
+
+// filterLiveRows returns rows whose title contains q (case-insensitive); an
+// empty query returns the full slice.
+func filterLiveRows(master []liveRow, q string) []liveRow {
+	q = strings.ToLower(strings.TrimSpace(q))
+	if q == "" {
+		return master
+	}
+	var out []liveRow
+	for _, r := range master {
+		if strings.Contains(strings.ToLower(r.result.Title), q) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // listenProgressCmd reads one progress update from the manager and returns it.
