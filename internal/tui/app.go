@@ -216,6 +216,19 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.KeyEnter:
 				m.isSearching = false
 				m.searchInput.Blur()
+				if m.activeTab == tabLiveTV {
+					// Client-side filter of the current level; no network call.
+					// An empty query restores the full list (filterLiveRows returns
+					// the full master), so this is also the clear-filter path.
+					q := m.searchInput.Value()
+					if m.liveLevel == 1 && m.liveCategory != "" {
+						m.list.Title = m.liveCategory
+					} else {
+						m.list.Title = "Live TV"
+					}
+					m.setLiveRows(filterLiveRows(m.liveMaster, q))
+					return m, nil
+				}
 				m.list.Title = "Search: " + m.searchInput.Value()
 				m.results = nil // Clear current results to show loader
 				m.currentItem = nil
@@ -277,7 +290,27 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searchInput.SetValue("")
 			m.drawnPosterKey = ""
 			return m, tea.ClearScreen
+		case "esc":
+			if m.activeTab == tabLiveTV && m.liveLevel == 1 {
+				m.liveCategory = ""
+				return m, tea.Batch(fetchCategoriesCmd(m.liveTVProvider), m.list.StartSpinner())
+			}
 		case "enter":
+			if m.activeTab == tabLiveTV {
+				if m.currentItem == nil {
+					return m, nil
+				}
+				if m.liveLevel == 0 {
+					// Drill into the selected category; do NOT quit.
+					cat := m.currentItem.ID
+					m.liveCategory = cat
+					return m, tea.Batch(fetchChannelsCmd(m.liveTVProvider, cat), m.list.StartSpinner())
+				}
+				// level 1: play the selected channel.
+				m.selectedResult = m.currentItem
+				m.selectedProvider = m.liveTVProvider
+				return m, tea.Quit
+			}
 			if m.currentItem != nil {
 				m.selectedResult = m.currentItem
 				m.selectedProvider = m.providerForActiveTab()
