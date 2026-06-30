@@ -331,6 +331,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Batch(fetchTabCmd(m.providerForActiveTab(), m.activeTab), m.list.StartSpinner())
 				}
 			}
+			if m.activeTab == tabLiveTV {
+				m.toast = "Live channels can't be downloaded"
+				return m, nil
+			}
 			if m.dlManager != nil && m.currentItem != nil {
 				if m.currentItem.Type == media.TV {
 					outputDir, err := m.config.ExpandDownloadDir()
@@ -585,7 +589,7 @@ func (m AppModel) View() string {
 		footer = footerStyle.Render("[P] Pause/Resume  [X] Cancel  [R] Retry  [BS] Remove  [C] Clear  [Shift+R] Refresh  [TAB] Browse")
 	} else {
 		dlHint := ""
-		if m.dlManager != nil {
+		if m.dlManager != nil && m.activeTab != tabLiveTV {
 			dlHint = "  [D] Download  "
 		}
 		footer = footerStyle.Render("[ENTER] Play" + dlHint + "[S] Search  [1-6] Categories  [TAB] Next Tab  [Q] Quit")
