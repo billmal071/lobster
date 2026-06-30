@@ -38,6 +38,7 @@ func (d statusDoer) Do(r *http.Request) (*http.Response, error) {
 func newTestLiveTV(sources []string, d httpDoer) *LiveTV {
 	p := NewLiveTV(sources)
 	p.client = d
+	p.fallback = d // keep tests network-free: fallback uses the same mock
 	return p
 }
 

@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -8,8 +9,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
-	"lobster/internal/httputil"
 	"lobster/internal/media"
 )
 
@@ -19,7 +20,8 @@ const liveTVUA = "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firef
 // loaded lazily and cached for the session. It implements StreamProvider; the
 // TUI also calls Categories/Channels for two-level browsing.
 type LiveTV struct {
-	client   httpDoer
+	client   httpDoer // primary fetch client (TLS 1.3 capable)
+	fallback httpDoer // retried when the primary errors (TLS 1.2-capped; nil in tests)
 	sources  []string
 	channels []Channel
 	byID     map[string]Channel
@@ -30,28 +32,61 @@ type LiveTV struct {
 }
 
 func NewLiveTV(sources []string) *LiveTV {
-	return &LiveTV{client: httputil.NewClient(), sources: sources}
+	return &LiveTV{
+		client:   liveTVHTTPClient(tls.VersionTLS13),
+		fallback: liveTVHTTPClient(tls.VersionTLS12),
+		sources:  sources,
+	}
+}
+
+// liveTVHTTPClient builds a playlist-fetch client. A short TLSHandshakeTimeout
+// makes a stalled handshake fail fast instead of hanging on the overall timeout,
+// and maxVer lets the caller cap the TLS version: some networks (e.g. certain
+// phone hotspots / middleboxes) break TLS 1.3 handshakes to CDNs like GitHub
+// Pages, so we retry capped at TLS 1.2.
+func liveTVHTTPClient(maxVer uint16) *http.Client {
+	return &http.Client{
+		Timeout: 60 * time.Second, // a slow CDN serving a ~3 MB playlist
+		Transport: &http.Transport{
+			Proxy:               http.ProxyFromEnvironment,
+			TLSHandshakeTimeout: 12 * time.Second,
+			ForceAttemptHTTP2:   true,
+			IdleConnTimeout:     30 * time.Second,
+			TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12, MaxVersion: maxVer},
+		},
+	}
 }
 
 // fetch reads a source: http(s) via the client, anything else via os.ReadFile.
+// On an http error it retries once with the TLS 1.2-capped fallback client.
 func (p *LiveTV) fetch(src string) ([]byte, error) {
 	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
-		req, err := http.NewRequest(http.MethodGet, src, nil)
-		if err != nil {
-			return nil, err
+		data, err := p.httpGet(p.client, src)
+		if err != nil && p.fallback != nil {
+			if data2, err2 := p.httpGet(p.fallback, src); err2 == nil {
+				return data2, nil
+			}
 		}
-		req.Header.Set("User-Agent", liveTVUA)
-		resp, err := p.client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("livetv: status %d for %s", resp.StatusCode, src)
-		}
-		return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+		return data, err
 	}
 	return os.ReadFile(src)
+}
+
+func (p *LiveTV) httpGet(c httpDoer, src string) ([]byte, error) {
+	req, err := http.NewRequest(http.MethodGet, src, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", liveTVUA)
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("livetv: status %d for %s", resp.StatusCode, src)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 }
 
 // load fetches+parses+merges all sources once. A failed source is skipped; only
@@ -62,9 +97,11 @@ func (p *LiveTV) doLoad() {
 	p.byID = map[string]Channel{}
 	p.byCat = map[string][]Channel{}
 	var anyOK bool
+	var lastErr error
 	for _, src := range p.sources {
 		data, err := p.fetch(src)
 		if err != nil {
+			lastErr = err
 			continue
 		}
 		anyOK = true
@@ -81,7 +118,7 @@ func (p *LiveTV) doLoad() {
 		}
 	}
 	if !anyOK && len(p.sources) > 0 {
-		p.loadErr = fmt.Errorf("livetv: all %d source(s) failed", len(p.sources))
+		p.loadErr = fmt.Errorf("livetv: all %d source(s) failed: %w", len(p.sources), lastErr)
 		return
 	}
 	for c := range p.byCat {
