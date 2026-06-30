@@ -127,7 +127,7 @@ func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager, f
 		state:             stateTrending,
 		provider:          p,
 		cartoonProvider:   provider.NewKimCartoon(provider.ResolveDomain("kimcartoon.com.co", "kimcartoon", cfg.DomainOverrides)),
-		animeProvider:     provider.NewVaPlayer(),
+		animeProvider:     provider.NewAllAnime(cfg.AnimeDub),
 		fallbackProviders: fallbacks,
 		config:            cfg,
 		list:              l,
@@ -208,7 +208,16 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.results = nil // Clear current results to show loader
 				m.currentItem = nil
 				cmds = append(cmds, m.list.StartSpinner())
-				return m, tea.Batch(searchCmd(m.providerForActiveTab(), m.searchInput.Value(), m.fallbackProviders...), m.list.StartSpinner())
+				// Only the Movies/Series tabs fan out to the movies fallback
+				// providers. Anime/Cartoons have their own dedicated provider, so
+				// searching them must NOT wait on the (often slow/dead) movies
+				// fallbacks — that was adding the multi-search timeout to every
+				// anime search.
+				fallbacks := m.fallbackProviders
+				if m.activeTab == tabAnime || m.activeTab == tabCartoons {
+					fallbacks = nil
+				}
+				return m, tea.Batch(searchCmd(m.providerForActiveTab(), m.searchInput.Value(), fallbacks...), m.list.StartSpinner())
 			case tea.KeyEsc:
 				m.isSearching = false
 				m.searchInput.Blur()
@@ -263,6 +272,19 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "d":
+			if m.activeTab == tabAnime {
+				if aa, ok := m.animeProvider.(*provider.AllAnime); ok {
+					if aa.Translation() == "dub" {
+						aa.SetTranslation("sub")
+					} else {
+						aa.SetTranslation("dub")
+					}
+					m.toast = "Anime audio: " + aa.Translation()
+					m.results = nil
+					m.currentItem = nil
+					return m, tea.Batch(fetchTabCmd(m.providerForActiveTab(), m.activeTab), m.list.StartSpinner())
+				}
+			}
 			if m.dlManager != nil && m.currentItem != nil {
 				if m.currentItem.Type == media.TV {
 					outputDir, err := m.config.ExpandDownloadDir()

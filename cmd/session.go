@@ -11,6 +11,7 @@ import (
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/playlist"
+	"lobster/internal/provider"
 	"lobster/internal/subtitle"
 	"lobster/internal/ui"
 )
@@ -165,10 +166,34 @@ func episodeListMenu(sess *playlist.Session) error {
 	return nil
 }
 
-// resolveStream resolves a stream for the current episode via fallback providers.
-// Primary provider (FlixHQ) is used for metadata only; streaming goes through
-// Soap2Day and other fallbacks directly.
+// resolveStream resolves a stream for the current episode. A primary provider
+// that implements StreamProvider (e.g. AllAnime) is tried first with the
+// session's native episode ID; otherwise (e.g. FlixHQ, used for metadata only)
+// resolution goes through the resilient fallback path.
 func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media.Stream, string, error) {
+	// Primary StreamProvider gets first crack with the native episode ID from the
+	// session — lets providers like AllAnime (opaque IDs "showId|1.5|sub") reach
+	// their own Watch verbatim, bypassing tmdbID:season:episode reconstruction.
+	// Skip it once it's been excluded (its last stream failed playback), so a
+	// dead Primary stream can't trap playCurrentEpisode in an infinite retry.
+	if sp, ok := sess.Provider.(provider.StreamProvider); ok && !excludeNames["Primary"] {
+		ep := sess.Current()
+		if stream, err := sp.Watch(sess.Content.ID, ep.ID, "Default", cfg.Quality); err == nil && stream != nil {
+			return stream, "Primary", nil
+		}
+		// AllAnime can't reliably stream FINISHED series (its CDN goes 500/404),
+		// so fall back to AniPub by title + episode number (AniPub has its own
+		// IDs; match by title). Airing shows resolve above and never reach here.
+		if aa, isAnime := sess.Provider.(*provider.AllAnime); isAnime && !excludeNames["AniPub"] {
+			if stream, err := provider.NewAniPub().ResolveByTitle(
+				sess.Content.Title, sess.Current().Number, aa.Translation() == "dub",
+			); err == nil && stream != nil {
+				debugf("AniPub fallback resolved %s ep %d", sess.Content.Title, sess.Current().Number)
+				return stream, "AniPub", nil
+			}
+		}
+	}
+
 	debugf("resolving stream via fallback providers for %s", sess.Title())
 	stream, err := tryFallbackStream(
 		sess.Provider,
