@@ -19,8 +19,8 @@ import (
 	"lobster/internal/httputil"
 	"lobster/internal/media"
 	"lobster/internal/player"
-	"lobster/internal/poster"
 	"lobster/internal/playlist"
+	"lobster/internal/poster"
 	"lobster/internal/provider"
 	"lobster/internal/subtitle"
 	"lobster/internal/tui"
@@ -226,6 +226,11 @@ func printDetail(r media.SearchResult, d *media.ContentDetail) {
 func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, episode int) error {
 	episodeID := ""
 	title := selected.Title
+
+	// Live channels are endless streams; ffmpeg-to-file would never finish.
+	if _, isLive := p.(*provider.LiveTV); isLive && flagDownload != "" {
+		return fmt.Errorf("live channels cannot be downloaded")
+	}
 
 	if selected.Type == media.TV {
 		// Get seasons
