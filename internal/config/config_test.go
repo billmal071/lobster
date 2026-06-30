@@ -221,3 +221,11 @@ func TestLiveTVSourcesOmitsIPTVOrgWhenOff(t *testing.T) {
 		t.Fatalf("want no sources, got %v", c.Sources())
 	}
 }
+
+func TestLiveTVSourcesHTTPSXtream(t *testing.T) {
+	c := LiveTVConfig{Xtream: XtreamConfig{Server: "https://h:8443", Username: "u", Password: "p"}}
+	got := c.Sources()
+	if len(got) != 1 || got[0] != "https://h:8443/get.php?username=u&password=p&type=m3u_plus&output=m3u8" {
+		t.Fatalf("https xtream url wrong: %v", got)
+	}
+}

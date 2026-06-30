@@ -60,9 +60,13 @@ func (c LiveTVConfig) Sources() []string {
 	}
 	s = append(s, c.Playlists...)
 	if c.Xtream.Server != "" {
+		server := c.Xtream.Server
+		if !strings.HasPrefix(server, "http://") && !strings.HasPrefix(server, "https://") {
+			server = "http://" + server
+		}
 		s = append(s, fmt.Sprintf(
-			"http://%s/get.php?username=%s&password=%s&type=m3u_plus&output=m3u8",
-			c.Xtream.Server,
+			"%s/get.php?username=%s&password=%s&type=m3u_plus&output=m3u8",
+			server,
 			url.QueryEscape(c.Xtream.Username),
 			url.QueryEscape(c.Xtream.Password),
 		))

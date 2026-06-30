@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 
 	"lobster/internal/httputil"
 	"lobster/internal/media"
@@ -24,7 +25,7 @@ type LiveTV struct {
 	byID     map[string]Channel
 	byCat    map[string][]Channel
 	cats     []string
-	loaded   bool
+	once     sync.Once
 	loadErr  error
 }
 
@@ -55,11 +56,9 @@ func (p *LiveTV) fetch(src string) ([]byte, error) {
 
 // load fetches+parses+merges all sources once. A failed source is skipped; only
 // if every source fails is loadErr set.
-func (p *LiveTV) load() {
-	if p.loaded {
-		return
-	}
-	p.loaded = true
+func (p *LiveTV) load() { p.once.Do(p.doLoad) }
+
+func (p *LiveTV) doLoad() {
 	p.byID = map[string]Channel{}
 	p.byCat = map[string][]Channel{}
 	var anyOK bool
@@ -168,6 +167,9 @@ func (p *LiveTV) Search(query string) ([]media.SearchResult, error) {
 
 func (p *LiveTV) Watch(mediaID, _, _, _ string) (*media.Stream, error) {
 	p.load()
+	if p.loadErr != nil {
+		return nil, p.loadErr
+	}
 	ch, ok := p.byID[mediaID]
 	if !ok {
 		return nil, fmt.Errorf("livetv: unknown channel %q", mediaID)
