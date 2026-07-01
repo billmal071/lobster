@@ -59,6 +59,7 @@ type liveItemsFetchedMsg struct {
 	rows  []liveRow
 	level int
 	title string
+	gen   int // request generation; stale/cross-tab responses are ignored
 }
 
 // posterFetchedMsg is sent when a poster image has been prepared.

@@ -19,7 +19,6 @@ func mpvHeaderArgs(s *media.Stream) []string {
 	if s.Referer != "" {
 		args = append(args, "--http-header-fields=Referer: "+s.Referer)
 		hdr.WriteString("Referer: " + s.Referer + "\r\n")
-		args = append(args, "--tls-verify=no")
 	}
 	if s.UserAgent != "" {
 		args = append(args, "--user-agent="+s.UserAgent)

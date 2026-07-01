@@ -39,6 +39,10 @@ func TestMPVHeaderArgsCombinesRefererAndUA(t *testing.T) {
 	if !strings.Contains(hdr, "Referer: https://ref/") || !strings.Contains(hdr, "User-Agent: UA/1.0") {
 		t.Fatalf("combined headers missing one value: %q", hdr)
 	}
+	// A Referer must NOT silently disable TLS verification.
+	if has(args, "--tls-verify=no") {
+		t.Fatalf("Referer should not disable TLS verification: %v", args)
+	}
 }
 
 func TestMPVHeaderArgsEmpty(t *testing.T) {

@@ -234,7 +234,7 @@ type liveRow struct {
 }
 
 // fetchCategoriesCmd loads the Live TV category list.
-func fetchCategoriesCmd(p *provider.LiveTV) tea.Cmd {
+func fetchCategoriesCmd(p *provider.LiveTV, gen int) tea.Cmd {
 	return func() tea.Msg {
 		cats, err := p.Categories()
 		if err != nil {
@@ -244,12 +244,12 @@ func fetchCategoriesCmd(p *provider.LiveTV) tea.Cmd {
 		for i, c := range cats {
 			rows[i] = liveRow{result: c, desc: fmt.Sprintf("%d channels", c.Episodes)}
 		}
-		return liveItemsFetchedMsg{rows: rows, level: 0, title: "Live TV"}
+		return liveItemsFetchedMsg{rows: rows, level: 0, title: "Live TV", gen: gen}
 	}
 }
 
 // fetchChannelsCmd loads the channels in a Live TV category.
-func fetchChannelsCmd(p *provider.LiveTV, category string) tea.Cmd {
+func fetchChannelsCmd(p *provider.LiveTV, category string, gen int) tea.Cmd {
 	return func() tea.Msg {
 		chans, err := p.Channels(category)
 		if err != nil {
@@ -259,7 +259,7 @@ func fetchChannelsCmd(p *provider.LiveTV, category string) tea.Cmd {
 		for i, c := range chans {
 			rows[i] = liveRow{result: c, desc: category}
 		}
-		return liveItemsFetchedMsg{rows: rows, level: 1, title: category}
+		return liveItemsFetchedMsg{rows: rows, level: 1, title: category, gen: gen}
 	}
 }
 

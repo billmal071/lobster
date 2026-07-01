@@ -84,6 +84,7 @@ type AppModel struct {
 	liveLevel      int       // 0 = categories, 1 = channels
 	liveCategory   string    // current category at level 1
 	liveMaster     []liveRow // unfiltered rows for the current level
+	liveReqGen     int       // bumped per Live TV fetch; stale responses are ignored
 
 	// Download dialog for TV show batch downloads
 	dlDialog downloadDialog
@@ -295,7 +296,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			if m.activeTab == tabLiveTV && m.liveLevel == 1 {
 				m.liveCategory = ""
-				return m, tea.Batch(fetchCategoriesCmd(m.liveTVProvider), m.list.StartSpinner())
+				m.liveReqGen++
+				return m, tea.Batch(fetchCategoriesCmd(m.liveTVProvider, m.liveReqGen), m.list.StartSpinner())
 			}
 		case "enter":
 			if m.activeTab == tabLiveTV {
@@ -306,7 +308,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Drill into the selected category; do NOT quit.
 					cat := m.currentItem.ID
 					m.liveCategory = cat
-					return m, tea.Batch(fetchChannelsCmd(m.liveTVProvider, cat), m.list.StartSpinner())
+					m.liveReqGen++
+					return m, tea.Batch(fetchChannelsCmd(m.liveTVProvider, cat, m.liveReqGen), m.list.StartSpinner())
 				}
 				// level 1: play the selected channel, with the full category
 				// lineup so the play layer can surf past dead channels.
@@ -409,6 +412,11 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case liveItemsFetchedMsg:
+		// Ignore a response the user has moved past: a different tab is now
+		// active, or a newer Live TV request was issued after this one.
+		if m.activeTab != tabLiveTV || msg.gen != m.liveReqGen {
+			return m, nil
+		}
 		m.list.StopSpinner()
 		m.liveLevel = msg.level
 		m.liveMaster = msg.rows
@@ -748,7 +756,8 @@ func (m *AppModel) switchTab(next tab) tea.Cmd {
 	if next == tabLiveTV {
 		m.liveLevel = 0
 		m.liveCategory = ""
-		return tea.Batch(fetchCategoriesCmd(m.liveTVProvider), m.list.StartSpinner(), tea.ClearScreen)
+		m.liveReqGen++
+		return tea.Batch(fetchCategoriesCmd(m.liveTVProvider, m.liveReqGen), m.list.StartSpinner(), tea.ClearScreen)
 	}
 	return tea.Batch(fetchTabCmd(m.providerForActiveTab(), next), m.list.StartSpinner(), tea.ClearScreen)
 }
