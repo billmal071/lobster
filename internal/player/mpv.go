@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
-	"math"
 
 	"lobster/internal/media"
 )
@@ -50,12 +50,7 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 		"--network-timeout=15",
 	}
 
-	if stream.Referer != "" {
-		args = append(args, "--http-header-fields=Referer: "+stream.Referer)
-		// Propagate referer to ffmpeg's HLS demuxer for segment requests
-		args = append(args, "--demuxer-lavf-o=headers=Referer: "+stream.Referer+"\r\n")
-		args = append(args, "--tls-verify=no")
-	}
+	args = append(args, mpvHeaderArgs(stream)...)
 
 	if startPos > 0 {
 		args = append(args, fmt.Sprintf("--start=+%.0f", startPos))

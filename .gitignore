@@ -4,7 +4,6 @@ dist/
 branch_structure.json
 
 # IDE/editor artifacts
-.vscode/
 .idea/
 
 # Generated files
@@ -13,3 +12,6 @@ docs/superpowers/
 mpv-shot*.jpg
 
 public/fonts/
+temp_auto_push.bat
+temp_interactive_push.bat
+.gitignore
