@@ -2,9 +2,11 @@ package provider
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -72,6 +74,9 @@ func (p *LiveTV) fetch(src string) ([]byte, error) {
 	return os.ReadFile(src)
 }
 
+// maxPlaylistBytes caps a single playlist download.
+const maxPlaylistBytes = 32 << 20
+
 func (p *LiveTV) httpGet(c httpDoer, src string) ([]byte, error) {
 	req, err := http.NewRequest(http.MethodGet, src, nil)
 	if err != nil {
@@ -80,13 +85,39 @@ func (p *LiveTV) httpGet(c httpDoer, src string) ([]byte, error) {
 	req.Header.Set("User-Agent", liveTVUA)
 	resp, err := c.Do(req)
 	if err != nil {
-		return nil, err
+		// A *url.Error embeds the full URL (which may carry Xtream
+		// username/password); return the redacted URL plus the underlying cause.
+		cause := err
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			cause = ue.Err
+		}
+		return nil, fmt.Errorf("livetv: fetch %s failed: %w", redactURL(src), cause)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("livetv: status %d for %s", resp.StatusCode, src)
+		return nil, fmt.Errorf("livetv: status %d for %s", resp.StatusCode, redactURL(src))
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxPlaylistBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxPlaylistBytes {
+		return nil, fmt.Errorf("livetv: playlist %s exceeds %d MiB limit", redactURL(src), maxPlaylistBytes>>20)
+	}
+	return data, nil
+}
+
+// redactURL strips the query string and userinfo so credentials (e.g. Xtream
+// username/password) never appear in error messages or logs.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<url>"
+	}
+	u.RawQuery = ""
+	u.User = nil
+	return u.String()
 }
 
 // load fetches+parses+merges all sources once. A failed source is skipped; only

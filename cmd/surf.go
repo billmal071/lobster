@@ -65,7 +65,10 @@ func playLiveSurf(p provider.StreamProvider, lineup []media.SearchResult, startI
 			failCount = 0
 			action, err := surfMenu(ch.Title)
 			if err != nil {
-				return nil // menu error (e.g. fzf ctrl-c) -> quit
+				if errors.Is(err, ui.ErrCancelled) {
+					return nil // user aborted the menu -> quit cleanly
+				}
+				return fmt.Errorf("channel menu failed: %w", err) // real selector/TTY failure
 			}
 			switch action {
 			case surfNext:
@@ -93,7 +96,7 @@ func surfPlayOne(pl player.Player, p provider.StreamProvider, ch media.SearchRes
 
 // surfMenu shows the post-play channel menu and returns the chosen action.
 func surfMenu(title string) (surfAction, error) {
-	labels := []string{"Next channel", "Previous channel", "Back to channel list", "Quit"}
+	labels := []string{"Next channel", "Previous channel", "Back to browser", "Quit"}
 	idx, err := ui.Select("Now: "+title, labels)
 	if err != nil {
 		return surfQuit, err

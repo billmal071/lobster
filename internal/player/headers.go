@@ -42,13 +42,22 @@ func vlcHeaderArgs(s *media.Stream) []string {
 }
 
 // genericHeaderArgs builds best-effort mpv-style header args for iina/celluloid.
+// Like mpvHeaderArgs, it also emits the combined --demuxer-lavf-o=headers= form
+// so HLS segment requests keep the same headers (without --tls-verify=no).
 func genericHeaderArgs(s *media.Stream) []string {
+	if s.Referer == "" && s.UserAgent == "" {
+		return nil
+	}
 	var args []string
+	var hdr strings.Builder
 	if s.Referer != "" {
 		args = append(args, "--http-header-fields=Referer: "+s.Referer)
+		hdr.WriteString("Referer: " + s.Referer + "\r\n")
 	}
 	if s.UserAgent != "" {
 		args = append(args, "--user-agent="+s.UserAgent)
+		hdr.WriteString("User-Agent: " + s.UserAgent + "\r\n")
 	}
+	args = append(args, "--demuxer-lavf-o=headers="+hdr.String())
 	return args
 }
