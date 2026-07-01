@@ -69,6 +69,7 @@ type Stream struct {
 	Subtitles []Subtitle // Available subtitle tracks
 	Quality   string     // Resolved quality
 	Referer   string     // Referer header required by the CDN (if any)
+	UserAgent string     // User-Agent header required by the CDN (if any)
 }
 
 // Subtitle represents a subtitle track.

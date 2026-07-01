@@ -5,6 +5,7 @@ package ui
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +14,10 @@ import (
 
 	"golang.org/x/term"
 )
+
+// ErrCancelled is returned when the user aborts a selection (fzf exit 130,
+// e.g. Esc or Ctrl-C), as distinct from a real selector/TTY failure.
+var ErrCancelled = errors.New("selection cancelled")
 
 // Select presents items to the user via fzf and returns the selected item's index.
 // Items are passed as plain text via stdin. No --preview or shell-evaluated strings.
@@ -52,7 +57,7 @@ func Select(prompt string, items []string) (int, error) {
 
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 130 {
-			return -1, fmt.Errorf("selection cancelled")
+			return -1, ErrCancelled
 		}
 		return -1, fmt.Errorf("fzf failed: %w", err)
 	}

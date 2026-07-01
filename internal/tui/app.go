@@ -37,6 +37,7 @@ const (
 	tabSeries
 	tabCartoons
 	tabAnime
+	tabLiveTV
 	tabDownloads
 )
 
@@ -69,12 +70,21 @@ type AppModel struct {
 	isSearching      bool
 	selectedResult   *media.SearchResult
 	selectedProvider provider.Provider
+	selectedLineup   []media.SearchResult // full Live TV category lineup for surf; nil otherwise
+	selectedIndex    int                  // start index into selectedLineup
 
 	// Tab and download manager state
 	activeTab      tab
 	downloadsModel downloads.Model
 	dlManager      *dlmanager.Manager
 	toast          string // transient notification
+
+	// Live TV state
+	liveTVProvider *provider.LiveTV
+	liveLevel      int       // 0 = categories, 1 = channels
+	liveCategory   string    // current category at level 1
+	liveMaster     []liveRow // unfiltered rows for the current level
+	liveReqGen     int       // bumped per Live TV fetch; stale responses are ignored
 
 	// Download dialog for TV show batch downloads
 	dlDialog downloadDialog
@@ -86,10 +96,14 @@ type AppModel struct {
 // item adapter for list.Model
 type listItem struct {
 	result media.SearchResult
+	desc   string // overrides Description() when non-empty (Live TV rows)
 }
 
 func (i listItem) Title() string { return i.result.Title }
 func (i listItem) Description() string {
+	if i.desc != "" {
+		return i.desc
+	}
 	desc := fmt.Sprintf("%s \u2022 %s", i.result.Type.String(), i.result.Year)
 	if i.result.Type == media.TV {
 		desc = fmt.Sprintf("%s \u2022 %d Seasons", desc, i.result.Seasons)
@@ -106,7 +120,7 @@ var (
 )
 
 // StartApp launches the TUI. If mgr is nil, download features are disabled.
-func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager, fallbacks ...provider.Provider) (*media.SearchResult, provider.Provider, error) {
+func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager, fallbacks ...provider.Provider) (*media.SearchResult, []media.SearchResult, int, provider.Provider, error) {
 	ti := textinput.New()
 	ti.Placeholder = "Search..."
 	ti.CharLimit = 156
@@ -128,6 +142,7 @@ func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager, f
 		provider:          p,
 		cartoonProvider:   provider.NewKimCartoon(provider.ResolveDomain("kimcartoon.com.co", "kimcartoon", cfg.DomainOverrides)),
 		animeProvider:     provider.NewAllAnime(cfg.AnimeDub),
+		liveTVProvider:    provider.NewLiveTV(cfg.LiveTV.Sources()),
 		fallbackProviders: fallbacks,
 		config:            cfg,
 		list:              l,
@@ -146,13 +161,13 @@ func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager, f
 	p2 := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(out))
 	m2, err := p2.Run()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, nil, err
 	}
 	appModel := m2.(AppModel)
 	if appModel.selectedProvider == nil {
 		appModel.selectedProvider = p
 	}
-	return appModel.selectedResult, appModel.selectedProvider, nil
+	return appModel.selectedResult, appModel.selectedLineup, appModel.selectedIndex, appModel.selectedProvider, nil
 }
 
 func (m AppModel) Init() tea.Cmd {
@@ -204,6 +219,19 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.KeyEnter:
 				m.isSearching = false
 				m.searchInput.Blur()
+				if m.activeTab == tabLiveTV {
+					// Client-side filter of the current level; no network call.
+					// An empty query restores the full list (filterLiveRows returns
+					// the full master), so this is also the clear-filter path.
+					q := m.searchInput.Value()
+					if m.liveLevel == 1 && m.liveCategory != "" {
+						m.list.Title = m.liveCategory
+					} else {
+						m.list.Title = "Live TV"
+					}
+					m.setLiveRows(filterLiveRows(m.liveMaster, q))
+					return m, nil
+				}
 				m.list.Title = "Search: " + m.searchInput.Value()
 				m.results = nil // Clear current results to show loader
 				m.currentItem = nil
@@ -243,10 +271,11 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "4":
 			return m, m.switchTab(tabAnime)
 		case "5":
+			return m, m.switchTab(tabLiveTV)
+		case "6":
 			if m.dlManager != nil {
 				return m, m.switchTab(tabDownloads)
 			}
-			return m, nil
 		}
 
 		// Route to active tab.
@@ -264,7 +293,43 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searchInput.SetValue("")
 			m.drawnPosterKey = ""
 			return m, tea.ClearScreen
+		case "esc":
+			if m.activeTab == tabLiveTV && m.liveLevel == 1 {
+				m.liveCategory = ""
+				m.liveReqGen++
+				return m, tea.Batch(fetchCategoriesCmd(m.liveTVProvider, m.liveReqGen), m.list.StartSpinner())
+			}
 		case "enter":
+			if m.activeTab == tabLiveTV {
+				if m.currentItem == nil {
+					return m, nil
+				}
+				if m.liveLevel == 0 {
+					// Drill into the selected category; do NOT quit.
+					cat := m.currentItem.ID
+					m.liveCategory = cat
+					m.liveReqGen++
+					return m, tea.Batch(fetchChannelsCmd(m.liveTVProvider, cat, m.liveReqGen), m.list.StartSpinner())
+				}
+				// level 1: play the selected channel, with the full category
+				// lineup so the play layer can surf past dead channels.
+				lineup := make([]media.SearchResult, len(m.liveMaster))
+				for idx, r := range m.liveMaster {
+					lineup[idx] = r.result
+				}
+				startIdx := 0
+				for idx := range lineup {
+					if lineup[idx].ID == m.currentItem.ID {
+						startIdx = idx
+						break
+					}
+				}
+				m.selectedResult = m.currentItem
+				m.selectedProvider = m.liveTVProvider
+				m.selectedLineup = lineup
+				m.selectedIndex = startIdx
+				return m, tea.Quit
+			}
 			if m.currentItem != nil {
 				m.selectedResult = m.currentItem
 				m.selectedProvider = m.providerForActiveTab()
@@ -284,6 +349,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.currentItem = nil
 					return m, tea.Batch(fetchTabCmd(m.providerForActiveTab(), m.activeTab), m.list.StartSpinner())
 				}
+			}
+			if m.activeTab == tabLiveTV {
+				m.toast = "Live channels can't be downloaded"
+				return m, nil
 			}
 			if m.dlManager != nil && m.currentItem != nil {
 				if m.currentItem.Type == media.TV {
@@ -341,6 +410,19 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentItem = nil
 			m.currentDetail = nil
 		}
+
+	case liveItemsFetchedMsg:
+		// Ignore a response the user has moved past: a different tab is now
+		// active, or a newer Live TV request was issued after this one.
+		if m.activeTab != tabLiveTV || msg.gen != m.liveReqGen {
+			return m, nil
+		}
+		m.list.StopSpinner()
+		m.liveLevel = msg.level
+		m.liveMaster = msg.rows
+		m.list.Title = msg.title
+		m.setLiveRows(msg.rows)
+		return m, nil
 
 	case detailFetchedMsg:
 		m.err = nil
@@ -430,6 +512,28 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// setLiveRows populates the list + m.results from live rows, keeping them
+// index-aligned (selection reads m.results[m.list.Index()]).
+func (m *AppModel) setLiveRows(rows []liveRow) {
+	m.results = make([]media.SearchResult, len(rows))
+	items := make([]list.Item, len(rows))
+	for i, r := range rows {
+		m.results[i] = r.result
+		items[i] = listItem{result: r.result, desc: r.desc}
+	}
+	m.list.SetItems(items)
+	// Clear stale preview/poster carried over from the previous row set.
+	m.currentDetail = nil
+	m.currentPoster = ""
+	m.posterReady = false
+	m.drawnPosterKey = ""
+	if len(m.results) > 0 {
+		m.currentItem = &m.results[0]
+	} else {
+		m.currentItem = nil
+	}
+}
+
 // queueCurrentDownload queues the currently selected item for download.
 func (m *AppModel) queueCurrentDownload() tea.Cmd {
 	if m.currentItem == nil || m.dlManager == nil {
@@ -514,10 +618,14 @@ func (m AppModel) View() string {
 		footer = footerStyle.Render("[P] Pause/Resume  [X] Cancel  [R] Retry  [BS] Remove  [C] Clear  [Shift+R] Refresh  [TAB] Browse")
 	} else {
 		dlHint := ""
+		tabRange := "[1-5]"
 		if m.dlManager != nil {
-			dlHint = "  [D] Download  "
+			tabRange = "[1-6]"
+			if m.activeTab != tabLiveTV {
+				dlHint = "  [D] Download  "
+			}
 		}
-		footer = footerStyle.Render("[ENTER] Play" + dlHint + "[S] Search  [1-4] Categories  [TAB] Next Tab  [Q] Quit")
+		footer = footerStyle.Render("[ENTER] Play" + dlHint + "[S] Search  " + tabRange + " Categories  [TAB] Next Tab  [Q] Quit")
 	}
 
 	base := docStyle.Render(lipgloss.JoinVertical(lipgloss.Left,
@@ -554,13 +662,14 @@ func (m AppModel) renderTabBar() string {
 		{tabSeries, "2 Series"},
 		{tabCartoons, "3 Cartoons"},
 		{tabAnime, "4 Anime"},
+		{tabLiveTV, "5 Live TV"},
 	}
 
 	if m.dlManager != nil {
 		labels = append(labels, struct {
 			tab   tab
 			label string
-		}{tabDownloads, "5 Downloads"})
+		}{tabDownloads, "6 Downloads"})
 	}
 
 	rendered := make([]string, 0, len(labels)*2)
@@ -581,6 +690,8 @@ func (m AppModel) providerForActiveTab() provider.Provider {
 		return m.cartoonProvider
 	case tabAnime:
 		return m.animeProvider
+	case tabLiveTV:
+		return m.liveTVProvider
 	default:
 		return m.provider
 	}
@@ -605,9 +716,13 @@ func (m AppModel) nextTab() tab {
 	case tabCartoons:
 		return tabAnime
 	case tabAnime:
+		return tabLiveTV
+	case tabLiveTV:
 		if m.dlManager != nil {
 			return tabDownloads
 		}
+		return tabMovies
+	case tabDownloads:
 		return tabMovies
 	default:
 		return tabMovies
@@ -638,6 +753,12 @@ func (m *AppModel) switchTab(next tab) tea.Cmd {
 	m.results = nil
 	m.list.SetItems(nil)
 	m.list.Title = m.tabTitle(next)
+	if next == tabLiveTV {
+		m.liveLevel = 0
+		m.liveCategory = ""
+		m.liveReqGen++
+		return tea.Batch(fetchCategoriesCmd(m.liveTVProvider, m.liveReqGen), m.list.StartSpinner(), tea.ClearScreen)
+	}
 	return tea.Batch(fetchTabCmd(m.providerForActiveTab(), next), m.list.StartSpinner(), tea.ClearScreen)
 }
 
@@ -649,6 +770,8 @@ func (m AppModel) tabTitle(t tab) string {
 		return "Cartoons"
 	case tabAnime:
 		return "Anime"
+	case tabLiveTV:
+		return "Live TV"
 	default:
 		return "Movies"
 	}

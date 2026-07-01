@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -19,8 +20,8 @@ import (
 	"lobster/internal/httputil"
 	"lobster/internal/media"
 	"lobster/internal/player"
-	"lobster/internal/poster"
 	"lobster/internal/playlist"
+	"lobster/internal/poster"
 	"lobster/internal/provider"
 	"lobster/internal/subtitle"
 	"lobster/internal/tui"
@@ -46,17 +47,28 @@ func searchRun(cmd *cobra.Command, args []string) error {
 			defer cleanup()
 		}
 
-		selected, selectedProvider, err := tui.StartApp(p, cfg, mgr, fallbackSearchProviders(p)...)
-		if err != nil {
-			return err
-		}
-		if selected != nil {
+		for {
+			selected, lineup, startIdx, selectedProvider, err := tui.StartApp(p, cfg, mgr, fallbackSearchProviders(p)...)
+			if err != nil {
+				return err
+			}
+			if selected == nil {
+				return nil // user quit the browser without selecting
+			}
 			if selectedProvider == nil {
 				selectedProvider = p
 			}
+			if lineup != nil { // a Live TV channel was chosen -> surf the category
+				if sp, ok := selectedProvider.(provider.StreamProvider); ok {
+					if surfErr := playLiveSurf(sp, lineup, startIdx); errors.Is(surfErr, errSurfBackToList) {
+						continue // reopen the browser
+					} else {
+						return surfErr
+					}
+				}
+			}
 			return resolveAndPlay(selectedProvider, *selected, 0, 0)
 		}
-		return nil
 	}
 
 	debugf("searching for: %s", query)
@@ -226,6 +238,11 @@ func printDetail(r media.SearchResult, d *media.ContentDetail) {
 func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, episode int) error {
 	episodeID := ""
 	title := selected.Title
+
+	// Live channels are endless streams; ffmpeg-to-file would never finish.
+	if _, isLive := p.(*provider.LiveTV); isLive && flagDownload != "" {
+		return fmt.Errorf("live channels cannot be downloaded")
+	}
 
 	if selected.Type == media.TV {
 		// Get seasons

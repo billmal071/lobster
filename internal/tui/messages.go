@@ -53,6 +53,15 @@ type downloadProgressMsg dlmanager.ProgressUpdate
 // downloadListUpdatedMsg signals the downloads list should refresh from store.
 type downloadListUpdatedMsg struct{}
 
+// liveItemsFetchedMsg carries one level of the Live TV drill-down (categories or
+// channels) to the Update loop. level 0 = categories, level 1 = channels.
+type liveItemsFetchedMsg struct {
+	rows  []liveRow
+	level int
+	title string
+	gen   int // request generation; stale/cross-tab responses are ignored
+}
+
 // posterFetchedMsg is sent when a poster image has been prepared.
 // For char-art terminals, `poster` holds the rendered cell-art.
 // For inline terminals, `inline` is true and `b64`/`imgW`/`imgH` hold the image.
