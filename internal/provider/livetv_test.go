@@ -138,3 +138,16 @@ http://a
 		t.Fatalf("good source did not survive: %+v", cats)
 	}
 }
+
+func TestRedactURL(t *testing.T) {
+	cases := map[string]string{
+		"http://h:8080/get.php?username=u&password=p&type=m3u_plus": "http://h:8080/get.php",
+		"https://user:pass@host/path?q=1":                           "https://host/path",
+		"https://iptv-org.github.io/iptv/index.category.m3u":        "https://iptv-org.github.io/iptv/index.category.m3u",
+	}
+	for in, want := range cases {
+		if got := redactURL(in); got != want {
+			t.Errorf("redactURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

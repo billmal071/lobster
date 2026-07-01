@@ -514,6 +514,11 @@ func (m *AppModel) setLiveRows(rows []liveRow) {
 		items[i] = listItem{result: r.result, desc: r.desc}
 	}
 	m.list.SetItems(items)
+	// Clear stale preview/poster carried over from the previous row set.
+	m.currentDetail = nil
+	m.currentPoster = ""
+	m.posterReady = false
+	m.drawnPosterKey = ""
 	if len(m.results) > 0 {
 		m.currentItem = &m.results[0]
 	} else {
@@ -605,10 +610,14 @@ func (m AppModel) View() string {
 		footer = footerStyle.Render("[P] Pause/Resume  [X] Cancel  [R] Retry  [BS] Remove  [C] Clear  [Shift+R] Refresh  [TAB] Browse")
 	} else {
 		dlHint := ""
-		if m.dlManager != nil && m.activeTab != tabLiveTV {
-			dlHint = "  [D] Download  "
+		tabRange := "[1-5]"
+		if m.dlManager != nil {
+			tabRange = "[1-6]"
+			if m.activeTab != tabLiveTV {
+				dlHint = "  [D] Download  "
+			}
 		}
-		footer = footerStyle.Render("[ENTER] Play" + dlHint + "[S] Search  [1-6] Categories  [TAB] Next Tab  [Q] Quit")
+		footer = footerStyle.Render("[ENTER] Play" + dlHint + "[S] Search  " + tabRange + " Categories  [TAB] Next Tab  [Q] Quit")
 	}
 
 	base := docStyle.Render(lipgloss.JoinVertical(lipgloss.Left,
