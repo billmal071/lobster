@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,41 +15,82 @@ import (
 
 // Config holds all application configuration.
 type Config struct {
-	Base         string `toml:"base"`
-	APIURL       string `toml:"api_url"`
-	Player       string `toml:"player"`
-	Provider     string `toml:"provider"`
-	SubsLanguage string `toml:"subs_language"`
-	Quality      string `toml:"quality"`
-	History      bool   `toml:"history"`
-	AutoNext     bool   `toml:"auto_next"`
-	DownloadDir  string `toml:"download_dir"`
-	OSAPIKey     string `toml:"opensubtitles_api_key"`
-	SubDLAPIKey  string `toml:"subdl_api_key"`
-	Debug                  bool              `toml:"debug"`
-	MaxConcurrentDownloads int               `toml:"max_concurrent_downloads"`
-	StallTimeout           int               `toml:"stall_timeout"`  // seconds before a stalled download is recovered
-	MaxRetries             int               `toml:"max_retries"`    // retry count for segment/file downloads
+	Base                   string              `toml:"base"`
+	APIURL                 string              `toml:"api_url"`
+	Player                 string              `toml:"player"`
+	Provider               string              `toml:"provider"`
+	SubsLanguage           string              `toml:"subs_language"`
+	Quality                string              `toml:"quality"`
+	History                bool                `toml:"history"`
+	AutoNext               bool                `toml:"auto_next"`
+	DownloadDir            string              `toml:"download_dir"`
+	OSAPIKey               string              `toml:"opensubtitles_api_key"`
+	SubDLAPIKey            string              `toml:"subdl_api_key"`
+	Debug                  bool                `toml:"debug"`
+	MaxConcurrentDownloads int                 `toml:"max_concurrent_downloads"`
+	StallTimeout           int                 `toml:"stall_timeout"`    // seconds before a stalled download is recovered
+	MaxRetries             int                 `toml:"max_retries"`      // retry count for segment/file downloads
 	DomainOverrides        map[string][]string `toml:"domain_overrides"` // provider name -> fallback domains
 	AnimeDub               bool                `toml:"anime_dub"`
+	LiveTV                 LiveTVConfig        `toml:"live_tv"`
+}
+
+// XtreamConfig holds optional Xtream-codes credentials for a paid IPTV sub.
+type XtreamConfig struct {
+	Server   string `toml:"server"` // host:port
+	Username string `toml:"username"`
+	Password string `toml:"password"`
+}
+
+// LiveTVConfig configures the Live TV tab's playlist sources.
+type LiveTVConfig struct {
+	IPTVOrg   bool         `toml:"iptv_org"`  // include the built-in iptv-org playlist (default true)
+	Playlists []string     `toml:"playlists"` // extra M3U URLs or local file paths
+	Xtream    XtreamConfig `toml:"xtream"`    // optional Xtream-codes subscription
+}
+
+const iptvOrgPlaylist = "https://iptv-org.github.io/iptv/index.category.m3u"
+
+// Sources returns the resolved playlist URLs/paths in priority order:
+// iptv-org (if enabled), then custom playlists, then a templated Xtream URL.
+func (c LiveTVConfig) Sources() []string {
+	var s []string
+	if c.IPTVOrg {
+		s = append(s, iptvOrgPlaylist)
+	}
+	s = append(s, c.Playlists...)
+	if c.Xtream.Server != "" {
+		server := c.Xtream.Server
+		if !strings.HasPrefix(server, "http://") && !strings.HasPrefix(server, "https://") {
+			server = "http://" + server
+		}
+		s = append(s, fmt.Sprintf(
+			"%s/get.php?username=%s&password=%s&type=m3u_plus&output=m3u8",
+			server,
+			url.QueryEscape(c.Xtream.Username),
+			url.QueryEscape(c.Xtream.Password),
+		))
+	}
+	return s
 }
 
 // Default returns the default configuration.
 func Default() *Config {
 	return &Config{
-		Base:         "flixhq.ws",
-		Player:       "mpv",
-		Provider:     "Default",
-		SubsLanguage: "english",
-		Quality:      "1080",
-		History:      true,
-		AutoNext:     true,
+		Base:                   "flixhq.ws",
+		Player:                 "mpv",
+		Provider:               "Default",
+		SubsLanguage:           "english",
+		Quality:                "1080",
+		History:                true,
+		AutoNext:               true,
 		DownloadDir:            "~/Videos/lobster",
 		Debug:                  false,
 		MaxConcurrentDownloads: 2,
 		StallTimeout:           60,
 		MaxRetries:             3,
 		SubDLAPIKey:            "KCCm2v2q5ZObZOPQgQX8jpQ3-07IEY2c",
+		LiveTV:                 LiveTVConfig{IPTVOrg: true},
 	}
 }
 
