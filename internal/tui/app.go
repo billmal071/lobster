@@ -554,6 +554,7 @@ func (m *AppModel) queueCurrentDownload() tea.Cmd {
 			Title:      item.Title,
 			MediaTitle: item.Title,
 			MediaType:  item.Type.String(),
+			Year:       item.Year,
 			MediaID:    item.ID,
 			OutputPath: outputDir + "/" + item.Title + ".mkv",
 			Status:     "queued",

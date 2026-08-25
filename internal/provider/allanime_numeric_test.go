@@ -81,3 +81,37 @@ func TestAllAnimeSearchColonFallback(t *testing.T) {
 		t.Fatalf("want only the matching show, got %+v", res)
 	}
 }
+
+// The documented purpose of the colon retry is that AllAnime indexes only the
+// base title, so an entry literally named "Kamui" must survive the filter for
+// a query of "KAMUI: He's Behind You" — otherwise the retry can never return
+// anything and the whole fallback is dead code.
+func TestAllAnimeSearchColonFallbackKeepsBaseTitleEntry(t *testing.T) {
+	a := newTestAllAnime(map[string]string{
+		`KAMUI: He`: `{"data":{"shows":{"edges":[]}}}`,
+		`"query":"KAMUI"`: `{"data":{"shows":{"edges":[
+			{"_id":"kam","name":"Kamui","englishName":"Kamui","availableEpisodes":{"sub":6}}
+		]}}}`,
+	})
+	res, err := a.Search("KAMUI: He's Behind You")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].ID != "kam" {
+		t.Fatalf("base-title entry was dropped, got %+v", res)
+	}
+}
+
+// Arbitrary substring containment is too loose: a show whose title merely
+// appears somewhere inside the query is not the show that was asked for.
+func TestAllAnimeSearchColonFallbackRejectsIncidentalSubstring(t *testing.T) {
+	a := newTestAllAnime(map[string]string{
+		`KAMUI: He`: `{"data":{"shows":{"edges":[]}}}`,
+		`"query":"KAMUI"`: `{"data":{"shows":{"edges":[
+			{"_id":"bh","name":"Behind","englishName":"Behind","availableEpisodes":{"sub":3}}
+		]}}}`,
+	})
+	if res, err := a.Search("KAMUI: He's Behind You"); err == nil && len(res) > 0 {
+		t.Fatalf("incidental substring match accepted: %+v", res)
+	}
+}

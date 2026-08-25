@@ -152,7 +152,7 @@ func (a *AllAnime) Search(query string) ([]media.SearchResult, error) {
 		if base := baseTitle(query); base != "" {
 			alt, aerr := a.queryShows(map[string]any{"allowAdult": false, "allowUnknown": false, "query": base}, 40, "ALL")
 			if aerr == nil {
-				out = filterByTitle(alt, query)
+				out = filterByTitle(alt, query, base)
 			}
 		}
 	}
@@ -195,14 +195,24 @@ func normalizeTitle(s string) string {
 	return b.String()
 }
 
-// filterByTitle keeps results whose normalized title contains, or is
-// contained in, the normalized original query.
-func filterByTitle(results []media.SearchResult, query string) []media.SearchResult {
-	nq := normalizeTitle(query)
+// filterByTitle keeps results from a base-title retry that plausibly are the
+// show the user asked for: either the title carries the whole query (AllAnime
+// indexed the full or suffixed name), or it is exactly the base title that was
+// searched (AllAnime indexed only the base). Plain substring containment is
+// too loose — for "KAMUI: He'"'"'s Behind You" it also accepts a show called
+// "Behind", which is a different show entirely.
+func filterByTitle(results []media.SearchResult, query, base string) []media.SearchResult {
+	nq, nb := normalizeTitle(query), normalizeTitle(base)
+	if nq == "" {
+		return nil
+	}
 	var out []media.SearchResult
 	for _, r := range results {
 		nr := normalizeTitle(r.Title)
-		if nr != "" && nq != "" && (strings.Contains(nq, nr) || strings.Contains(nr, nq)) {
+		if nr == "" {
+			continue
+		}
+		if strings.Contains(nr, nq) || (nb != "" && nr == nb) {
 			out = append(out, r)
 		}
 	}

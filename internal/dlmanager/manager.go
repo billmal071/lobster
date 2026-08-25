@@ -30,9 +30,22 @@ type StreamResult struct {
 	Referer    string
 }
 
+// ResolveRequest describes the work a queued download needs a stream for.
+// It is a struct rather than a positional list because resolution happens long
+// after queueing — often in a later process run — so every field the resolver
+// needs to identify the right work must travel on the stored row.
+type ResolveRequest struct {
+	Title     string
+	Year      string // release year; disambiguates same-title works
+	MediaID   string
+	EpisodeID string
+	MediaType string // "movie" or "tv"
+	Season    int
+	Episode   int
+}
+
 // StreamResolver resolves a stream URL for a download.
-// It receives the title, media ID, episode ID, media type, season, and episode number.
-type StreamResolver func(title, mediaID, episodeID, mediaType string, season, episode int) (*StreamResult, error)
+type StreamResolver func(ResolveRequest) (*StreamResult, error)
 
 // Manager coordinates download workers and relays progress.
 type Manager struct {
@@ -239,7 +252,15 @@ func (m *Manager) processDownload(dl *store.Download) {
 	// Resolve stream URL if not set.
 	if dl.StreamURL == "" && m.resolver != nil {
 		m.sendProgress(ProgressUpdate{DownloadID: dl.ID, Status: "resolving"})
-		result, err := m.resolver(dl.MediaTitle, dl.MediaID, dl.EpisodeID, dl.MediaType, dl.Season, dl.Episode)
+		result, err := m.resolver(ResolveRequest{
+			Title:     dl.MediaTitle,
+			Year:      dl.Year,
+			MediaID:   dl.MediaID,
+			EpisodeID: dl.EpisodeID,
+			MediaType: dl.MediaType,
+			Season:    dl.Season,
+			Episode:   dl.Episode,
+		})
 		if err != nil {
 			m.store.UpdateStatus(dl.ID, "failed", err.Error())
 			m.sendProgress(ProgressUpdate{DownloadID: dl.ID, Status: "failed", Error: err.Error()})

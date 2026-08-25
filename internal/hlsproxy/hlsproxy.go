@@ -96,20 +96,25 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream fetch failed", http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if err != nil {
 		http.Error(w, "upstream read failed", http.StatusBadGateway)
 		return
 	}
 
+	// Serve through ServeContent so a player can seek: it handles Range,
+	// 206/Content-Range and 416 for us. The range must be applied to the bytes
+	// the client actually sees — stripPNG removes a wrapper and so shifts every
+	// offset, which is why the client's Range is never forwarded upstream.
+	payload := stripPNG(body)
+	contentType := "video/mp2t"
 	if isPlaylist(body) {
-		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		w.Write(p.rewritePlaylist(body, upstream))
-		return
+		payload = p.rewritePlaylist(body, upstream)
+		contentType = "application/vnd.apple.mpegurl"
 	}
-	w.Header().Set("Content-Type", "video/mp2t")
-	w.Write(stripPNG(body))
+	w.Header().Set("Content-Type", contentType)
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(payload))
 }
 
 // isPlaylist reports whether body is an m3u8 playlist.
