@@ -26,6 +26,12 @@ func (v *VLC) Available() bool {
 // Play launches VLC. VLC doesn't have IPC position tracking like mpv,
 // so we return zero position/duration.
 func (v *VLC) Play(stream *media.Stream, title string, startPos float64, subFiles []string) (PlayResult, error) {
+	stream, cleanup, err := wrapDeobfuscated(stream)
+	if err != nil {
+		return PlayResult{}, err
+	}
+	defer cleanup()
+
 	args := []string{
 		stream.URL,
 		"--meta-title", title,

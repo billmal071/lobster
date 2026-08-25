@@ -63,56 +63,20 @@ type flixcdnDecrypted struct {
 
 // --- Provider interface ---
 
-// Search uses TMDB's free trending search endpoint (no API key needed).
+// Search uses TMDB's keyless multi-search endpoint.
 func (s *Soap2Day) Search(query string) ([]media.SearchResult, error) {
-	searchURL := fmt.Sprintf("%s/search/trending?query=%s",
-		tmdbSearchBase, url.QueryEscape(query))
-
-	body, err := s.fetchWithReferer(searchURL, tmdbSearchBase+"/")
+	body, err := s.fetchWithReferer(tmdbMultiSearchURL(tmdbBaseURL, query), tmdbBaseURL+"/")
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
 
-	var resp tmdbSearchResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("search: parsing response: %w", err)
+	results, err := parseTMDBSearchResults(body, tmdbBaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("search: %w", err)
 	}
-
-	var results []media.SearchResult
-	for _, raw := range resp.Results {
-		// Skip non-object entries (TMDB includes suggestion strings in the array)
-		if len(raw) == 0 || raw[0] != '{' {
-			continue
-		}
-
-		var item tmdbSearchResult
-		if err := json.Unmarshal(raw, &item); err != nil {
-			continue
-		}
-
-		if item.MediaType != "movie" && item.MediaType != "tv" {
-			continue
-		}
-
-		mt := media.Movie
-		if item.MediaType == "tv" {
-			mt = media.TV
-		}
-
-		results = append(results, media.SearchResult{
-			ID:     fmt.Sprintf("%s/%d", item.MediaType, item.ID),
-			Title:  item.displayTitle(),
-			Type:   mt,
-			Year:   item.year(),
-			URL:    fmt.Sprintf("%s/%s/%d", tmdbSearchBase, item.MediaType, item.ID),
-			Poster: tmdbPosterURL(item.PosterPath),
-		})
-	}
-
 	if len(results) == 0 {
 		return nil, fmt.Errorf("no results found for %q", query)
 	}
-
 	return results, nil
 }
 
