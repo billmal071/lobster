@@ -31,6 +31,11 @@ type Proxy struct {
 	client    *http.Client
 }
 
+// maxBodyBytes caps how much of an upstream response is buffered. Segments and
+// playlists are far smaller; anything past this is rejected rather than served
+// truncated.
+const maxBodyBytes = 64 << 20
+
 var pngSig = []byte("\x89PNG\r\n\x1a\n")
 
 // uriAttrRe matches a URI="..." attribute in playlist tag lines
@@ -97,9 +102,16 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	// Read one byte past the cap: io.ReadAll over a LimitReader stops at the
+	// limit with a nil error, so an oversized body would otherwise be served as
+	// a complete-looking but truncated segment.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 	if err != nil {
 		http.Error(w, "upstream read failed", http.StatusBadGateway)
+		return
+	}
+	if int64(len(body)) > maxBodyBytes {
+		http.Error(w, "upstream response too large", http.StatusBadGateway)
 		return
 	}
 
