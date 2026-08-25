@@ -71,17 +71,25 @@ func (p *AniPub) Search(query string) ([]media.SearchResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
-	// AniPub returns {"found":false} (an object) when nothing matches.
-	if t := bytes.TrimSpace(body); len(t) == 0 || t[0] != '[' {
-		return nil, fmt.Errorf("no anime found for %q", query)
-	}
-	var raw []struct {
+	type anipubHit struct {
 		Name  string `json:"Name"`
 		ID    int    `json:"Id"`
 		Image string `json:"Image"`
 	}
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("search parse: %w", err)
+	var raw []anipubHit
+	t := bytes.TrimSpace(body)
+	switch {
+	case len(t) > 0 && t[0] == '[':
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, fmt.Errorf("search parse: %w", err)
+		}
+	case len(t) > 0 && t[0] == '{':
+		// A single match comes back as a bare object; anything else
+		// object-shaped (e.g. {"found":false}) means no results.
+		var one anipubHit
+		if err := json.Unmarshal(body, &one); err == nil && one.ID != 0 && one.Name != "" {
+			raw = append(raw, one)
+		}
 	}
 	out := make([]media.SearchResult, 0, len(raw))
 	for _, r := range raw {
@@ -95,13 +103,20 @@ func (p *AniPub) Search(query string) ([]media.SearchResult, error) {
 	return out, nil
 }
 
-// Episode links carry the megaplay id in one of two shapes:
+// Episode links carry the stream reference in one of three shapes:
 //
-//	...gogoanime.com.by/streaming.php?...&ep=1465&...   (id 1465)
-//	...anipub.xyz/video/850/sub                          (id 850)
-var anipubEpRe = regexp.MustCompile(`(?:ep=|/video/)(\d+)`)
+//	...gogoanime.com.by/streaming.php?...&ep=1465&...   (megaplay id 1465)
+//	...anipub.xyz/video/850/sub                          (megaplay id 850)
+//	...anipub.xyz/play/63468/2/sub                       (MAL id 63468, ep 2)
+var (
+	anipubEpRe   = regexp.MustCompile(`(?:ep=|/video/)(\d+)`)
+	anipubPlayRe = regexp.MustCompile(`/play/(\d+)/(\d+)/`)
+)
 
-// episodeMegaplayIDs returns the ordered megaplay episode ids for a show id.
+// episodeMegaplayIDs returns the ordered per-episode stream refs for a show
+// id: either a bare megaplay id (resolved via /stream/s-2/) or "mal:{id}:{ep}"
+// (resolved via /stream/mal/). In the /play/ shape the top-level link is
+// episode 1 and the ep array continues from episode 2, so both are read.
 func (p *AniPub) episodeMegaplayIDs(showID string) ([]string, error) {
 	body, err := p.get(anipubBase+"/v1/api/details/"+showID, nil)
 	if err != nil {
@@ -109,7 +124,8 @@ func (p *AniPub) episodeMegaplayIDs(showID string) ([]string, error) {
 	}
 	var d struct {
 		Local struct {
-			Ep []struct {
+			Link string `json:"link"`
+			Ep   []struct {
 				Link string `json:"link"`
 			} `json:"ep"`
 		} `json:"local"`
@@ -117,11 +133,29 @@ func (p *AniPub) episodeMegaplayIDs(showID string) ([]string, error) {
 	if err := json.Unmarshal(body, &d); err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(d.Local.Ep))
+	links := make([]string, 0, len(d.Local.Ep)+1)
+	if d.Local.Link != "" {
+		links = append(links, d.Local.Link)
+	}
 	for _, e := range d.Local.Ep {
-		if m := anipubEpRe.FindStringSubmatch(e.Link); m != nil {
-			ids = append(ids, m[1])
+		links = append(links, e.Link)
+	}
+	ids := make([]string, 0, len(links))
+	seen := make(map[string]bool, len(links))
+	for _, l := range links {
+		var id string
+		if m := anipubPlayRe.FindStringSubmatch(l); m != nil {
+			id = "mal:" + m[1] + ":" + m[2]
+		} else if m := anipubEpRe.FindStringSubmatch(l); m != nil {
+			id = m[1]
+		} else {
+			continue
 		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
 	}
 	return ids, nil
 }
@@ -134,7 +168,13 @@ func (p *AniPub) megaplayStream(megaplayID string, dub bool) (*media.Stream, err
 	if dub {
 		audio = "dub"
 	}
-	page, err := p.get(fmt.Sprintf("%s/stream/s-2/%s/%s", megaplayBase, megaplayID, audio),
+	streamURL := fmt.Sprintf("%s/stream/s-2/%s/%s", megaplayBase, megaplayID, audio)
+	if rest, ok := strings.CutPrefix(megaplayID, "mal:"); ok {
+		if malID, epNum, ok := strings.Cut(rest, ":"); ok {
+			streamURL = fmt.Sprintf("%s/stream/mal/%s/%s/%s", megaplayBase, malID, epNum, audio)
+		}
+	}
+	page, err := p.get(streamURL,
 		map[string]string{"Referer": "https://gogoanime.com.by/"})
 	if err != nil {
 		return nil, err
@@ -164,7 +204,7 @@ func (p *AniPub) megaplayStream(megaplayID string, dub bool) (*media.Stream, err
 	if src.Sources.File == "" {
 		return nil, fmt.Errorf("megaplay: no source file")
 	}
-	st := &media.Stream{URL: src.Sources.File, Referer: "https://megaplay.buzz/"}
+	st := &media.Stream{URL: src.Sources.File, Referer: "https://megaplay.buzz/", Deobfuscate: true}
 	for _, tr := range src.Tracks {
 		if tr.Kind != "captions" {
 			continue
@@ -283,6 +323,15 @@ func (p *AniPub) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
 }
 
 func (p *AniPub) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+	// Native refs are bare megaplay ids ("1466") or "mal:{id}:{ep}"; anything
+	// else with colons (or empty) is the fallback-resolver numeric form.
+	if episodeID == "" || (!strings.HasPrefix(episodeID, "mal:") && strings.Contains(episodeID, ":")) {
+		nid, err := resolveNumericEpisodeID(p.GetEpisodes, mediaID, episodeID)
+		if err != nil {
+			return nil, err
+		}
+		episodeID = nid
+	}
 	return p.megaplayStream(episodeID, strings.EqualFold(server, "dub"))
 }
 

@@ -30,7 +30,7 @@ func TestNewTBCPL(t *testing.T) {
 
 func TestTBCPLSearchAndDetails(t *testing.T) {
 	p, _, cleanup := newTestTBCPL(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/search/trending" {
+		if r.URL.Path != "/search/multi" {
 			http.NotFound(w, r)
 			return
 		}

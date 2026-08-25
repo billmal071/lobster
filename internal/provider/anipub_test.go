@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"strings"
 	"testing"
 
 	"lobster/internal/media"
@@ -35,6 +36,9 @@ func TestAniPubResolveByTitle(t *testing.T) {
 	if st.Referer != "https://megaplay.buzz/" {
 		t.Fatalf("referer = %q", st.Referer)
 	}
+	if !st.Deobfuscate {
+		t.Fatal("megaplay stream must be flagged for de-obfuscation")
+	}
 }
 
 func TestAniPubVideoFormatAndNoMatch(t *testing.T) {
@@ -63,5 +67,102 @@ func TestAniPubSearch(t *testing.T) {
 	res, err := p.Search("naruto")
 	if err != nil || len(res) != 1 || res[0].ID != "20" || res[0].Title != "Naruto" || res[0].Type != media.TV {
 		t.Fatalf("search wrong: %v / %+v", err, res)
+	}
+}
+
+// AniPub's 2026 details shape: the top-level "link" is episode 1 and "ep"
+// holds episodes 2..N, all as /play/{malID}/{ep}/{audio} links that resolve
+// through megaplay's /stream/mal/ route.
+func TestAniPubPlayLinkFormat(t *testing.T) {
+	routes := map[string]string{
+		`/api/search/KAMUI`:       `[{"Name":"Ninja Kamui","Id":2267,"finder":"ninja-kamui"},{"Name":"KAMUI: He's Behind You","Id":8420,"finder":"kamui-he-s-behind-you"}]`,
+		`/v1/api/details/8420`:    `{"local":{"_id":8420,"name":"Episode 1","link":"src=https://anipub.xyz/play/63468/1/sub","type":"iframe","ep":[{"link":"src=https://anipub.xyz/play/63468/2/sub"},{"link":"src=https://anipub.xyz/play/63468/3/sub"}]}}`,
+		`/stream/mal/63468/1/sub`: `<div data-id="177688"></div>`,
+		`/stream/mal/63468/3/sub`: `<div data-id="177690"></div>`,
+		`getSources?id=177688`:    `{"sources":{"file":"https://cdn/kamui-ep1.m3u8"},"tracks":[]}`,
+		`getSources?id=177690`:    `{"sources":{"file":"https://cdn/kamui-ep3.m3u8"},"tracks":[]}`,
+	}
+
+	// Episode 1 comes from the top-level link, which the old parser ignored.
+	p := newTestAniPub(routes)
+	st, err := p.ResolveByTitle("KAMUI: He's Behind You", 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.URL != "https://cdn/kamui-ep1.m3u8" {
+		t.Fatalf("ep1 URL = %q", st.URL)
+	}
+
+	// Episode 3 comes from the ep array, offset by the top-level link.
+	st, err = p.ResolveByTitle("KAMUI: He's Behind You", 3, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.URL != "https://cdn/kamui-ep3.m3u8" {
+		t.Fatalf("ep3 URL = %q", st.URL)
+	}
+}
+
+// The fallback resolver reconstructs episode IDs as "showID:season:episode"
+// (and passes "" for movies); Watch must accept those alongside native
+// megaplay refs.
+func TestAniPubWatchNumericEpisodeID(t *testing.T) {
+	routes := map[string]string{
+		`/v1/api/details/8420`:    `{"local":{"link":"src=https://anipub.xyz/play/63468/1/sub","ep":[{"link":"src=https://anipub.xyz/play/63468/2/sub"}]}}`,
+		`/stream/mal/63468/2/sub`: `<div data-id="9"></div>`,
+		`/stream/mal/63468/1/sub`: `<div data-id="8"></div>`,
+		`getSources?id=9`:         `{"sources":{"file":"https://cdn/ep2.m3u8"},"tracks":[]}`,
+		`getSources?id=8`:         `{"sources":{"file":"https://cdn/ep1.m3u8"},"tracks":[]}`,
+	}
+
+	t.Run("resolver-style show:season:episode", func(t *testing.T) {
+		st, err := newTestAniPub(routes).Watch("8420", "8420:1:2", "Default", "1080")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.URL != "https://cdn/ep2.m3u8" {
+			t.Fatalf("URL = %q", st.URL)
+		}
+	})
+
+	t.Run("empty episode ID resolves episode 1", func(t *testing.T) {
+		st, err := newTestAniPub(routes).Watch("8420", "", "Default", "1080")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.URL != "https://cdn/ep1.m3u8" {
+			t.Fatalf("URL = %q", st.URL)
+		}
+	})
+
+	t.Run("season beyond 1 is rejected", func(t *testing.T) {
+		if _, err := newTestAniPub(routes).Watch("8420", "8420:2:1", "Default", "1080"); err == nil || !strings.Contains(err.Error(), "season") {
+			t.Fatalf("want season rejection, got %v", err)
+		}
+	})
+
+	t.Run("native megaplay ref still works", func(t *testing.T) {
+		st, err := newTestAniPub(routes).Watch("8420", "mal:63468:2", "sub", "1080")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.URL != "https://cdn/ep2.m3u8" {
+			t.Fatalf("URL = %q", st.URL)
+		}
+	})
+}
+
+// AniPub returns a bare object (not a one-element array) when exactly one
+// show matches, e.g. an exact full-title search.
+func TestAniPubSearchSingleObjectResult(t *testing.T) {
+	p := newTestAniPub(map[string]string{
+		`/api/search/KAMUI`: `{"Name":"KAMUI: He's Behind You","Id":8420,"finder":"kamui-he-s-behind-you","Image":"https://cdn/img.jpg"}`,
+	})
+	res, err := p.Search("KAMUI: He's Behind You")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].ID != "8420" || res[0].Title != "KAMUI: He's Behind You" {
+		t.Fatalf("single-object result wrong: %+v", res)
 	}
 }

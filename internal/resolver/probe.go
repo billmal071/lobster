@@ -2,6 +2,9 @@ package resolver
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"lobster/internal/extract"
@@ -58,8 +61,16 @@ const MaxCandidates = 5
 const maxCandidates = MaxCandidates
 
 // Request parameterizes a single stream-resolution attempt.
+//
+// ID and Year identify the exact work the user picked. Each provider still
+// re-searches by Title in its own catalog (IDs are not portable across all of
+// them), so without those two fields the provider's own relevance ordering
+// decides — and for a franchise that means whatever sequel is in cinemas right
+// now, not the film that was selected.
 type Request struct {
+	ID        string
 	Title     string
+	Year      string
 	MediaType media.MediaType
 	Season    int
 	Episode   int
@@ -76,7 +87,7 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 		return nil, "search", fmt.Errorf("search failed: %w", err)
 	}
 
-	candidates := fallbackCandidates(results, req.MediaType)
+	candidates := candidatesFor(results, req)
 	if len(candidates) == 0 {
 		return nil, "match", fmt.Errorf("no matching result for %q", req.Title)
 	}
@@ -114,6 +125,20 @@ func FallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 }
 
 func fallbackCandidates(results []media.SearchResult, mediaType media.MediaType) []media.SearchResult {
+	return truncateCandidates(dedupeByType(results, mediaType))
+}
+
+// truncateCandidates caps a candidate list at MaxCandidates.
+func truncateCandidates(candidates []media.SearchResult) []media.SearchResult {
+	if len(candidates) > maxCandidates {
+		return candidates[:maxCandidates]
+	}
+	return candidates
+}
+
+// dedupeByType keeps the results matching mediaType (falling back to the others
+// when none do), deduplicated, in provider order.
+func dedupeByType(results []media.SearchResult, mediaType media.MediaType) []media.SearchResult {
 	var sameType []media.SearchResult
 	var otherType []media.SearchResult
 	seen := make(map[string]bool)
@@ -138,14 +163,85 @@ func fallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 		}
 	}
 
-	candidates := sameType
-	if len(candidates) == 0 {
-		candidates = otherType
+	if len(sameType) > 0 {
+		return sameType
 	}
-	if len(candidates) > maxCandidates {
-		candidates = candidates[:maxCandidates]
+	return otherType
+}
+
+// candidatesFor filters results to the requested media type, then orders them
+// by how well they match the work the user actually picked, best first. The
+// provider's own relevance ordering is only the tiebreaker.
+func candidatesFor(results []media.SearchResult, req Request) []media.SearchResult {
+	// Rank before capping at MaxCandidates: the right match is often outside a
+	// provider's own top five for a franchise title.
+	candidates := dedupeByType(results, req.MediaType)
+
+	scored := make([]struct {
+		result media.SearchResult
+		score  int
+	}, len(candidates))
+	for i, c := range candidates {
+		scored[i].result = c
+		scored[i].score = candidateScore(c, req)
 	}
-	return candidates
+	sort.SliceStable(scored, func(a, b int) bool { return scored[a].score > scored[b].score })
+
+	ranked := make([]media.SearchResult, len(scored))
+	for i, s := range scored {
+		ranked[i] = s.result
+	}
+	return truncateCandidates(ranked)
+}
+
+// candidateScore rates how confidently a search result is the requested work.
+func candidateScore(r media.SearchResult, req Request) int {
+	score := 0
+
+	// An identical ID is conclusive — the provider indexes the same catalog
+	// (TMDB IDs, in practice) the selection came from.
+	if req.ID != "" && r.ID == req.ID {
+		score += 8
+	}
+
+	if normalize(r.Title) == normalize(req.Title) {
+		score += 4
+	} else if strings.HasPrefix(normalize(r.Title), normalize(req.Title)) {
+		score++
+	}
+
+	// Catalogs disagree by a year on release dates often enough that an exact
+	// match is worth more than a near one, but a near one still beats nothing.
+	if req.Year != "" && r.Year != "" {
+		switch diff := yearDiff(r.Year, req.Year); {
+		case diff == 0:
+			score += 4
+		case diff <= 1:
+			score += 2
+		}
+	}
+
+	return score
+}
+
+// normalize lowercases and trims a title for comparison.
+func normalize(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// yearDiff returns the absolute difference between two year strings, or a large
+// value if either does not parse.
+func yearDiff(a, b string) int {
+	ai, err1 := strconv.Atoi(a)
+	bi, err2 := strconv.Atoi(b)
+	if err1 != nil || err2 != nil {
+		return 1 << 30
+	}
+	if d := ai - bi; d < 0 {
+		return -d
+	} else {
+		return d
+	}
 }
 
 // tryStreamProviderFallback resolves a stream via StreamProvider.Watch().

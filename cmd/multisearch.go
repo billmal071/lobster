@@ -9,41 +9,59 @@ import (
 
 	"lobster/internal/media"
 	"lobster/internal/provider"
+	"lobster/internal/ui"
 )
 
 const multiSearchTimeout = 5 * time.Second
 
-// multiProviderSearch searches the primary provider and fallbacks in parallel,
-// then merges and deduplicates results. The primary provider's results are
-// preferred and appear first.
-func multiProviderSearch(primary provider.Provider, fallbacks []provider.Provider, query string) []media.SearchResult {
+// gatherSearchResults runs the primary provider's search, then broadens to the
+// fallback providers whenever the primary errors or returns few results — so a
+// title the primary catalog lacks (e.g. anime, which only the TMDB/AllAnime/
+// AniPub providers index) is still discoverable. It only errors when no
+// provider yields anything.
+func gatherSearchResults(primary provider.Provider, fallbacks []provider.Provider, query string) ([]media.SearchResult, error) {
+	stop := ui.StartSpinner(fmt.Sprintf("Searching for %q...", query))
+	results, err := primary.Search(query)
+	stop()
+	if err != nil {
+		debugf("primary search (%T) failed: %v; broadening to fallback providers", primary, err)
+		results = nil
+	}
+
+	// The merged results may originate from fallback providers, but playback
+	// still uses the primary provider. Providers use their own ID formats;
+	// stream resolution is title-based via the resolver, so cross-provider
+	// fallback works.
+	if len(results) < 3 {
+		debugf("primary returned %d results, searching fallback providers...", len(results))
+		stop = ui.StartSpinner("Searching more providers...")
+		merged := multiProviderSearch(results, fallbacks, query)
+		stop()
+		if len(merged) > 0 {
+			results = merged
+		}
+	}
+
+	if len(results) == 0 {
+		return nil, fmt.Errorf("no results found for %q", query)
+	}
+	return results, nil
+}
+
+// multiProviderSearch searches the fallback providers in parallel and merges
+// them behind primaryResults, which the caller has already obtained. The
+// primary is deliberately not re-queried: a thin-but-successful first search
+// followed by a transient second failure used to discard the only results the
+// user would have seen.
+func multiProviderSearch(primaryResults []media.SearchResult, fallbacks []provider.Provider, query string) []media.SearchResult {
 	ctx, cancel := context.WithTimeout(context.Background(), multiSearchTimeout)
 	defer cancel()
 
 	var mu sync.Mutex
-	var primaryResults []media.SearchResult
-	var fallbackResults [][]media.SearchResult
-
 	// Pre-allocate slice for fallback results to maintain order.
-	fallbackResults = make([][]media.SearchResult, len(fallbacks))
+	fallbackResults := make([][]media.SearchResult, len(fallbacks))
 
 	var wg sync.WaitGroup
-
-	// Search primary provider.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		results, err := searchWithContext(ctx, primary, query)
-		if err != nil {
-			debugf("multi-search primary (%T) failed: %v", primary, err)
-			return
-		}
-		mu.Lock()
-		primaryResults = results
-		mu.Unlock()
-	}()
-
-	// Search fallback providers in parallel.
 	for i, fb := range fallbacks {
 		wg.Add(1)
 		go func(idx int, p provider.Provider) {
@@ -88,23 +106,63 @@ func searchWithContext(ctx context.Context, p provider.Provider, query string) (
 }
 
 // deduplicateResults merges primary results with fallback results, deduplicating
-// by title (case-insensitive). When duplicates exist, the entry with more
-// metadata (poster, year, seasons/episodes) is preferred.
+// by title, media type and year (case-insensitive). When duplicates exist, the
+// entry with more metadata (poster, year, seasons/episodes) is preferred.
 func deduplicateResults(primary []media.SearchResult, fallbackGroups [][]media.SearchResult) []media.SearchResult {
-	seen := make(map[string]int) // normalized title -> index in merged
+	// Dedup on title + media type + year, not title alone: "Spider-Man" is the
+	// 2002 film, a 1994 cartoon and a 1967 cartoon, and collapsing them hides
+	// most of a franchise behind one row. Providers that omit the year fall
+	// back to a looser title+type match so they still merge rather than
+	// producing a near-duplicate.
+	seen := make(map[string]int)        // title|type|year -> index in merged
+	yearless := make(map[string]int)    // title|type -> index of a year-less entry
+	byTitleType := make(map[string]int) // title|type -> index of the first entry
 	var merged []media.SearchResult
 
+	// Two entries for the same work carry different subsets of the metadata.
+	// Keep the richer one as the base and fill its gaps from the other, so a
+	// year-bearing duplicate can never leave the merged entry year-less —
+	// an empty year disables the resolver's year-based candidate ranking.
+	keep := func(idx int, r media.SearchResult) {
+		if resultScore(r) > resultScore(merged[idx]) {
+			r = fillGaps(r, merged[idx])
+		} else {
+			r = fillGaps(merged[idx], r)
+		}
+		merged[idx] = r
+	}
+
 	addResult := func(r media.SearchResult) {
-		key := normalizeTitle(r.Title)
-		if idx, exists := seen[key]; exists {
-			// Keep the one with more metadata.
-			existing := merged[idx]
-			if resultScore(r) > resultScore(existing) {
-				merged[idx] = r
-			}
+		loose := normalizeTitle(r.Title) + "|" + r.Type.String()
+		key := loose + "|" + r.Year
+
+		if idx, ok := seen[key]; ok {
+			keep(idx, r)
 			return
 		}
-		seen[key] = len(merged)
+		if r.Year == "" {
+			// No year to disambiguate with: merge into whatever we already have
+			// for this title and type.
+			if idx, ok := byTitleType[loose]; ok {
+				keep(idx, r)
+				return
+			}
+		} else if idx, ok := yearless[loose]; ok {
+			// A year-less entry for this work arrived first — upgrade it in place.
+			keep(idx, r)
+			seen[key] = idx
+			delete(yearless, loose)
+			return
+		}
+
+		idx := len(merged)
+		seen[key] = idx
+		if _, ok := byTitleType[loose]; !ok {
+			byTitleType[loose] = idx
+		}
+		if r.Year == "" {
+			yearless[loose] = idx
+		}
 		merged = append(merged, r)
 	}
 
@@ -121,6 +179,32 @@ func deduplicateResults(primary []media.SearchResult, fallbackGroups [][]media.S
 	}
 
 	return merged
+}
+
+// fillGaps returns base with every empty field filled in from other.
+func fillGaps(base, other media.SearchResult) media.SearchResult {
+	if base.ID == "" {
+		base.ID = other.ID
+	}
+	if base.Year == "" {
+		base.Year = other.Year
+	}
+	if base.Duration == "" {
+		base.Duration = other.Duration
+	}
+	if base.URL == "" {
+		base.URL = other.URL
+	}
+	if base.Poster == "" {
+		base.Poster = other.Poster
+	}
+	if base.Seasons == 0 {
+		base.Seasons = other.Seasons
+	}
+	if base.Episodes == 0 {
+		base.Episodes = other.Episodes
+	}
+	return base
 }
 
 // normalizeTitle returns a lowercase, trimmed version of the title for dedup.
