@@ -46,6 +46,9 @@ func newProvider() provider.Provider {
 	if strings.Contains(cfg.Base, "vaplayer") {
 		return provider.NewVaPlayer()
 	}
+	if strings.Contains(cfg.Base, "allanime") {
+		return provider.NewAllAnime(cfg.AnimeDub)
+	}
 	// Default: MovieBox
 	return provider.NewMovieBox()
 }

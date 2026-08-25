@@ -23,6 +23,12 @@ func (g *Generic) Available() bool {
 
 // Play launches the generic player. Position tracking is not supported.
 func (g *Generic) Play(stream *media.Stream, title string, startPos float64, subFiles []string) (PlayResult, error) {
+	stream, cleanup, err := wrapDeobfuscated(stream)
+	if err != nil {
+		return PlayResult{}, err
+	}
+	defer cleanup()
+
 	args := []string{stream.URL}
 
 	// Both iina and celluloid accept mpv-style flags

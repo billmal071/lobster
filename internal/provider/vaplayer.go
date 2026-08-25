@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -32,8 +31,10 @@ func NewVaPlayer() *VaPlayer {
 }
 
 // vaplayerResponse is the JSON response from the vaplayer API.
+// status_code is a string ("200") on success but a bare number (404) on
+// failure, so it must be decoded as json.Number to handle both.
 type vaplayerResponse struct {
-	StatusCode string `json:"status_code"`
+	StatusCode json.Number `json:"status_code"`
 	Data       struct {
 		Title      string   `json:"title"`
 		IMDBID     string   `json:"imdb_id"`
@@ -50,18 +51,15 @@ type vaplayerResponse struct {
 	} `json:"data"`
 }
 
-// Search uses TMDB's no-key web search endpoint (same as Soap2Day/VidNest).
+// Search uses TMDB's keyless multi-search endpoint (same as Soap2Day/VidNest).
 func (vp *VaPlayer) Search(query string) ([]media.SearchResult, error) {
-	searchURL := fmt.Sprintf("%s/search/trending?query=%s",
-		tmdbSearchBase, url.QueryEscape(query))
-
-	req, err := http.NewRequest(http.MethodGet, searchURL, nil)
+	req, err := http.NewRequest(http.MethodGet, tmdbMultiSearchURL(tmdbBaseURL, query), nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/121.0")
 	req.Header.Set("Accept", "application/json, text/html, */*")
-	req.Header.Set("Referer", tmdbSearchBase+"/")
+	req.Header.Set("Referer", tmdbBaseURL+"/")
 
 	resp, err := vp.client.Do(req)
 	if err != nil {
@@ -78,37 +76,10 @@ func (vp *VaPlayer) Search(query string) ([]media.SearchResult, error) {
 		return nil, fmt.Errorf("vaplayer search: %w", err)
 	}
 
-	var tmdbResp tmdbSearchResponse
-	if err := json.Unmarshal(body, &tmdbResp); err != nil {
+	results, err := parseTMDBSearchResults(body, tmdbBaseURL)
+	if err != nil {
 		return nil, fmt.Errorf("vaplayer search: %w", err)
 	}
-
-	var results []media.SearchResult
-	for _, raw := range tmdbResp.Results {
-		if len(raw) == 0 || raw[0] != '{' {
-			continue
-		}
-		var item tmdbSearchResult
-		if err := json.Unmarshal(raw, &item); err != nil {
-			continue
-		}
-		if item.MediaType != "movie" && item.MediaType != "tv" {
-			continue
-		}
-		mt := media.Movie
-		if item.MediaType == "tv" {
-			mt = media.TV
-		}
-		results = append(results, media.SearchResult{
-			ID:     fmt.Sprintf("%s/%d", item.MediaType, item.ID),
-			Title:  item.displayTitle(),
-			Type:   mt,
-			Year:   item.year(),
-			URL:    fmt.Sprintf("%s/%s/%d", tmdbSearchBase, item.MediaType, item.ID),
-			Poster: tmdbPosterURL(item.PosterPath),
-		})
-	}
-
 	if len(results) == 0 {
 		return nil, fmt.Errorf("no results found for %q", query)
 	}
@@ -350,7 +321,7 @@ func (vp *VaPlayer) fetchAPI(apiURL string) (*vaplayerResponse, error) {
 		return nil, fmt.Errorf("parsing response: %w", err)
 	}
 
-	if result.StatusCode != "200" {
+	if result.StatusCode.String() != "200" {
 		return nil, fmt.Errorf("API error: status %s", result.StatusCode)
 	}
 

@@ -144,6 +144,18 @@ func (a *AllAnime) Search(query string) ([]media.SearchResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
+	// AllAnime often indexes only the romaji or base title, so a full english
+	// title ("KAMUI: He's Behind You") can find nothing. Retry with the
+	// pre-colon base title, keeping only results that match the original query
+	// so a broad base ("KAMUI") can't surface unrelated shows.
+	if len(out) == 0 {
+		if base := baseTitle(query); base != "" {
+			alt, aerr := a.queryShows(map[string]any{"allowAdult": false, "allowUnknown": false, "query": base}, 40, "ALL")
+			if aerr == nil {
+				out = filterByTitle(alt, query)
+			}
+		}
+	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no anime found for %q", query)
 	}
@@ -160,6 +172,41 @@ func (a *AllAnime) Search(query string) ([]media.SearchResult, error) {
 		return out[i].Episodes > out[j].Episodes
 	})
 	return out, nil
+}
+
+// baseTitle returns the part of a title before its colon separator, or ""
+// when there is no meaningful prefix to retry with.
+func baseTitle(q string) string {
+	if i := strings.IndexAny(q, ":："); i > 0 {
+		return strings.TrimSpace(q[:i])
+	}
+	return ""
+}
+
+// normalizeTitle lowercases and strips everything but letters and digits so
+// punctuation and spacing differences don't block title comparison.
+func normalizeTitle(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// filterByTitle keeps results whose normalized title contains, or is
+// contained in, the normalized original query.
+func filterByTitle(results []media.SearchResult, query string) []media.SearchResult {
+	nq := normalizeTitle(query)
+	var out []media.SearchResult
+	for _, r := range results {
+		nr := normalizeTitle(r.Title)
+		if nr != "" && nq != "" && (strings.Contains(nq, nr) || strings.Contains(nr, nq)) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // GetSeasons returns a single pseudo-season: AllAnime has no seasons.
@@ -212,7 +259,12 @@ func epNumber(es string, ordinal int) int {
 func (a *AllAnime) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
 	showID, episodeString, trans, ok := parseEpisodeID(episodeID)
 	if !ok {
-		return nil, fmt.Errorf("bad episode id %q", episodeID)
+		// Fallback-resolver form: "showID:season:episode", or "" for movies.
+		nid, err := resolveNumericEpisodeID(a.GetEpisodes, mediaID, episodeID)
+		if err != nil {
+			return nil, err
+		}
+		showID, episodeString, trans, _ = parseEpisodeID(nid)
 	}
 
 	// 1) Persisted-query GET for the encrypted source list (Origin gates tobeparsed).

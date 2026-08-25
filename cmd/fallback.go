@@ -86,14 +86,34 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 		fallbacks = append(fallbacks, provider.NewKimCartoon("kimcartoon.com.co"))
 	}
 
+	// Last so movie/TV scrapers keep priority; these catch anime the others
+	// lack. AniPub matters most: AllAnime's sources endpoint is crypto-gated
+	// (AA_CRYPTO_MISSING, mid-2026), so its Watch fails until that's cracked.
+	if _, ok := primary.(*provider.AllAnime); !ok {
+		fallbacks = append(fallbacks, provider.NewAllAnime(cfg != nil && cfg.AnimeDub))
+	}
+	if _, ok := primary.(*provider.AniPub); !ok {
+		fallbacks = append(fallbacks, provider.NewAniPub())
+	}
+
 	return fallbacks
 }
 
 // tryFallbackStream attempts to resolve a stream using the resilient Resolver,
 // which races fallback providers and selects the first valid result.
-func tryFallbackStream(primary provider.Provider, title string, mediaType media.MediaType, season, episode int) (*media.Stream, error) {
+// content carries the ID and year of the work the user actually selected so the
+// resolver can tell a franchise entry apart from its sequels.
+func tryFallbackStream(primary provider.Provider, content media.SearchResult, season, episode int) (*media.Stream, error) {
 	r := resolver.New(fallbackProviders(primary), sharedHealth(), debugf)
-	req := resolver.Request{Title: title, MediaType: mediaType, Season: season, Episode: episode, Quality: cfgQuality()}
+	req := resolver.Request{
+		ID:        content.ID,
+		Title:     content.Title,
+		Year:      content.Year,
+		MediaType: content.Type,
+		Season:    season,
+		Episode:   episode,
+		Quality:   cfgQuality(),
+	}
 	stream, report, err := r.Resolve(context.Background(), req)
 	if err != nil {
 		debugf("resolve failed: %s", report.Summary())
@@ -113,7 +133,7 @@ func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 		}
 
 		// Use fallback providers to resolve a stream for downloads.
-		fbStream, err := tryFallbackStream(primary, title, mt, season, episode)
+		fbStream, err := tryFallbackStream(primary, media.SearchResult{ID: mediaID, Title: title, Type: mt}, season, episode)
 		if err != nil {
 			return nil, fmt.Errorf("all providers failed: %w", err)
 		}
