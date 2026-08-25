@@ -70,3 +70,27 @@ func TestDeduplicateResultsUpgradesYearlessEntry(t *testing.T) {
 		t.Errorf("year-less entry was not upgraded: %+v", merged[0])
 	}
 }
+
+// When a dated entry merges into a year-less one, the year must survive even if
+// the year-less entry carries more metadata overall — an empty year propagates
+// into resolver.Request and disables year-based candidate ranking.
+func TestDeduplicateResultsKeepsYearWhenYearlessEntryIsRicher(t *testing.T) {
+	primary := []media.SearchResult{
+		{ID: "x", Title: "Spider-Man", Type: media.Movie, Poster: "p.jpg", Duration: "121m", URL: "u"},
+	}
+	fallback := [][]media.SearchResult{{
+		{ID: "movie/557", Title: "Spider-Man", Type: media.Movie, Year: "2002"},
+	}}
+
+	merged := deduplicateResults(primary, fallback)
+	if len(merged) != 1 {
+		t.Fatalf("len(merged) = %d, want 1: %+v", len(merged), merged)
+	}
+	if merged[0].Year != "2002" {
+		t.Errorf("Year = %q, want 2002: %+v", merged[0].Year, merged[0])
+	}
+	// The richer entry's metadata must not be lost either.
+	if merged[0].Poster != "p.jpg" || merged[0].Duration != "121m" || merged[0].URL != "u" {
+		t.Errorf("metadata lost while merging: %+v", merged[0])
+	}
+}
