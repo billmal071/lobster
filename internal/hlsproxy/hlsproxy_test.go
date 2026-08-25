@@ -124,3 +124,74 @@ func TestProxyRewritesPlaylistURIs(t *testing.T) {
 		t.Fatalf("segment URI not resolved against variant base: %q", segUpstream)
 	}
 }
+
+// A player seeking inside a segment (or following #EXT-X-BYTERANGE) issues a
+// ranged GET. The proxy must answer it against the *de-obfuscated* bytes: the
+// PNG wrapper it strips shifts every offset, so forwarding the client's Range
+// upstream verbatim would return the wrong bytes.
+func TestProxyServesByteRangeOverDeobfuscatedPayload(t *testing.T) {
+	tsPayload := []byte("0123456789abcdef")
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Range"); got != "" {
+			t.Errorf("upstream got Range %q; the wrapper makes offsets meaningless upstream", got)
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(pngWrap(tsPayload))
+	}))
+	defer upstream.Close()
+
+	p, err := New("https://ref.example/", "test-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, p.PlaylistURL(upstream.URL+"/seg0.ts"), nil)
+	req.Header.Set("Range", "bytes=4-7")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("status = %d, want 206", resp.StatusCode)
+	}
+	if got, want := resp.Header.Get("Content-Range"), "bytes 4-7/16"; got != want {
+		t.Errorf("Content-Range = %q, want %q", got, want)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "4567" {
+		t.Fatalf("ranged body = %q, want %q", body, "4567")
+	}
+}
+
+// Without a Range header the response must stay a plain 200 that advertises
+// range support, so a player knows it may seek.
+func TestProxyAdvertisesRangeSupport(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("\x47plain-ts"))
+	}))
+	defer upstream.Close()
+
+	p, err := New("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	resp, err := http.Get(p.PlaylistURL(upstream.URL + "/seg0.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Accept-Ranges"); got != "bytes" {
+		t.Errorf("Accept-Ranges = %q, want bytes", got)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "video/mp2t" {
+		t.Errorf("Content-Type = %q, want video/mp2t", got)
+	}
+}

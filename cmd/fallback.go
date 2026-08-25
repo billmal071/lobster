@@ -126,14 +126,15 @@ func tryFallbackStream(primary provider.Provider, content media.SearchResult, se
 // makeStreamResolver builds a StreamResolver that tries the primary provider
 // and all fallbacks to resolve a stream URL for downloads.
 func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
-	return func(title, mediaID, episodeID, mediaType string, season, episode int) (*dlmanager.StreamResult, error) {
+	return func(req dlmanager.ResolveRequest) (*dlmanager.StreamResult, error) {
 		mt := media.Movie
-		if mediaType == "tv" {
+		if req.MediaType == "tv" {
 			mt = media.TV
 		}
 
 		// Use fallback providers to resolve a stream for downloads.
-		fbStream, err := tryFallbackStream(primary, media.SearchResult{ID: mediaID, Title: title, Type: mt}, season, episode)
+		content := media.SearchResult{ID: req.MediaID, Title: req.Title, Year: req.Year, Type: mt}
+		fbStream, err := tryFallbackStream(primary, content, req.Season, req.Episode)
 		if err != nil {
 			return nil, fmt.Errorf("all providers failed: %w", err)
 		}
