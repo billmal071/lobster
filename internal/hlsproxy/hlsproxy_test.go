@@ -195,3 +195,40 @@ func TestProxyAdvertisesRangeSupport(t *testing.T) {
 		t.Errorf("Content-Type = %q, want video/mp2t", got)
 	}
 }
+
+// A body larger than the read cap must fail loudly. io.ReadAll over a
+// LimitReader returns a short buffer and a nil error, so serving it would hand
+// the player a silently truncated segment that decodes as a corrupt stream.
+func TestProxyRejectsOversizedUpstreamBody(t *testing.T) {
+	oversized := int64(maxBodyBytes) + 1
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp2t")
+		buf := make([]byte, 1<<20)
+		for written := int64(0); written < oversized; {
+			n := int64(len(buf))
+			if remaining := oversized - written; remaining < n {
+				n = remaining
+			}
+			if _, err := w.Write(buf[:n]); err != nil {
+				return
+			}
+			written += n
+		}
+	}))
+	defer upstream.Close()
+
+	p, err := New("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	resp, err := http.Get(p.PlaylistURL(upstream.URL + "/huge.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 for an oversized upstream body", resp.StatusCode)
+	}
+}

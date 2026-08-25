@@ -2,6 +2,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -146,7 +147,7 @@ func migrate(db *sql.DB) error {
 
 // hasColumn reports whether a table already defines a column.
 func hasColumn(db *sql.DB, table, column string) (bool, error) {
-	rows, err := db.Query("SELECT name FROM pragma_table_info(?)", table)
+	rows, err := db.QueryContext(context.Background(), "SELECT name FROM pragma_table_info(?)", table)
 	if err != nil {
 		return false, err
 	}
