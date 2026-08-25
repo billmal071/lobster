@@ -197,8 +197,7 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 	debugf("resolving stream via fallback providers for %s", sess.Title())
 	stream, err := tryFallbackStream(
 		sess.Provider,
-		sess.Content.Title,
-		sess.Content.Type,
+		sess.Content,
 		sess.CurrentSeason().Number,
 		sess.Current().Number,
 	)

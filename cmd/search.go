@@ -78,25 +78,9 @@ func searchRun(cmd *cobra.Command, args []string) error {
 
 // playFlow handles the full search -> select -> play flow.
 func playFlow(p provider.Provider, query string) error {
-	// Search primary provider first.
-	stop := ui.StartSpinner(fmt.Sprintf("Searching for %q...", query))
-	results, err := p.Search(query)
-	stop()
+	results, err := gatherSearchResults(p, fallbackSearchProviders(p), query)
 	if err != nil {
-		return fmt.Errorf("search failed: %w", err)
-	}
-
-	// If primary returned few results, search fallback providers in parallel.
-	// The merged results may originate from fallback providers, but playback
-	// still uses the primary provider (p). Providers use their own ID formats
-	// (FlixHQ uses slugs, soap2day uses TMDB IDs). Stream resolution is
-	// title-based via the resolver, so cross-provider fallback works.
-	if len(results) < 3 {
-		debugf("primary returned %d results, searching fallback providers...", len(results))
-		stop = ui.StartSpinner("Searching more providers...")
-		fallbacks := fallbackSearchProviders(p)
-		results = multiProviderSearch(p, fallbacks, query)
-		stop()
+		return err
 	}
 
 	items := make([]string, len(results))
@@ -253,7 +237,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// Primary provider can't resolve seasons — try fallback stream
 			debugf("primary provider seasons failed: %v, trying fallbacks", err)
 			fmt.Fprintf(os.Stderr, "Provider has no season data, trying fallbacks...\n")
-			fbStream, fbErr := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
+			fbStream, fbErr := tryFallbackStream(p, selected, season, episode)
 			if fbErr != nil {
 				if err != nil {
 					return fmt.Errorf("getting seasons: %w", err)
@@ -418,7 +402,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			}
 			// Try fallback immediately
 			fmt.Fprintf(os.Stderr, "Primary provider failed, trying fallback...\n")
-			fbStream, fbErr := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
+			fbStream, fbErr := tryFallbackStream(p, selected, season, episode)
 			if fbErr != nil {
 				if err != nil {
 					return fmt.Errorf("getting servers: %w", err)
@@ -448,7 +432,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			stopWatch()
 			// Try fallback providers
 			fmt.Fprintf(os.Stderr, "Primary provider failed, trying fallback...\n")
-			fbStream, err := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
+			fbStream, err := tryFallbackStream(p, selected, season, episode)
 			if err != nil {
 				return fmt.Errorf("all servers failed for %s", title)
 			}
@@ -463,7 +447,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	// fallback StreamProviders (Soap2Day, etc.) for stream resolution.
 	debugf("resolving stream via fallback providers for %s", title)
 	stopStream := ui.StartSpinner(fmt.Sprintf("Fetching %s media stream...", title))
-	fbStream, err := tryFallbackStream(p, selected.Title, selected.Type, season, episode)
+	fbStream, err := tryFallbackStream(p, selected, season, episode)
 	stopStream()
 	if err != nil {
 		debugf("fallback failed: %v", err)

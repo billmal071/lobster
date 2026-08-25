@@ -34,6 +34,12 @@ func (m *MPV) Available() bool {
 
 // Play launches mpv with the given stream and returns the final playback state.
 func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFiles []string) (PlayResult, error) {
+	stream, cleanup, err := wrapDeobfuscated(stream)
+	if err != nil {
+		return PlayResult{}, err
+	}
+	defer cleanup()
+
 	// Create randomized IPC path (Unix socket on Unix, named pipe on Windows)
 	ipc, err := newIPCSocket()
 	if err != nil {

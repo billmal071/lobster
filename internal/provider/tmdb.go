@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"lobster/internal/httputil"
+	"lobster/internal/media"
 )
 
 // --- TMDB shared const, types, and helpers ---
@@ -49,6 +50,53 @@ func (r *tmdbSearchResult) year() string {
 		return date[:4]
 	}
 	return ""
+}
+
+// tmdbMultiSearchURL builds TMDB's keyless multi-search URL. Use this for every
+// user-facing search: /search/multi returns up to 20 complete result objects.
+// The /search/trending endpoint is a typeahead — it returns only the top two or
+// three objects followed by HTML <span> name suggestions that every parser here
+// discards, which made a query like "spiderman" surface a single film.
+func tmdbMultiSearchURL(base, query string) string {
+	return fmt.Sprintf("%s/search/multi?query=%s",
+		strings.TrimRight(base, "/"), url.QueryEscape(query))
+}
+
+// parseTMDBSearchResults decodes a TMDB search payload into search results,
+// skipping suggestion strings and non-movie/tv entries (people, collections).
+func parseTMDBSearchResults(body []byte, base string) ([]media.SearchResult, error) {
+	var resp tmdbSearchResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("parsing response: %w", err)
+	}
+
+	base = strings.TrimRight(base, "/")
+	var results []media.SearchResult
+	for _, raw := range resp.Results {
+		if len(raw) == 0 || raw[0] != '{' {
+			continue
+		}
+		var item tmdbSearchResult
+		if err := json.Unmarshal(raw, &item); err != nil {
+			continue
+		}
+		if item.MediaType != "movie" && item.MediaType != "tv" {
+			continue
+		}
+		mt := media.Movie
+		if item.MediaType == "tv" {
+			mt = media.TV
+		}
+		results = append(results, media.SearchResult{
+			ID:     fmt.Sprintf("%s/%d", item.MediaType, item.ID),
+			Title:  item.displayTitle(),
+			Type:   mt,
+			Year:   item.year(),
+			URL:    fmt.Sprintf("%s/%s/%d", base, item.MediaType, item.ID),
+			Poster: tmdbPosterURL(item.PosterPath),
+		})
+	}
+	return results, nil
 }
 
 // tmdbPosterURL builds a full TMDB poster image URL from a poster path.
@@ -143,8 +191,7 @@ func TMDBPoster(title, year string, isTV bool) string {
 // and whether the outcome is cacheable. A network/parse error returns ("", false)
 // so the caller retries on the next selection instead of caching the failure.
 func tmdbPosterLookup(title, year string, isTV bool) (string, bool) {
-	endpoint := fmt.Sprintf("%s/search/trending?query=%s",
-		strings.TrimRight(tmdbBaseURL, "/"), url.QueryEscape(title))
+	endpoint := tmdbMultiSearchURL(tmdbBaseURL, title)
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", false

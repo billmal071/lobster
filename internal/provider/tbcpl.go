@@ -171,11 +171,10 @@ var tbcplDirectServers = []tbcplDirectServer{
 	{Name: "Drag", SR: "5"},
 }
 
-// Search uses TMDB's no-key web search endpoint for reliable title lookup.
+// Search uses TMDB's keyless multi-search endpoint for reliable title lookup.
 // The returned TMDB IDs are then used by 1Shows/Vidzee.
 func (t *TBCPL) Search(query string) ([]media.SearchResult, error) {
-	searchURL := fmt.Sprintf("%s/search/trending?query=%s",
-		strings.TrimRight(t.tmdbBaseURL, "/"), url.QueryEscape(query))
+	searchURL := tmdbMultiSearchURL(t.tmdbBaseURL, query)
 
 	body, err := t.fetch(searchURL, strings.TrimRight(t.tmdbBaseURL, "/")+"/", "application/json, text/html, */*")
 	if err != nil {
@@ -192,7 +191,7 @@ func (t *TBCPL) Search(query string) ([]media.SearchResult, error) {
 	return results, nil
 }
 
-// GetDetails returns cached metadata from search/trending results. 1Shows detail
+// GetDetails returns cached metadata from search results. 1Shows detail
 // endpoints currently reject direct server-side requests, so this is best-effort.
 func (t *TBCPL) GetDetails(id string) (*media.ContentDetail, error) {
 	t.mu.RLock()

@@ -70,6 +70,10 @@ type Stream struct {
 	Quality   string     // Resolved quality
 	Referer   string     // Referer header required by the CDN (if any)
 	UserAgent string     // User-Agent header required by the CDN (if any)
+	// Deobfuscate marks an HLS stream whose segments are wrapped in a fake-PNG
+	// header (megaplay/ibyteimg) and must be served through the local
+	// de-obfuscating proxy; a plain player cannot demux them directly.
+	Deobfuscate bool
 }
 
 // Subtitle represents a subtitle track.

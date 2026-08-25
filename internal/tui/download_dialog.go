@@ -20,22 +20,22 @@ import (
 type dlStep int
 
 const (
-	dlStepNone        dlStep = iota
-	dlStepLoadSeasons        // loading seasons
-	dlStepPickSeason         // user picks a season
-	dlStepLoadEpisodes       // loading episodes
-	dlStepPickMode           // one / all / range
-	dlStepPickEpisode        // user picks a single episode
-	dlStepRangeInput         // user types a range like "1-5,8"
+	dlStepNone         dlStep = iota
+	dlStepLoadSeasons         // loading seasons
+	dlStepPickSeason          // user picks a season
+	dlStepLoadEpisodes        // loading episodes
+	dlStepPickMode            // one / all / range
+	dlStepPickEpisode         // user picks a single episode
+	dlStepRangeInput          // user types a range like "1-5,8"
 )
 
 // downloadDialog holds the state for the TV show download overlay.
 type downloadDialog struct {
-	active   bool
-	step     dlStep
-	item     media.SearchResult
-	provider provider.Provider
-	manager  *dlmanager.Manager
+	active    bool
+	step      dlStep
+	item      media.SearchResult
+	provider  provider.Provider
+	manager   *dlmanager.Manager
 	outputDir string
 
 	seasons  []media.Season
@@ -306,6 +306,7 @@ func (d *downloadDialog) queueEpisodes(episodes []media.Episode) tea.Cmd {
 			Title:      fmt.Sprintf("%s %s", item.Title, epLabel),
 			MediaTitle: item.Title,
 			MediaType:  item.Type.String(),
+			Year:       item.Year,
 			MediaID:    item.ID,
 			EpisodeID:  ep.ID,
 			Season:     seasonNum,
