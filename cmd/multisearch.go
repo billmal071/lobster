@@ -14,9 +14,6 @@ import (
 
 const multiSearchTimeout = 5 * time.Second
 
-// multiProviderSearch searches the primary provider and fallbacks in parallel,
-// then merges and deduplicates results. The primary provider's results are
-// preferred and appear first.
 // gatherSearchResults runs the primary provider's search, then broadens to the
 // fallback providers whenever the primary errors or returns few results — so a
 // title the primary catalog lacks (e.g. anime, which only the TMDB/AllAnime/
@@ -38,7 +35,7 @@ func gatherSearchResults(primary provider.Provider, fallbacks []provider.Provide
 	if len(results) < 3 {
 		debugf("primary returned %d results, searching fallback providers...", len(results))
 		stop = ui.StartSpinner("Searching more providers...")
-		merged := multiProviderSearch(primary, fallbacks, query)
+		merged := multiProviderSearch(results, fallbacks, query)
 		stop()
 		if len(merged) > 0 {
 			results = merged
@@ -51,34 +48,20 @@ func gatherSearchResults(primary provider.Provider, fallbacks []provider.Provide
 	return results, nil
 }
 
-func multiProviderSearch(primary provider.Provider, fallbacks []provider.Provider, query string) []media.SearchResult {
+// multiProviderSearch searches the fallback providers in parallel and merges
+// them behind primaryResults, which the caller has already obtained. The
+// primary is deliberately not re-queried: a thin-but-successful first search
+// followed by a transient second failure used to discard the only results the
+// user would have seen.
+func multiProviderSearch(primaryResults []media.SearchResult, fallbacks []provider.Provider, query string) []media.SearchResult {
 	ctx, cancel := context.WithTimeout(context.Background(), multiSearchTimeout)
 	defer cancel()
 
 	var mu sync.Mutex
-	var primaryResults []media.SearchResult
-	var fallbackResults [][]media.SearchResult
-
 	// Pre-allocate slice for fallback results to maintain order.
-	fallbackResults = make([][]media.SearchResult, len(fallbacks))
+	fallbackResults := make([][]media.SearchResult, len(fallbacks))
 
 	var wg sync.WaitGroup
-
-	// Search primary provider.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		results, err := searchWithContext(ctx, primary, query)
-		if err != nil {
-			debugf("multi-search primary (%T) failed: %v", primary, err)
-			return
-		}
-		mu.Lock()
-		primaryResults = results
-		mu.Unlock()
-	}()
-
-	// Search fallback providers in parallel.
 	for i, fb := range fallbacks {
 		wg.Add(1)
 		go func(idx int, p provider.Provider) {
@@ -136,10 +119,17 @@ func deduplicateResults(primary []media.SearchResult, fallbackGroups [][]media.S
 	byTitleType := make(map[string]int) // title|type -> index of the first entry
 	var merged []media.SearchResult
 
+	// Two entries for the same work carry different subsets of the metadata.
+	// Keep the richer one as the base and fill its gaps from the other, so a
+	// year-bearing duplicate can never leave the merged entry year-less —
+	// an empty year disables the resolver's year-based candidate ranking.
 	keep := func(idx int, r media.SearchResult) {
 		if resultScore(r) > resultScore(merged[idx]) {
-			merged[idx] = r
+			r = fillGaps(r, merged[idx])
+		} else {
+			r = fillGaps(merged[idx], r)
 		}
+		merged[idx] = r
 	}
 
 	addResult := func(r media.SearchResult) {
@@ -189,6 +179,32 @@ func deduplicateResults(primary []media.SearchResult, fallbackGroups [][]media.S
 	}
 
 	return merged
+}
+
+// fillGaps returns base with every empty field filled in from other.
+func fillGaps(base, other media.SearchResult) media.SearchResult {
+	if base.ID == "" {
+		base.ID = other.ID
+	}
+	if base.Year == "" {
+		base.Year = other.Year
+	}
+	if base.Duration == "" {
+		base.Duration = other.Duration
+	}
+	if base.URL == "" {
+		base.URL = other.URL
+	}
+	if base.Poster == "" {
+		base.Poster = other.Poster
+	}
+	if base.Seasons == 0 {
+		base.Seasons = other.Seasons
+	}
+	if base.Episodes == 0 {
+		base.Episodes = other.Episodes
+	}
+	return base
 }
 
 // normalizeTitle returns a lowercase, trimmed version of the title for dedup.
