@@ -94,6 +94,14 @@ def targets(segment):
                 continue                   # unrelated flag
             if nxt.startswith((">", "<", "2>", "&")):
                 continue                   # redirection
+            # A bare word straight after a flag, with more tokens to come, is
+            # that flag's operand rather than the program: `python3 -W ignore
+            # ./payload.txt`. Enumerating every value-taking flag across five
+            # interpreters is a losing game, so key off the shape instead. A
+            # program argument is path-like, or it is the final token.
+            if (j - 2 >= 0 and rest[j - 2].startswith("-")
+                    and "/" not in nxt and "." not in nxt and j < len(rest)):
+                continue
             # Shell and JSON punctuation clinging to a token is not part of the
             # path. Stripping it also means `"type": "node",` yields nothing,
             # rather than reporting ',' as a target.

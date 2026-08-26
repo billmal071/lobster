@@ -30,6 +30,12 @@ MUST_FLAG = [
     ("short preload flag", "tasks.json", "node -r ./preload.js ./payload.txt"),
     ("preload operand is itself the payload", "tasks.json", "node --require ./evil.woff2 ./app.js"),
     ("preload bound with equals", "tasks.json", "node --require=./payload.txt ./app.js"),
+    # A flag operand must not be mistaken for the program argument, including
+    # outside config files where an extensionless target is not suspicious.
+    ("flag operand shields the target", "run.txt", "python3 -W ignore ./payload.txt"),
+    ("flag operand, shell form", "run.txt", "bash -o pipefail ./payload.woff2"),
+    # The bare-word rule must not swallow a genuinely bare final target.
+    ("bare final target still flagged", "tasks.json", "node payload"),
     ("folderOpen", "tasks.json", '"runOn": "folderOpen"'),
     ("prompt suppression", "settings.json", '"task.allowAutomaticTasks": true,'),
 ]
@@ -49,6 +55,7 @@ MUST_NOT_FLAG = [
     ("chained legit commands", "Makefile", "node build.js && bash deploy.sh"),
     ("legit preload", "Makefile", "node --require ./preload.js ./app.js"),
     ("python module with file argv", "Makefile", "python3 -m pip install pkg.whl"),
+    ("flag operand then real script", "run.txt", "python3 -W ignore ./app.py"),
 ]
 
 
