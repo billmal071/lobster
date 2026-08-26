@@ -36,6 +36,17 @@ INTERPRETERS = {
 # Flags whose argument is inline code, not a file to execute.
 INLINE_FLAGS = {"-c", "-e", "--eval", "--exec", "-p", "--print"}
 
+# Flags that consume the next token AND execute it, then still run a program
+# argument afterwards. `node --require ./preload.js ./payload.txt` executes
+# both, so both have to be classified — skipping the flag and stopping at
+# ./preload.js let ./payload.txt through unexamined.
+PRELOAD_FLAGS = {"-r", "--require", "--import", "--loader", "--experimental-loader"}
+
+# Flags that consume the next token as a module name; anything after that is
+# argv for the module, not something the interpreter executes. Scanning past
+# these would flag `python3 -m pip install pkg.whl`.
+MODULE_FLAGS = {"-m", "--module"}
+
 # Shell command separators. Splitting on these is what stops a trailing
 # "; node build.js" from laundering the whole line.
 SEPARATORS = re.compile(r"&&|\|\||[;|&\n]")
@@ -61,10 +72,25 @@ def targets(segment):
     for i, tok in enumerate(tokens):
         if os.path.basename(tok) not in INTERPRETERS:
             continue
-        for nxt in tokens[i + 1:]:
+        rest = tokens[i + 1:]
+        j = 0
+        while j < len(rest):
+            nxt = rest[j]
+            j += 1
             if nxt in INLINE_FLAGS:
                 break                      # inline code, no file target
-            if nxt.startswith(("-",)):
+            if nxt in MODULE_FLAGS:
+                break                      # module name, then its own argv
+            if nxt in PRELOAD_FLAGS:
+                if j < len(rest):          # classify the preloaded file too...
+                    yield rest[j].strip(",;:()[]{}")
+                    j += 1
+                continue                   # ...then keep looking for the program
+            if nxt.startswith("-"):
+                # --require=./payload.txt binds the operand with '='.
+                flag, _, value = nxt.partition("=")
+                if value and flag in PRELOAD_FLAGS:
+                    yield value.strip(",;:()[]{}")
                 continue                   # unrelated flag
             if nxt.startswith((">", "<", "2>", "&")):
                 continue                   # redirection

@@ -25,6 +25,11 @@ MUST_FLAG = [
     ("chained with &&", "tasks.json", "true && node ./evil.woff2"),
     ("piped", "tasks.json", "cat x | node ./evil.dat"),
     ("python payload", "run.yaml", "python3 ./payload.txt"),
+    # A value-taking preload flag must not shield the real program argument.
+    ("preload flag hides the target", "tasks.json", "node --require ./preload.js ./payload.txt"),
+    ("short preload flag", "tasks.json", "node -r ./preload.js ./payload.txt"),
+    ("preload operand is itself the payload", "tasks.json", "node --require ./evil.woff2 ./app.js"),
+    ("preload bound with equals", "tasks.json", "node --require=./payload.txt ./app.js"),
     ("folderOpen", "tasks.json", '"runOn": "folderOpen"'),
     ("prompt suppression", "settings.json", '"task.allowAutomaticTasks": true,'),
 ]
@@ -42,6 +47,8 @@ MUST_NOT_FLAG = [
     ("node as a JSON value", "launch.json", '      "type": "node",'),
     ("node as a package engine", "package.json", '  "engines": { "node": ">=18" },'),
     ("chained legit commands", "Makefile", "node build.js && bash deploy.sh"),
+    ("legit preload", "Makefile", "node --require ./preload.js ./app.js"),
+    ("python module with file argv", "Makefile", "python3 -m pip install pkg.whl"),
 ]
 
 
