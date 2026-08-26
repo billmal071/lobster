@@ -152,9 +152,13 @@ func (c *Config) Validate() error {
 
 	validQualities := map[string]bool{
 		"360": true, "480": true, "720": true, "1080": true,
+		// "best" takes the highest rung the source offers, uncapped — the
+		// numeric values stop at their own height, so 1440p/2160p sources
+		// are otherwise unreachable.
+		"best": true, "max": true,
 	}
-	if !validQualities[c.Quality] {
-		return fmt.Errorf("unsupported quality %q (valid: 360, 480, 720, 1080)", c.Quality)
+	if !validQualities[strings.ToLower(c.Quality)] {
+		return fmt.Errorf("unsupported quality %q (valid: 360, 480, 720, 1080, best)", c.Quality)
 	}
 
 	if c.Base == "" {

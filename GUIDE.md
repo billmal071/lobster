@@ -159,7 +159,7 @@ download_dir = "~/Videos/lobster"
 -l, --language <lang>       Subtitle language (default: english)
 -n, --no-subs               Disable subtitles
 -p, --provider <name>       Server: Vidcloud | UpCloud
--q, --quality <quality>     Video quality: 360 | 480 | 720 | 1080
+-q, --quality <quality>     Video quality: 360 | 480 | 720 | 1080 | best
     --player <player>       Player: mpv | vlc | iina | celluloid
 -x, --debug                 Debug logging to stderr
 ```

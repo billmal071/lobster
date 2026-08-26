@@ -139,11 +139,12 @@ func (m *MegaCloudExtractor) Extract(embedURL string, preferredQuality string) (
 	// Step 6: Select best source URL
 	// First, check if any source URL directly contains the quality string
 	streamURL := sources[0].File
-	for _, s := range sources {
-		if strings.Contains(s.File, preferredQuality) {
-			streamURL = s.File
-			break
-		}
+	urls := make([]string, len(sources))
+	for i, s := range sources {
+		urls[i] = s.File
+	}
+	if match := pickSourceByQualityString(urls, preferredQuality); match != "" {
+		streamURL = match
 	}
 
 	// If the source is an HLS master playlist, try to select the variant
@@ -245,6 +246,17 @@ func (m *MegaCloudExtractor) selectHLSVariant(masterURL, preferredQuality, refer
 
 	if len(variants) == 0 {
 		return "", fmt.Errorf("no variants found")
+	}
+
+	// "best" means whatever the source actually offers, with no preset ceiling.
+	if IsBestQuality(preferredQuality) {
+		best := &variants[0]
+		for i := range variants {
+			if variants[i].height > best.height {
+				best = &variants[i]
+			}
+		}
+		return best.url, nil
 	}
 
 	// Find the variant matching preferred quality
