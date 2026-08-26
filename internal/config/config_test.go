@@ -240,6 +240,24 @@ func TestValidateAcceptsBestQuality(t *testing.T) {
 			t.Errorf("Quality=%q rejected: %v", q, err)
 		}
 	}
+	// Validation must also normalize: the stored value is handed straight to
+	// the extractors, where strconv.Atoi(" 720 ") fails and a padded value
+	// silently degrades quality selection.
+	for _, tc := range []struct{ in, want string }{
+		{" best ", "best"},
+		{"BEST", "best"},
+		{" 720 ", "720"},
+	} {
+		c := Default()
+		c.Quality = tc.in
+		if err := c.Validate(); err != nil {
+			t.Fatalf("Quality=%q rejected: %v", tc.in, err)
+		}
+		if c.Quality != tc.want {
+			t.Errorf("Quality=%q not normalized: got %q, want %q", tc.in, c.Quality, tc.want)
+		}
+	}
+
 	for _, q := range []string{"9999", "max", "highest"} {
 		c := Default()
 		c.Quality = q

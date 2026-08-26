@@ -158,9 +158,15 @@ func (c *Config) Validate() error {
 		// alias is a contract nobody can discover.
 		"best": true,
 	}
-	if !validQualities[strings.ToLower(strings.TrimSpace(c.Quality))] {
+	// Normalize, don't just tolerate: the stored value is passed verbatim to the
+	// extractors, where strconv.Atoi(" 720 ") fails and quality selection
+	// silently degrades. Validate runs after flag overrides, so this covers -q
+	// as well as the config file.
+	quality := strings.ToLower(strings.TrimSpace(c.Quality))
+	if !validQualities[quality] {
 		return fmt.Errorf("unsupported quality %q (valid: 360, 480, 720, 1080, best)", c.Quality)
 	}
+	c.Quality = quality
 
 	if c.Base == "" {
 		return fmt.Errorf("base URL cannot be empty")
