@@ -34,6 +34,9 @@ MUST_FLAG = [
     # outside config files where an extensionless target is not suspicious.
     ("flag operand shields the target", "run.txt", "python3 -W ignore ./payload.txt"),
     ("flag operand, shell form", "run.txt", "bash -o pipefail ./payload.woff2"),
+    # A quoted path with a space must stay one target: outside config an
+    # extensionless first fragment is ignored, so splitting it hid the .woff2.
+    ("quoted spaced target, non-config", "run.txt", 'node "payload file.woff2"'),
     # The bare-word rule must not swallow a genuinely bare final target.
     ("bare final target still flagged", "tasks.json", "node payload"),
     ("folderOpen", "tasks.json", '"runOn": "folderOpen"'),
@@ -56,6 +59,9 @@ MUST_NOT_FLAG = [
     ("legit preload", "Makefile", "node --require ./preload.js ./app.js"),
     ("python module with file argv", "Makefile", "python3 -m pip install pkg.whl"),
     ("flag operand then real script", "run.txt", "python3 -W ignore ./app.py"),
+    # Inline code is an argument, not a command to re-parse.
+    ("inline code mentioning a command", "Makefile", 'node -e "console.log(\'node ./payload.woff2\')"'),
+    ("inline sh -c mentioning a command", "Makefile", 'sh -c "echo node ./payload.woff2"'),
 ]
 
 

@@ -64,43 +64,86 @@ def is_config(path):
     return path.endswith(CONFIG_SUFFIX) or os.path.basename(path) in CONFIG_NAMES
 
 
-def targets(segment):
+# A quoted run is either a path that happens to contain spaces, or a whole
+# shell command embedded in config (which is how the loader hid itself inside
+# tasks.json). Tokenizing has to keep both possible, so quotes are preserved
+# here and resolved by context below.
+TOKEN_RE = re.compile(r"""\"([^"]*)\"|'([^']*)'|(\S+)""")
+
+
+def tokenize(segment):
+    """Yield (text, was_quoted) for each token, keeping quoted runs intact."""
+    for m in TOKEN_RE.finditer(segment):
+        dq, sq, bare = m.groups()
+        if dq is not None:
+            yield dq, True
+        elif sq is not None:
+            yield sq, True
+        else:
+            yield bare, False
+
+
+def embeds_command(text):
+    """True if a quoted run is itself a shell command rather than a path."""
+    parts = text.split()
+    return len(parts) > 1 and any(os.path.basename(t) in INTERPRETERS for t in parts)
+
+
+def targets(segment, depth=0):
     """Yield the file target of each interpreter invocation in one segment."""
-    # Quotes are delimiters, not grouping: the loader hid its command inside a
-    # JSON string, so treating a quoted run as one atom would hide it.
-    tokens = segment.replace('"', " ").replace("'", " ").split()
-    for i, tok in enumerate(tokens):
-        if os.path.basename(tok) not in INTERPRETERS:
+    toks = list(tokenize(segment))
+    i = 0
+    while i < len(toks):
+        text, quoted = toks[i]
+
+        # A quoted run holding a command is config-embedded shell: recurse so
+        # the loader's `node ./x.woff2` inside a JSON string is still seen.
+        if quoted and depth < 3 and embeds_command(text):
+            for sub in SEPARATORS.split(text):
+                yield from targets(sub, depth + 1)
+            i += 1
             continue
-        rest = tokens[i + 1:]
-        j = 0
-        while j < len(rest):
-            nxt = rest[j]
+
+        if os.path.basename(text) not in INTERPRETERS:
+            i += 1
+            continue
+
+        # `"node": "…"` is a JSON key naming a runtime, not an invocation.
+        if i + 1 < len(toks) and toks[i + 1][0] == ":":
+            i += 1
+            continue
+
+        j = i + 1
+        while j < len(toks):
+            nxt, nxt_quoted = toks[j]
             j += 1
-            if nxt in INLINE_FLAGS:
-                break                      # inline code, no file target
-            if nxt in MODULE_FLAGS:
-                break                      # module name, then its own argv
+            if nxt in INLINE_FLAGS or nxt in MODULE_FLAGS:
+                # The argument is inline code or a module name, not a file.
+                # Stop the whole segment: separators are already split out, so
+                # everything after this belongs to the inline argument. Scanning
+                # on would re-read `node -e "... node ./x.woff2 ..."` as a
+                # second invocation and report a false positive.
+                return
             if nxt in PRELOAD_FLAGS:
-                if j < len(rest):          # classify the preloaded file too...
-                    yield rest[j].strip(",;:()[]{}")
+                if j < len(toks):          # classify the preloaded file too...
+                    yield toks[j][0].strip(",;:()[]{}")
                     j += 1
                 continue                   # ...then keep looking for the program
-            if nxt.startswith("-"):
+            if not nxt_quoted and nxt.startswith("-"):
                 # --require=./payload.txt binds the operand with '='.
                 flag, _, value = nxt.partition("=")
                 if value and flag in PRELOAD_FLAGS:
                     yield value.strip(",;:()[]{}")
                 continue                   # unrelated flag
             if nxt.startswith((">", "<", "2>", "&")):
-                continue                   # redirection
+                continue                   # redirection or comparison operator
             # A bare word straight after a flag, with more tokens to come, is
             # that flag's operand rather than the program: `python3 -W ignore
             # ./payload.txt`. Enumerating every value-taking flag across five
             # interpreters is a losing game, so key off the shape instead. A
             # program argument is path-like, or it is the final token.
-            if (j - 2 >= 0 and rest[j - 2].startswith("-")
-                    and "/" not in nxt and "." not in nxt and j < len(rest)):
+            if (not nxt_quoted and j - 2 >= 0 and toks[j - 2][0].startswith("-")
+                    and "/" not in nxt and "." not in nxt and j < len(toks)):
                 continue
             # Shell and JSON punctuation clinging to a token is not part of the
             # path. Stripping it also means `"type": "node",` yields nothing,
@@ -110,6 +153,7 @@ def targets(segment):
                 continue
             yield nxt
             break
+        i = max(j, i + 1)
 
 
 def suspicious(target, path):
