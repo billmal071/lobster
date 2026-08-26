@@ -39,6 +39,16 @@ MUST_FLAG = [
     ("quoted spaced target, non-config", "run.txt", 'node "payload file.woff2"'),
     # The bare-word rule must not swallow a genuinely bare final target.
     ("bare final target still flagged", "tasks.json", "node payload"),
+    # Interpreter binaries are routinely versioned on disk; matching only the
+    # bare name lets `python3.12` walk straight past.
+    ("versioned python", "Makefile", "python3.12 ./payload.woff2"),
+    ("versioned python, quoted in config", "tasks.json",
+     '"command": "python3.12 ./payload.woff2"'),
+    ("versioned node", "Makefile", "node20 ./payload.woff2"),
+    # A path-valued flag operand looks exactly like a program argument, so the
+    # scan stopped at the innocuous .sh and never reached the payload.
+    ("path-valued flag shields the target", "run.txt",
+     "bash --rcfile ./preload.sh ./payload.woff2"),
     ("folderOpen", "tasks.json", '"runOn": "folderOpen"'),
     ("prompt suppression", "settings.json", '"task.allowAutomaticTasks": true,'),
 ]
@@ -62,6 +72,10 @@ MUST_NOT_FLAG = [
     # Inline code is an argument, not a command to re-parse.
     ("inline code mentioning a command", "Makefile", 'node -e "console.log(\'node ./payload.woff2\')"'),
     ("inline sh -c mentioning a command", "Makefile", 'sh -c "echo node ./payload.woff2"'),
+    # Versioned names must not turn every version-ish word into an interpreter.
+    ("versioned python, real script", "Makefile", "python3.12 tool.py"),
+    ("path-valued flag, real script", "run.txt", "bash --rcfile ./preload.sh ./app.sh"),
+    ("word merely starting with an interpreter name", "Makefile", "nodemon watch.js"),
 ]
 
 

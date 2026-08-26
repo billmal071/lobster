@@ -40,7 +40,19 @@ INLINE_FLAGS = {"-c", "-e", "--eval", "--exec", "-p", "--print"}
 # argument afterwards. `node --require ./preload.js ./payload.txt` executes
 # both, so both have to be classified — skipping the flag and stopping at
 # ./preload.js let ./payload.txt through unexamined.
-PRELOAD_FLAGS = {"-r", "--require", "--import", "--loader", "--experimental-loader"}
+PRELOAD_FLAGS = {"-r", "--require", "--import", "--loader", "--experimental-loader",
+                 # Shells source these before the program argument, so the same
+                 # rule applies: the operand is path-shaped, which means the
+                 # "bare word after a flag" heuristic below cannot recognize it
+                 # and the scan would stop at an innocuous ./preload.sh without
+                 # ever reaching the payload behind it.
+                 "--rcfile", "--init-file"}
+
+# Interpreters are routinely installed under versioned names (python3.12,
+# node20). Matching only the bare name lets those walk straight past, so strip a
+# trailing version before the lookup. The stem must differ from the basename,
+# which is what keeps "nodemon" from resolving to "node".
+VERSION_SUFFIX = re.compile(r"[0-9]+(?:\.[0-9]+)*$")
 
 # Flags that consume the next token as a module name; anything after that is
 # argv for the module, not something the interpreter executes. Scanning past
@@ -83,10 +95,19 @@ def tokenize(segment):
             yield bare, False
 
 
+def is_interpreter(token):
+    """True if token names an interpreter, including a versioned build."""
+    base = os.path.basename(token)
+    if base in INTERPRETERS:
+        return True
+    stem = VERSION_SUFFIX.sub("", base)
+    return stem != base and stem in INTERPRETERS
+
+
 def embeds_command(text):
     """True if a quoted run is itself a shell command rather than a path."""
     parts = text.split()
-    return len(parts) > 1 and any(os.path.basename(t) in INTERPRETERS for t in parts)
+    return len(parts) > 1 and any(is_interpreter(t) for t in parts)
 
 
 def targets(segment, depth=0):
@@ -104,7 +125,7 @@ def targets(segment, depth=0):
             i += 1
             continue
 
-        if os.path.basename(text) not in INTERPRETERS:
+        if not is_interpreter(text):
             i += 1
             continue
 
