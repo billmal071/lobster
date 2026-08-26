@@ -116,6 +116,19 @@ def main():
         finally:
             shutil.rmtree(tmp)
 
+    # An unreadable .woff2 (dangling symlink) must not crash the scan.
+    tmp = tempfile.mkdtemp()
+    try:
+        os.symlink(os.path.join(tmp, "nonexistent"), os.path.join(tmp, "broken.woff2"))
+        r = run(tmp)
+        ok = r.returncode == 0 and "Traceback" not in r.stderr
+        print(f"  {'PASS' if ok else 'FAIL'}  must not crash: dangling .woff2 symlink")
+        if not ok:
+            print(f"        rc={r.returncode} stderr={r.stderr.strip()[:200]}")
+        failures += 0 if ok else 1
+    finally:
+        shutil.rmtree(tmp)
+
     print(f"\n{'ALL PASS' if failures == 0 else str(failures) + ' FAILURE(S)'}")
     return 1 if failures else 0
 

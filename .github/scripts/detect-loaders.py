@@ -111,9 +111,16 @@ def main():
 
     for path in walk():
         if path.lower().endswith(".woff2"):
-            with open(path, "rb") as fh:
-                if fh.read(4) != b"wOF2":
-                    errors.append(f"{path} lacks the wOF2 magic bytes — not a real font")
+            # A dangling symlink or an unreadable path must not abort the whole
+            # scan with a traceback — the text branch below already tolerates
+            # this. An unreadable file holds no payload anything can execute.
+            try:
+                with open(path, "rb") as fh:
+                    magic = fh.read(4)
+            except OSError:
+                continue
+            if magic != b"wOF2":
+                errors.append(f"{path} lacks the wOF2 magic bytes — not a real font")
             continue
         try:
             if os.path.getsize(path) > MAX_BYTES:
