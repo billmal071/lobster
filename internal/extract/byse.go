@@ -120,7 +120,15 @@ func (b *ByseExtractor) Extract(embedURL string, preferredQuality string) (*medi
 	targetHeight := 0
 	fmt.Sscanf(preferredQuality, "%d", &targetHeight)
 
-	if targetHeight > 0 {
+	if IsBestQuality(preferredQuality) {
+		best := &decrypted.Sources[0]
+		for i := range decrypted.Sources {
+			if decrypted.Sources[i].Height > best.Height {
+				best = &decrypted.Sources[i]
+			}
+		}
+		streamURL = best.URL
+	} else if targetHeight > 0 {
 		// Exact match first
 		for _, s := range decrypted.Sources {
 			if s.Height == targetHeight {

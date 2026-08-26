@@ -152,10 +152,21 @@ func (c *Config) Validate() error {
 
 	validQualities := map[string]bool{
 		"360": true, "480": true, "720": true, "1080": true,
+		// "best" takes the highest rung the source offers, uncapped — the
+		// numeric values stop at their own height, so 1440p/2160p sources
+		// are otherwise unreachable. One spelling only: an undocumented
+		// alias is a contract nobody can discover.
+		"best": true,
 	}
-	if !validQualities[c.Quality] {
-		return fmt.Errorf("unsupported quality %q (valid: 360, 480, 720, 1080)", c.Quality)
+	// Normalize, don't just tolerate: the stored value is passed verbatim to the
+	// extractors, where strconv.Atoi(" 720 ") fails and quality selection
+	// silently degrades. Validate runs after flag overrides, so this covers -q
+	// as well as the config file.
+	quality := strings.ToLower(strings.TrimSpace(c.Quality))
+	if !validQualities[quality] {
+		return fmt.Errorf("unsupported quality %q (valid: 360, 480, 720, 1080, best)", c.Quality)
 	}
+	c.Quality = quality
 
 	if c.Base == "" {
 		return fmt.Errorf("base URL cannot be empty")

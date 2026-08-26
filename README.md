@@ -107,7 +107,7 @@ Config is stored in `%APPDATA%\lobster\config.toml` and history in `%LOCALAPPDAT
 -l, --language <lang>
 -n, --no-subs
 -p, --provider <name>
--q, --quality <360|480|720|1080>
+-q, --quality <360|480|720|1080|best>
     --player <mpv|vlc|iina|celluloid>
 -x, --debug
 ```
@@ -122,7 +122,7 @@ Config file location:
 
 ```toml
 player = "mpv"
-quality = "1080"
+quality = "1080"   # or "best" for the highest the source offers (uncapped)
 subs_language = "english"
 history = true
 auto_next = true
