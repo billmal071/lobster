@@ -6,11 +6,7 @@ import "strings"
 // source offers" rather than a specific height. The numeric preferences cap at
 // their value, so without this there is no way to ask for 1440p or 2160p.
 func IsBestQuality(q string) bool {
-	switch strings.ToLower(strings.TrimSpace(q)) {
-	case "best", "max":
-		return true
-	}
-	return false
+	return strings.ToLower(strings.TrimSpace(q)) == "best"
 }
 
 // pickSourceByQualityString returns the first source whose URL contains the

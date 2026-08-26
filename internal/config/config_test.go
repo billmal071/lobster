@@ -233,16 +233,18 @@ func TestLiveTVSourcesHTTPSXtream(t *testing.T) {
 // "best" must be an accepted quality: numeric values cap at their height, so
 // without it there is no way to ask for whatever the source actually offers.
 func TestValidateAcceptsBestQuality(t *testing.T) {
-	for _, q := range []string{"best", "max", "BEST"} {
+	for _, q := range []string{"best", "BEST", " best "} {
 		c := Default()
 		c.Quality = q
 		if err := c.Validate(); err != nil {
 			t.Errorf("Quality=%q rejected: %v", q, err)
 		}
 	}
-	c := Default()
-	c.Quality = "9999"
-	if err := c.Validate(); err == nil {
-		t.Error("an unsupported numeric quality should still be rejected")
+	for _, q := range []string{"9999", "max", "highest"} {
+		c := Default()
+		c.Quality = q
+		if err := c.Validate(); err == nil {
+			t.Errorf("Quality=%q should be rejected: one documented spelling only", q)
+		}
 	}
 }

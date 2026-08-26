@@ -154,10 +154,11 @@ func (c *Config) Validate() error {
 		"360": true, "480": true, "720": true, "1080": true,
 		// "best" takes the highest rung the source offers, uncapped — the
 		// numeric values stop at their own height, so 1440p/2160p sources
-		// are otherwise unreachable.
-		"best": true, "max": true,
+		// are otherwise unreachable. One spelling only: an undocumented
+		// alias is a contract nobody can discover.
+		"best": true,
 	}
-	if !validQualities[strings.ToLower(c.Quality)] {
+	if !validQualities[strings.ToLower(strings.TrimSpace(c.Quality))] {
 		return fmt.Errorf("unsupported quality %q (valid: 360, 480, 720, 1080, best)", c.Quality)
 	}
 
