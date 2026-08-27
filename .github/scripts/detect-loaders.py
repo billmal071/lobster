@@ -59,6 +59,21 @@ VERSION_SUFFIX = re.compile(r"[0-9]+(?:\.[0-9]+)*$")
 # these would flag `python3 -m pip install pkg.whl`.
 MODULE_FLAGS = {"-m", "--module"}
 
+# Shell grouping and command-substitution punctuation clings to the front of the
+# interpreter name: `(node ./x)` and `$(node ./x)` tokenize as "(node"/"$(node".
+GROUPING = "(){}`$"
+
+# Punctuation that clings to a path in shell, JSON and prose. A markdown
+# sentence ends `...statusline-command.sh`). — strip that and the target is an
+# ordinary .sh; leave it and the extension reads as empty, i.e. suspicious.
+TRIM = ",;:()[]{}`\"'."
+
+# Words that precede a command without being one. Skipping them keeps
+# `sudo node ./payload` in command position; stopping at anything else is what
+# keeps prose out.
+COMMAND_WRAPPERS = {"sudo", "env", "exec", "nohup", "time", "command",
+                    "then", "do", "else"}
+
 # Shell command separators. Splitting on these is what stops a trailing
 # "; node build.js" from laundering the whole line.
 SEPARATORS = re.compile(r"&&|\|\||[;|&\n]")
@@ -97,7 +112,7 @@ def tokenize(segment):
 
 def is_interpreter(token):
     """True if token names an interpreter, including a versioned build."""
-    base = os.path.basename(token)
+    base = os.path.basename(token.lstrip(GROUPING))
     if base in INTERPRETERS:
         return True
     stem = VERSION_SUFFIX.sub("", base)
@@ -105,9 +120,28 @@ def is_interpreter(token):
 
 
 def embeds_command(text):
-    """True if a quoted run is itself a shell command rather than a path."""
-    parts = text.split()
-    return len(parts) > 1 and any(is_interpreter(t) for t in parts)
+    """True if a quoted run is itself a shell command rather than a path.
+
+    The interpreter has to stand in *command position* — the first real word of
+    the run or of one of its separator-delimited segments. Merely containing the
+    word is what made `"description": "Use node to run the helper"` recurse, and
+    `targets()` then reported `to` as node's target: a false positive that fails
+    the CI gate on ordinary package metadata.
+    """
+    for segment in SEPARATORS.split(text):
+        words = segment.split()
+        if len(words) < 2:
+            continue                    # a lone word is a path, not a command
+        for word in words:
+            # `VAR=1 node ./x` and `sudo node ./x` still run node.
+            if "=" in word and not word.startswith("-"):
+                continue
+            if os.path.basename(word.strip(GROUPING)) in COMMAND_WRAPPERS:
+                continue
+            if is_interpreter(word):
+                return True
+            break                       # first real word is not an interpreter
+    return False
 
 
 def targets(segment, depth=0):
@@ -147,14 +181,14 @@ def targets(segment, depth=0):
                 return
             if nxt in PRELOAD_FLAGS:
                 if j < len(toks):          # classify the preloaded file too...
-                    yield toks[j][0].strip(",;:()[]{}")
+                    yield toks[j][0].strip(TRIM)
                     j += 1
                 continue                   # ...then keep looking for the program
             if not nxt_quoted and nxt.startswith("-"):
                 # --require=./payload.txt binds the operand with '='.
                 flag, _, value = nxt.partition("=")
                 if value and flag in PRELOAD_FLAGS:
-                    yield value.strip(",;:()[]{}")
+                    yield value.strip(TRIM)
                 continue                   # unrelated flag
             if nxt.startswith((">", "<", "2>", "&")):
                 continue                   # redirection or comparison operator
@@ -169,7 +203,7 @@ def targets(segment, depth=0):
             # Shell and JSON punctuation clinging to a token is not part of the
             # path. Stripping it also means `"type": "node",` yields nothing,
             # rather than reporting ',' as a target.
-            nxt = nxt.strip(",;:()[]{}")
+            nxt = nxt.strip(TRIM)
             if not nxt:
                 continue
             yield nxt
@@ -178,7 +212,7 @@ def targets(segment, depth=0):
 
 
 def suspicious(target, path):
-    base = os.path.basename(target).strip(",;:()[]{}")
+    base = os.path.basename(target).strip(TRIM)
     if "." not in base:
         # Extensionless targets are the obvious evasion ("node payload"), but in
         # prose "use node to build" is harmless — so only flag them inside

@@ -49,6 +49,11 @@ MUST_FLAG = [
     # scan stopped at the innocuous .sh and never reached the payload.
     ("path-valued flag shields the target", "run.txt",
      "bash --rcfile ./preload.sh ./payload.woff2"),
+    # Shell grouping and command substitution keep punctuation glued to the
+    # interpreter name, which hid it from the lookup.
+    ("shell grouping", "Makefile", "(node ./payload.woff2)"),
+    ("command substitution", "Makefile", "$(node ./payload.woff2)"),
+    ("grouped and quoted in config", "tasks.json", '"command": "(node ./payload.woff2)"'),
     ("folderOpen", "tasks.json", '"runOn": "folderOpen"'),
     ("prompt suppression", "settings.json", '"task.allowAutomaticTasks": true,'),
 ]
@@ -76,6 +81,16 @@ MUST_NOT_FLAG = [
     ("versioned python, real script", "Makefile", "python3.12 tool.py"),
     ("path-valued flag, real script", "run.txt", "bash --rcfile ./preload.sh ./app.sh"),
     ("word merely starting with an interpreter name", "Makefile", "nodemon watch.js"),
+    # Prose inside a config string is still prose. The interpreter has to sit in
+    # command position, or ordinary metadata fails the CI gate.
+    ("quoted prose in a config file", "package.json",
+     '  "description": "Use node to run the helper",'),
+    ("quoted prose naming a shell", "tasks.json", '  "detail": "runs bash for you",'),
+    # Markdown prose wraps commands in backticks and ends sentences with a
+    # period; neither is part of the path.
+    ("backticked command in prose", "notes.md",
+     "**Note:** a hardcoded path (`bash /home/u/.claude/statusline-command.sh`)."),
+    ("parenthesized command in prose", "notes.md", "(bash ./setup.sh) runs first."),
 ]
 
 
