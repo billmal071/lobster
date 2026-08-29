@@ -24,6 +24,7 @@ import (
 	"lobster/internal/poster"
 	"lobster/internal/provider"
 	"lobster/internal/subtitle"
+	"lobster/internal/torrentstream"
 	"lobster/internal/tui"
 	"lobster/internal/ui"
 
@@ -507,6 +508,32 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 				}
 			}
 		}
+	}
+
+	// A magnet is not something a player or ffmpeg can open. Stand up the local
+	// torrent server, which downloads pieces in reading order and serves the
+	// film over loopback, then carry on with an ordinary HTTP URL.
+	if torrentstream.IsMagnet(stream.URL) {
+		fmt.Fprintln(os.Stderr, "Torrent source: joining swarm — your IP is visible to its peers.")
+		ts, err := torrentstream.New("")
+		if err != nil {
+			return fmt.Errorf("starting torrent stream: %w", err)
+		}
+		defer func() { _ = ts.Close() }()
+
+		stopT := ui.StartSpinner("Fetching torrent metadata...")
+		localURL, err := ts.Serve(stream.URL)
+		stopT()
+		if err != nil {
+			return fmt.Errorf("torrent stream: %w", err)
+		}
+		debugf("torrent serving at %s", localURL)
+		// Copy rather than mutate: the caller's stream is reused for history.
+		local := *stream
+		local.URL = localURL
+		local.Referer = ""
+		stream = &local
+		fmt.Fprintln(os.Stderr, "Buffering — playback starts once the first pieces arrive.")
 	}
 
 	// Download mode
