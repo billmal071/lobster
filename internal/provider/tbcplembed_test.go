@@ -1,8 +1,12 @@
 package provider
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"testing"
 
+	"lobster/internal/media"
 	"lobster/internal/tbcpl"
 )
 
@@ -32,5 +36,46 @@ func TestTBCPLEmbedFiltersToMovieAnime(t *testing.T) {
 	})
 	if len(p.sites) != 2 {
 		t.Fatalf("kept %d sites, want 2 (movies+anime)", len(p.sites))
+	}
+}
+
+func TestEmbedCandidates(t *testing.T) {
+	movie := embedCandidates("https://x.example", "603", 0, 0)
+	wantMovie := []string{
+		"https://x.example/embed/movie/603",
+		"https://x.example/movie/603",
+		"https://x.example/e/603",
+	}
+	if !reflect.DeepEqual(movie, wantMovie) {
+		t.Fatalf("movie candidates = %v, want %v", movie, wantMovie)
+	}
+	tv := embedCandidates("https://x.example", "1399", 2, 5)
+	want0 := "https://x.example/embed/tv/1399/2/5"
+	if tv[0] != want0 {
+		t.Fatalf("tv[0] = %q, want %q", tv[0], want0)
+	}
+}
+
+func TestWatchSniffsIframeAndExtracts(t *testing.T) {
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><body><iframe src="https://megacloud.example/e/abc"></iframe></body></html>`))
+	}))
+	defer site.Close()
+
+	p := NewTBCPLEmbed([]tbcpl.Site{{Name: "X", URL: site.URL, Category: "movies", Status: "trusted", Enabled: true}})
+	var sniffed string
+	p.resolve = func(embed, referer string) (*media.Stream, error) {
+		sniffed = embed
+		return &media.Stream{URL: "https://cdn.example/x.m3u8"}, nil
+	}
+	stream, err := p.Watch("603", "", "", "1080")
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	if stream.URL == "" {
+		t.Fatal("empty stream URL")
+	}
+	if sniffed != "https://megacloud.example/e/abc" {
+		t.Fatalf("sniffed iframe = %q", sniffed)
 	}
 }
