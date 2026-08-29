@@ -73,6 +73,37 @@ func (cl *Client) Load(ctx context.Context, region string) *Catalog {
 	return c
 }
 
+// LoadMerged loads the global catalog and, if region is non-empty, overlays the
+// region file (union by URL). Always returns a non-nil catalog.
+func (cl *Client) LoadMerged(ctx context.Context, region string) *Catalog {
+	global := cl.Load(ctx, "")
+	if region == "" {
+		return global
+	}
+	data, err := cl.fetch(ctx, region)
+	if err != nil {
+		cl.log("tbcpl: region %q fetch failed: %v", region, err)
+		return global
+	}
+	regionCat, err := Parse(data)
+	if err != nil {
+		cl.log("tbcpl: region %q parse failed: %v", region, err)
+		return global
+	}
+	seen := make(map[string]bool, len(global.Sites))
+	for _, s := range global.Sites {
+		seen[s.URL] = true
+	}
+	merged := &Catalog{Sites: global.Sites}
+	for _, s := range regionCat.Sites {
+		if !seen[s.URL] {
+			merged.Sites = append(merged.Sites, s)
+			seen[s.URL] = true
+		}
+	}
+	return merged
+}
+
 func (cl *Client) readCacheIfFresh() ([]byte, bool) {
 	fi, err := os.Stat(cl.cachePath)
 	if err != nil || time.Since(fi.ModTime()) > cl.ttl {

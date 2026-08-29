@@ -42,3 +42,34 @@ func TestLoadFallsBackToSnapshotOffline(t *testing.T) {
 		t.Fatal("expected embedded snapshot fallback, got 0 sites")
 	}
 }
+
+func TestLoadMergedOverlaysRegion(t *testing.T) {
+	globalJSON := sampleJSON
+	regionJSON := `{"categories":[{"id":"movies","name":"Movies & Shows","sites":[
+		{"name":"RegionOnly","url":"https://regiononly.example/","enabled":true,"status":"trusted"}]}]}`
+	mux := http.NewServeMux()
+	mux.HandleFunc("/links.json", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(globalJSON)) })
+	mux.HandleFunc("/Region-Links/links.INDIA.json", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(regionJSON)) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ob, orf := baseURL, regionURLFmt
+	baseURL = srv.URL + "/links.json"
+	regionURLFmt = srv.URL + "/Region-Links/links.%s.json"
+	defer func() { baseURL, regionURLFmt = ob, orf }()
+
+	cl := NewClient(filepath.Join(t.TempDir(), "c.json"), time.Hour, nil)
+	cat := cl.LoadMerged(context.Background(), "INDIA")
+	found := false
+	for _, s := range cat.Sites {
+		if s.URL == "https://regiononly.example/" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("region-only site not merged")
+	}
+	if len(cat.Sites) <= 4 {
+		t.Fatalf("expected globals + region, got %d", len(cat.Sites))
+	}
+}
