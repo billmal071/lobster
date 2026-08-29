@@ -114,6 +114,30 @@ Config is stored in `%APPDATA%\lobster\config.toml` and history in `%LOCALAPPDAT
 
 ---
 
+## Checking provider health
+
+Providers break constantly — a domain moves, a player is replaced, an API starts
+signing its requests. `lobster doctor` probes each one and names the stage that
+broke, which is the difference between a cheap fix and a rewrite:
+
+```
+$ lobster doctor
+Provider health (query: "The Matrix")
+
+  ok   AniPub         2.912s           26 results, stream resolved
+  ok   FlixHQWS       3.815s           4 results, 3 servers, embed via Vidmoly
+  FAIL FlixHQ        20.514s  search   unexpected status 522
+  FAIL MovieBox        569ms  search   unexpected status 440
+  FAIL Soap2Day       1.848s  watch    no embed ID in video URL
+
+4 of 11 providers usable.
+```
+
+A failure at `search` usually means a moved domain or a renamed field. A failure
+at `watch` or `embed` means the player changed. Pass a title to probe with
+something else; anime providers are probed with an anime title automatically.
+Exits non-zero when nothing is usable, so it works as a check.
+
 ## Configuration
 
 Config file location:
