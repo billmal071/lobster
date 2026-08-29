@@ -42,3 +42,21 @@ func TestMirrorDomains(t *testing.T) {
 		t.Fatalf("MirrorDomains = %+v, want %+v", got, want)
 	}
 }
+
+func TestLivePlaylists(t *testing.T) {
+	c := &Catalog{Sites: []Site{
+		{URL: "https://a.example/list.m3u8", Category: "livetv", Enabled: true, Status: "trusted"},
+		{URL: "https://b.example/get.php?type=m3u_plus", Category: "livetv", Enabled: true, Status: "trusted"},
+		{URL: "https://c.example/watch", Category: "livetv", Enabled: true, Status: "trusted"},     // not a playlist
+		{URL: "https://d.example/list.m3u8", Category: "livetv", Enabled: true, Status: ""},          // untrusted
+		{URL: "https://e.example/list.m3u8", Category: "movies", Enabled: true, Status: "trusted"},   // wrong category
+	}}
+	got := c.LivePlaylists(false)
+	want := []string{"https://a.example/list.m3u8", "https://b.example/get.php?type=m3u_plus"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("LivePlaylists(false) = %v, want %v", got, want)
+	}
+	if len(c.LivePlaylists(true)) != 3 {
+		t.Fatalf("LivePlaylists(true) want 3 (adds untrusted d)")
+	}
+}

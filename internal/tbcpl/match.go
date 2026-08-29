@@ -57,3 +57,36 @@ func MirrorDomains(sites []Site) map[string][]string {
 	}
 	return out
 }
+
+// LivePlaylists returns m3u playlist URLs from the livetv category.
+func (c *Catalog) LivePlaylists(includeUntrusted bool) []string {
+	var out []string
+	for _, s := range c.ByCategory("livetv") {
+		if !s.Enabled {
+			continue
+		}
+		if !includeUntrusted && s.Status != "trusted" {
+			continue
+		}
+		if isPlaylistURL(s.URL) {
+			out = append(out, s.URL)
+		}
+	}
+	return out
+}
+
+func isPlaylistURL(rawURL string) bool {
+	u := strings.ToLower(rawURL)
+	return strings.HasSuffix(hostPath(u), ".m3u") ||
+		strings.HasSuffix(hostPath(u), ".m3u8") ||
+		strings.Contains(u, "get.php") ||
+		strings.Contains(u, "type=m3u")
+}
+
+// hostPath returns the URL without its query string, for suffix checks.
+func hostPath(rawURL string) string {
+	if i := strings.IndexByte(rawURL, '?'); i >= 0 {
+		return rawURL[:i]
+	}
+	return rawURL
+}
