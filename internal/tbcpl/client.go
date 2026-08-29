@@ -139,7 +139,7 @@ func (cl *Client) fetch(ctx context.Context, region string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("tbcpl: http %d", resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 }
 
 func regionURL(region string) string {
