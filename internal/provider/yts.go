@@ -20,6 +20,13 @@ var ytsBase = "https://yts.gg"
 // ytsTrackers are the announce URLs YTS itself puts in its magnets. A magnet
 // with no trackers has only DHT to work with and frequently never finds a peer,
 // so playback appears to hang rather than start.
+// ytsPageSize is the API maximum; asking for less just costs extra round trips.
+const ytsPageSize = 50
+
+// ytsMaxPages bounds a catalogue-wide query. Four pages is 200 titles, far more
+// than anyone scrolls, and stops a one-letter search from walking the archive.
+const ytsMaxPages = 4
+
 var ytsTrackers = []string{
 	"udp://open.demonii.com:1337/announce",
 	"udp://tracker.openbittorrent.com:80",
@@ -63,8 +70,9 @@ type ytsMovie struct {
 // data.movies as a list, movie_details.json returns data.movie as one object.
 type ytsResponse struct {
 	Data struct {
-		Movies []ytsMovie `json:"movies"`
-		Movie  *ytsMovie  `json:"movie"`
+		MovieCount int        `json:"movie_count"`
+		Movies     []ytsMovie `json:"movies"`
+		Movie      *ytsMovie  `json:"movie"`
 	} `json:"data"`
 }
 
@@ -90,19 +98,48 @@ func (y *YTS) fetch(apiURL string) (*ytsResponse, error) {
 }
 
 // Search queries the YTS catalogue. It is movies only — YTS has no TV.
+//
+// A response is capped at ytsPageSize while movie_count reports the true total,
+// so a single request showed 20 of the 56 films matching "batman". Pages are
+// fetched until the total is covered, bounded by ytsMaxPages.
 func (y *YTS) Search(query string) ([]media.SearchResult, error) {
-	apiURL := fmt.Sprintf("%s/api/v2/list_movies.json?limit=20&query_term=%s",
-		strings.TrimRight(ytsBase, "/"), url.QueryEscape(query))
-	resp, err := y.fetch(apiURL)
-	if err != nil {
-		return nil, err
+	var results []media.SearchResult
+	// Counted separately from results: ytsResults drops torrentless titles, so
+	// results undercounts against movie_count and would request a page that
+	// cannot exist.
+	fetched := 0
+	for page := 1; page <= ytsMaxPages; page++ {
+		apiURL := fmt.Sprintf("%s/api/v2/list_movies.json?limit=%d&page=%d&query_term=%s",
+			strings.TrimRight(ytsBase, "/"), ytsPageSize, page, url.QueryEscape(query))
+		resp, err := y.fetch(apiURL)
+		if err != nil {
+			// Keep whatever earlier pages returned: a partial catalogue beats
+			// failing a search outright because page 3 timed out.
+			if len(results) > 0 {
+				return results, nil
+			}
+			return nil, err
+		}
+		results = append(results, ytsResults(resp.Data.Movies)...)
+		fetched += len(resp.Data.Movies)
+		// Stop on a short page as well as on the count, so a total that never
+		// quite reconciles cannot keep the loop going.
+		if len(resp.Data.Movies) < ytsPageSize || fetched >= resp.Data.MovieCount {
+			break
+		}
 	}
-	results := make([]media.SearchResult, 0, len(resp.Data.Movies))
-	for _, m := range resp.Data.Movies {
+	return results, nil
+}
+
+// ytsResults maps API movies to search results, dropping any with no torrent
+// since there would be nothing to play.
+func ytsResults(movies []ytsMovie) []media.SearchResult {
+	out := make([]media.SearchResult, 0, len(movies))
+	for _, m := range movies {
 		if len(m.Torrents) == 0 {
 			continue
 		}
-		results = append(results, media.SearchResult{
+		out = append(out, media.SearchResult{
 			ID:     fmt.Sprintf("yts/%d", m.ID),
 			Title:  m.Title,
 			Year:   strconv.Itoa(m.Year),
@@ -110,7 +147,7 @@ func (y *YTS) Search(query string) ([]media.SearchResult, error) {
 			Poster: m.Cover,
 		})
 	}
-	return results, nil
+	return out
 }
 
 // movieByID re-queries a single movie. Watch and GetServers both need the
@@ -254,24 +291,11 @@ func (y *YTS) Recent(mediaType media.MediaType) ([]media.SearchResult, error) {
 }
 
 func (y *YTS) browse(sortBy string) ([]media.SearchResult, error) {
-	apiURL := fmt.Sprintf("%s/api/v2/list_movies.json?limit=20&sort_by=%s",
-		strings.TrimRight(ytsBase, "/"), url.QueryEscape(sortBy))
+	apiURL := fmt.Sprintf("%s/api/v2/list_movies.json?limit=%d&sort_by=%s&order_by=desc",
+		strings.TrimRight(ytsBase, "/"), ytsPageSize, url.QueryEscape(sortBy))
 	resp, err := y.fetch(apiURL)
 	if err != nil {
 		return nil, err
 	}
-	results := make([]media.SearchResult, 0, len(resp.Data.Movies))
-	for _, m := range resp.Data.Movies {
-		if len(m.Torrents) == 0 {
-			continue
-		}
-		results = append(results, media.SearchResult{
-			ID:     fmt.Sprintf("yts/%d", m.ID),
-			Title:  m.Title,
-			Year:   strconv.Itoa(m.Year),
-			Type:   media.Movie,
-			Poster: m.Cover,
-		})
-	}
-	return results, nil
+	return ytsResults(resp.Data.Movies), nil
 }

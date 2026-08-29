@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -156,5 +157,146 @@ func TestYTSWatchExplicitServerWins(t *testing.T) {
 	}
 	if !strings.HasPrefix(st.URL, "magnet:?xt=urn:btih:57F79B41F6BB7159") {
 		t.Errorf("explicit server ignored: %s", st.URL)
+	}
+}
+
+// YTS caps a response at 50 and reports the true total in movie_count. Asking
+// for one page of 20 showed 20 of the 56 films matching "batman" — the rest
+// were unreachable, which is the whole point of a catalogue search.
+func TestYTSSearchPagesUntilExhausted(t *testing.T) {
+	var pages []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		pages = append(pages, page)
+		total, start := 56, 0
+		if page == "2" {
+			start = 50
+		}
+		movies := []any{}
+		for i := start; i < total && len(movies) < 50; i++ {
+			movies = append(movies, map[string]any{
+				"id": 1000 + i, "title": fmt.Sprintf("Film %d", i), "year": 2000,
+				"torrents": []any{map[string]any{
+					"hash": "AAAA000000000000000000000000000000000000",
+					"quality": "1080p", "type": "bluray", "size": "2 GB", "seeds": 10,
+				}},
+			})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+			"movie_count": total, "movies": movies,
+		}})
+	}))
+	defer srv.Close()
+	old := ytsBase
+	ytsBase = srv.URL
+	defer func() { ytsBase = old }()
+
+	res, err := NewYTS().Search("batman")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 56 {
+		t.Errorf("got %d results, want all 56 (pages fetched: %v)", len(res), pages)
+	}
+}
+
+// One page must stay one request: paging blindly would double the latency of
+// every ordinary search for nothing.
+func TestYTSSearchSinglePageMakesOneRequest(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+			"movie_count": 1,
+			"movies": []any{map[string]any{
+				"id": 1, "title": "Solo", "year": 2010,
+				"torrents": []any{map[string]any{
+					"hash": "BBBB000000000000000000000000000000000000",
+					"quality": "1080p", "type": "bluray", "size": "2 GB", "seeds": 9,
+				}},
+			}},
+		}})
+	}))
+	defer srv.Close()
+	old := ytsBase
+	ytsBase = srv.URL
+	defer func() { ytsBase = old }()
+
+	if _, err := NewYTS().Search("solo"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Errorf("made %d requests for a single-page result, want 1", calls)
+	}
+}
+
+// A catalogue-wide query must not page forever.
+func TestYTSSearchStopsAtPageCap(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		movies := []any{}
+		for i := 0; i < 50; i++ {
+			movies = append(movies, map[string]any{
+				"id": i, "title": "x", "year": 2000,
+				"torrents": []any{map[string]any{
+					"hash": "CCCC000000000000000000000000000000000000",
+					"quality": "1080p", "type": "bluray", "size": "2 GB", "seeds": 1,
+				}},
+			})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+			"movie_count": 100000, "movies": movies,
+		}})
+	}))
+	defer srv.Close()
+	old := ytsBase
+	ytsBase = srv.URL
+	defer func() { ytsBase = old }()
+
+	if _, err := NewYTS().Search("a"); err != nil {
+		t.Fatal(err)
+	}
+	if calls > ytsMaxPages {
+		t.Errorf("made %d requests, want at most %d", calls, ytsMaxPages)
+	}
+}
+
+// A full page whose total is already covered must not trigger another request.
+// results excludes torrentless movies, so comparing it against movie_count
+// undercounts and asks for a page that cannot exist.
+func TestYTSSearchDoesNotOverfetchWhenAPageHasTorrentlessMovies(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		movies := []any{}
+		for i := 0; i < 50; i++ {
+			m := map[string]any{"id": i, "title": fmt.Sprintf("F%d", i), "year": 2000}
+			if i > 0 { // the first has no torrents and is dropped from results
+				m["torrents"] = []any{map[string]any{
+					"hash": "DDDD000000000000000000000000000000000000",
+					"quality": "1080p", "type": "bluray", "size": "2 GB", "seeds": 5,
+				}}
+			}
+			movies = append(movies, m)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+			"movie_count": 50, "movies": movies,
+		}})
+	}))
+	defer srv.Close()
+	old := ytsBase
+	ytsBase = srv.URL
+	defer func() { ytsBase = old }()
+
+	res, err := NewYTS().Search("f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 49 {
+		t.Errorf("got %d results, want 49 (one movie has no torrents)", len(res))
+	}
+	if calls != 1 {
+		t.Errorf("made %d requests; the first page already covered movie_count", calls)
 	}
 }
