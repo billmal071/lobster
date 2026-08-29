@@ -43,16 +43,18 @@ func NotFoundError(name string) error {
 	return fmt.Errorf("player %q not found in PATH", name)
 }
 
-// New creates a player by name.
-func New(name string) Player {
+// New creates a player by name. audioLang is the preferred audio-track
+// language; it is passed to the player so a multi-dub release does not default
+// to whichever track the muxer happened to list first.
+func New(name, audioLang string) Player {
 	switch name {
 	case "mpv":
-		return &MPV{}
+		return &MPV{audioLang: audioLang}
 	case "vlc":
-		return &VLC{}
+		return &VLC{audioLang: audioLang}
 	case "iina", "celluloid":
-		return &Generic{name: name}
+		return &Generic{name: name, audioLang: audioLang}
 	default:
-		return &MPV{} // Default to mpv
+		return &MPV{audioLang: audioLang} // Default to mpv
 	}
 }

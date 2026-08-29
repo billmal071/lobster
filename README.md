@@ -102,6 +102,7 @@ Config is stored in `%APPDATA%\lobster\config.toml` and history in `%LOCALAPPDAT
 
 ```
 -c, --continue
+-a, --audio-language <lang>
 -d, --download <path>
 -j, --json
 -l, --language <lang>
@@ -124,6 +125,7 @@ Config file location:
 player = "mpv"
 quality = "1080"   # or "best" for the highest the source offers (uncapped)
 subs_language = "english"
+audio_language = "english"   # preferred audio track on multi-dub releases
 history = true
 auto_next = true
 download_dir = "~/Videos/lobster"

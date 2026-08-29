@@ -20,6 +20,7 @@ type Config struct {
 	Player                 string              `toml:"player"`
 	Provider               string              `toml:"provider"`
 	SubsLanguage           string              `toml:"subs_language"`
+	AudioLanguage          string              `toml:"audio_language"`
 	Quality                string              `toml:"quality"`
 	History                bool                `toml:"history"`
 	AutoNext               bool                `toml:"auto_next"`
@@ -81,6 +82,7 @@ func Default() *Config {
 		Player:                 "mpv",
 		Provider:               "Default",
 		SubsLanguage:           "english",
+		AudioLanguage:          "english",
 		Quality:                "1080",
 		History:                true,
 		AutoNext:               true,

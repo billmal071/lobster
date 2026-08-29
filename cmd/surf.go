@@ -38,7 +38,7 @@ func playLiveSurf(p provider.StreamProvider, lineup []media.SearchResult, startI
 	if len(lineup) == 0 {
 		return nil
 	}
-	pl := player.New(cfg.Player)
+	pl := player.New(cfg.Player, cfg.AudioLanguage)
 	if !pl.Available() {
 		return player.NotFoundError(cfg.Player)
 	}

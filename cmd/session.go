@@ -233,7 +233,7 @@ func playCurrentEpisode(sess *playlist.Session) error {
 	}
 
 	// Normal playback with retry on failure
-	p := player.New(cfg.Player)
+	p := player.New(cfg.Player, cfg.AudioLanguage)
 	if !p.Available() {
 		return player.NotFoundError(cfg.Player)
 	}

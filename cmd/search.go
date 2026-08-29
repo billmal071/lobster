@@ -541,7 +541,7 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		}
 	}
 
-	p2 := player.New(cfg.Player)
+	p2 := player.New(cfg.Player, cfg.AudioLanguage)
 	if !p2.Available() {
 		return player.NotFoundError(cfg.Player)
 	}
