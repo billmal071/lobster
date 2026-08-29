@@ -13,23 +13,29 @@ import "strings"
 // aliases maps a language name to its ISO 639-2 and 639-1 codes. Sources are
 // inconsistent about which they use — the same English track is tagged "eng",
 // "en" or "english" depending on who packed it — so all three are offered.
-var aliases = map[string][2]string{
+// aliases maps a language name to its ISO codes, 639-2 first then 639-1.
+// Sources are inconsistent about which they use — the same English track is
+// tagged "eng", "en" or "english" depending on who packed it — so all are
+// offered. Several languages have both a bibliographic and a terminological
+// 639-2 code (fre/fra, ger/deu, chi/zho, dut/nld) and both appear in the wild,
+// so both are listed rather than picking one.
+var aliases = map[string][]string{
 	"english":    {"eng", "en"},
 	"spanish":    {"spa", "es"},
-	"french":     {"fre", "fr"},
-	"german":     {"ger", "de"},
+	"french":     {"fre", "fra", "fr"},
+	"german":     {"ger", "deu", "de"},
 	"italian":    {"ita", "it"},
 	"portuguese": {"por", "pt"},
 	"russian":    {"rus", "ru"},
 	"japanese":   {"jpn", "ja"},
 	"korean":     {"kor", "ko"},
-	"chinese":    {"chi", "zh"},
+	"chinese":    {"chi", "zho", "zh"},
 	"arabic":     {"ara", "ar"},
 	"turkish":    {"tur", "tr"},
 	"hindi":      {"hin", "hi"},
 	"tamil":      {"tam", "ta"},
 	"telugu":     {"tel", "te"},
-	"dutch":      {"dut", "nl"},
+	"dutch":      {"dut", "nld", "nl"},
 	"polish":     {"pol", "pl"},
 }
 
@@ -52,7 +58,7 @@ func Aliases(pref string) []string {
 		return nil
 	}
 	if codes, ok := aliases[pref]; ok {
-		return []string{codes[0], codes[1], pref}
+		return append(append([]string{}, codes...), pref)
 	}
 	return []string{pref}
 }

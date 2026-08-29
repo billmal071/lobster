@@ -82,3 +82,16 @@ func TestPreferAudioLangMatchesISOCodesForNonEnglish(t *testing.T) {
 		}
 	}
 }
+
+// The terminological ISO 639-2 codes reach the provider's source ordering too.
+// fra and deu were supported before the shared table and were briefly lost.
+func TestPreferAudioLangMatchesTerminologicalISOCodes(t *testing.T) {
+	for pref, tag := range map[string]string{
+		"french": "fra", "german": "deu", "chinese": "zho", "dutch": "nld",
+	} {
+		srcs := []tbcplVidzeeSource{{Lang: "swahili", Link: "decoy"}, {Lang: tag, Link: "want"}}
+		if got := preferAudioLang(srcs, pref); got[0].Link != "want" {
+			t.Errorf("tag %q not matched for %q", tag, pref)
+		}
+	}
+}

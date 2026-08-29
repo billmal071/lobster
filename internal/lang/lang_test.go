@@ -63,8 +63,26 @@ func TestSupportedCoversTheLanguagesTheCLIAdvertises(t *testing.T) {
 		"russian", "japanese", "korean", "chinese", "arabic", "turkish",
 		"hindi", "tamil", "telugu", "dutch", "polish",
 	} {
-		if len(Aliases(name)) != 3 {
+		if len(Aliases(name)) < 3 {
 			t.Errorf("%q has no ISO aliases; it would match only its own spelling", name)
+		}
+	}
+}
+
+// ISO 639-2 has bibliographic and terminological variants for several
+// languages, and sources use both. Collapsing to a single code silently
+// dropped fra and deu, which the provider table had supported before.
+func TestMatchesBothISO6392Variants(t *testing.T) {
+	for pref, tags := range map[string][]string{
+		"french":  {"fre", "fra"},
+		"german":  {"ger", "deu"},
+		"chinese": {"chi", "zho"},
+		"dutch":   {"dut", "nld"},
+	} {
+		for _, tag := range tags {
+			if !Matches(tag, pref) {
+				t.Errorf("Matches(%q, %q) = false; both ISO 639-2 variants must match", tag, pref)
+			}
 		}
 	}
 }
