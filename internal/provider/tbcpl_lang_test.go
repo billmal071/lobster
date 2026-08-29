@@ -48,3 +48,37 @@ func TestPreferAudioLangUntaggedSourcesUnchanged(t *testing.T) {
 		t.Errorf("untagged order changed: %+v", got)
 	}
 }
+
+// The regression the shared table exists to prevent: the player knew "rus" but
+// the provider's own map did not, so -a russian reordered nothing and the
+// upstream dub order won.
+func TestPreferAudioLangHandlesEveryAdvertisedLanguage(t *testing.T) {
+	for _, pref := range []string{
+		"russian", "chinese", "arabic", "turkish", "dutch", "polish",
+		"english", "japanese", "hindi", "tamil", "telugu",
+	} {
+		// The decoy must be a language the table cannot match, or a pref of
+		// "hindi" collides with a hindi decoy and the stable sort rightly keeps
+		// the first — a fixture bug that looks like a code bug.
+		srcs := []tbcplVidzeeSource{
+			{Lang: "swahili", Link: "decoy"},
+			{Lang: pref, Link: "want"},
+		}
+		if got := preferAudioLang(srcs, pref); got[0].Link != "want" {
+			t.Errorf("preferAudioLang did not prioritise %q: %+v", pref, got)
+		}
+	}
+}
+
+// ISO codes too, since that is what the sources actually send.
+func TestPreferAudioLangMatchesISOCodesForNonEnglish(t *testing.T) {
+	for pref, tag := range map[string]string{
+		"russian": "rus", "chinese": "zh", "arabic": "ara",
+		"turkish": "tr", "dutch": "dut", "polish": "pl",
+	} {
+		srcs := []tbcplVidzeeSource{{Lang: "swahili", Link: "decoy"}, {Lang: tag, Link: "want"}}
+		if got := preferAudioLang(srcs, pref); got[0].Link != "want" {
+			t.Errorf("tag %q not matched for %q", tag, pref)
+		}
+	}
+}
