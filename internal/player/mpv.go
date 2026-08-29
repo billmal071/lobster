@@ -18,7 +18,7 @@ import (
 // MPV implements the Player interface for mpv.
 // Uses exec.Command with explicit args (no shell interpretation)
 // and IPC via Unix socket at a randomized temp path.
-type MPV struct{}
+type MPV struct{ audioLang string }
 
 func (m *MPV) Name() string { return "mpv" }
 
@@ -56,6 +56,7 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 		"--network-timeout=15",
 	}
 
+	args = append(args, audioLangArgs(m.audioLang)...)
 	args = append(args, mpvHeaderArgs(stream)...)
 
 	if startPos > 0 {
