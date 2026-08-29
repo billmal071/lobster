@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"lobster/internal/provider"
+	"lobster/internal/tbcpl"
 )
 
 // newProvider returns the configured content provider.
@@ -21,6 +22,9 @@ func newProvider() provider.Provider {
 	}
 
 	overrides := cfg.DomainOverrides
+	if cat := tbcplCatalog(); cat != nil {
+		overrides = provider.MergeOverrides(cfg.DomainOverrides, tbcpl.MirrorDomains(cat.Sites))
+	}
 
 	if strings.Contains(cfg.Base, "soap2day") {
 		return provider.NewSoap2Day()

@@ -5,18 +5,45 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"lobster/internal/config"
 	"lobster/internal/dlmanager"
 	"lobster/internal/media"
 	"lobster/internal/provider"
 	"lobster/internal/resolver"
+	"lobster/internal/tbcpl"
 )
 
 var (
 	sharedHealthOnce  sync.Once
 	sharedHealthStore *resolver.HealthStore
 )
+
+var (
+	tbcplCatOnce sync.Once
+	tbcplCatVal  *tbcpl.Catalog
+)
+
+// tbcplCatalog loads the TBCPL catalog once per process, or nil if disabled.
+func tbcplCatalog() *tbcpl.Catalog {
+	tbcplCatOnce.Do(func() {
+		if cfg == nil || !cfg.TBCPLFeed {
+			return
+		}
+		cache, err := config.TBCPLCachePath()
+		if err != nil {
+			return
+		}
+		cl := tbcpl.NewClient(cache, 12*time.Hour, debugf)
+		region := ""
+		if cfg != nil {
+			region = cfg.TBCPLRegion
+		}
+		tbcplCatVal = cl.LoadMerged(context.Background(), region)
+	})
+	return tbcplCatVal
+}
 
 func sharedHealth() *resolver.HealthStore {
 	sharedHealthOnce.Do(func() {
@@ -98,6 +125,16 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 	}
 	if _, ok := primary.(*provider.AniPub); !ok {
 		fallbacks = append(fallbacks, provider.NewAniPub())
+	}
+
+	if cat := tbcplCatalog(); cat != nil {
+		sites := cat.Trusted()
+		if cfg != nil && cfg.TBCPLIncludeUntrusted {
+			sites = cat.Sites
+		}
+		if _, ok := primary.(*provider.TBCPLEmbed); !ok && len(sites) > 0 {
+			fallbacks = append(fallbacks, provider.NewTBCPLEmbed(sites))
+		}
 	}
 
 	return fallbacks
