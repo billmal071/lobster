@@ -1,6 +1,7 @@
 package tbcpl
 
 import (
+	"net"
 	"net/url"
 	"strings"
 )
@@ -46,13 +47,28 @@ func hostMatchesLabel(host, sub string) bool {
 		strings.Contains(host, "."+sub+".")
 }
 
-// hostOf returns the bare host (no scheme, no trailing slash) of a site URL.
-func hostOf(rawURL string) string {
+// hostOf returns the bare host (no scheme, no trailing slash) of a site URL,
+// plus the bare hostname with any port stripped. The host keeps the port
+// because it is used verbatim as the mirror endpoint; the hostname is what
+// ProviderFor matches against, since "flixhq.ws:8443" would otherwise fall
+// through the "flixhq.ws" label test and be misfiled under "flixhq".
+func hostOf(rawURL string) (host, hostname string) {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
-		return strings.Trim(rawURL, "/")
+		// A schemeless entry ("flixhq.to/path") parses without error but with
+		// an empty Host, so cut the path/query/fragment off by hand — mirror
+		// consumers need a bare host, not a URL.
+		trimmed := strings.Trim(rawURL, "/")
+		if i := strings.IndexAny(trimmed, "/?#"); i >= 0 {
+			trimmed = trimmed[:i]
+		}
+		host, _, err := net.SplitHostPort(trimmed)
+		if err != nil {
+			return trimmed, trimmed
+		}
+		return trimmed, host
 	}
-	return u.Host
+	return u.Host, u.Hostname()
 }
 
 // MirrorDomains groups site hosts by the lobster provider they map to.
@@ -60,8 +76,8 @@ func MirrorDomains(sites []Site) map[string][]string {
 	out := map[string][]string{}
 	seen := map[string]bool{}
 	for _, s := range sites {
-		host := hostOf(s.URL)
-		name, ok := ProviderFor(host)
+		host, hostname := hostOf(s.URL)
+		name, ok := ProviderFor(hostname)
 		if !ok {
 			continue
 		}

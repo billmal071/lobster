@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,13 +18,17 @@ import (
 
 // maxEmbedSites caps the number of catalog sites Watch will attempt per call,
 // so a large mirror list can't run unbounded. embedWatchBudget bounds the
-// wall-clock time spent trying new sites; Watch has no context (StreamProvider
-// interface has none), so this is a simple elapsed-time check.
+// wall-clock time Watch spends overall. StreamProvider gives Watch no context,
+// so it derives its own deadline context and passes that to every candidate
+// request — a per-site check alone would let a site entered just under the
+// deadline run all of its candidates to completion well past it.
 const (
 	maxEmbedSites    = 12
-	embedWatchBudget = 25 * time.Second
 	embedHTTPTimeout = 8 * time.Second
 )
+
+// embedWatchBudget is a var only so tests can shorten it.
+var embedWatchBudget = 25 * time.Second
 
 // TBCPLEmbed plays trusted, otherwise-unsupported TBCPL movie/anime sites that
 // follow the common TMDB-id embed convention. Discovery is TMDB-driven (like
@@ -175,6 +180,15 @@ func siteOrigin(rawURL string) string {
 	if err != nil {
 		return strings.TrimRight(rawURL, "/")
 	}
+	// A schemeless catalog entry ("site.example/x") parses without error but
+	// with an empty Host, which would yield "://" and make every candidate URL
+	// invalid. Re-parse it as https so the site is still reachable.
+	if u.Scheme == "" || u.Host == "" {
+		if u2, err2 := url.Parse("https://" + strings.TrimLeft(strings.TrimRight(rawURL, "/"), "/")); err2 == nil && u2.Host != "" {
+			return u2.Scheme + "://" + u2.Host
+		}
+		return strings.TrimRight(rawURL, "/")
+	}
 	return u.Scheme + "://" + u.Host
 }
 
@@ -198,8 +212,8 @@ func resolveIframeURL(pageURL, src string) string {
 }
 
 // fetchBytes performs a simple GET with a browser User-Agent.
-func fetchBytes(client *http.Client, rawURL string) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+func fetchBytes(ctx context.Context, client *http.Client, rawURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -236,16 +250,22 @@ func (p *TBCPLEmbed) Watch(mediaID, episodeID, server, quality string) (*media.S
 		sites = sites[:maxEmbedSites]
 	}
 
-	start := time.Now()
+	deadline := time.Now().Add(embedWatchBudget)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+
 	for _, s := range sites {
-		if time.Since(start) > embedWatchBudget {
+		if time.Now().After(deadline) {
 			p.log("tbcplembed: watch budget %s exceeded; aborting remaining sites", embedWatchBudget)
 			break
 		}
 		origin := siteOrigin(s.URL)
 		found := false
 		for _, cand := range embedCandidates(origin, tmdbID, season, episode) {
-			page, err := fetchBytes(p.client, cand)
+			if ctx.Err() != nil {
+				break
+			}
+			page, err := fetchBytes(ctx, p.client, cand)
 			if err != nil {
 				continue
 			}

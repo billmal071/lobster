@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 
 	"lobster/internal/media"
 	"lobster/internal/tbcpl"
@@ -95,5 +96,51 @@ func TestWatchSniffsIframeAndExtracts(t *testing.T) {
 	}
 	if sniffed != "https://megacloud.example/e/abc" {
 		t.Fatalf("sniffed iframe = %q", sniffed)
+	}
+}
+
+// The watch budget is checked only between sites, so a site entered just under
+// the deadline can still run every candidate request to completion. Watch must
+// stop issuing requests once the budget is spent, not merely stop starting new
+// sites.
+func TestWatchBudgetBoundsCandidateRequests(t *testing.T) {
+	const perRequest = 80 * time.Millisecond
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(perRequest)
+		w.Write([]byte(`<html><body>no iframe here</body></html>`))
+	}))
+	defer site.Close()
+
+	old := embedWatchBudget
+	embedWatchBudget = 100 * time.Millisecond
+	defer func() { embedWatchBudget = old }()
+
+	var sites []tbcpl.Site
+	for i := 0; i < 4; i++ {
+		sites = append(sites, tbcpl.Site{Name: "X", URL: site.URL, Category: "movies", Status: "trusted", Enabled: true})
+	}
+	p := NewTBCPLEmbed(sites)
+
+	start := time.Now()
+	if _, err := p.Watch("603", "", "", "1080"); err == nil {
+		t.Fatal("expected Watch to fail with no playable embed")
+	}
+	// Only the one request already in flight when the deadline passes may
+	// overrun it. Anything beyond that means the candidate loop ignores it.
+	if elapsed := time.Since(start); elapsed > embedWatchBudget+perRequest {
+		t.Fatalf("Watch took %v, want the %v budget to bound candidate requests", elapsed, embedWatchBudget)
+	}
+}
+
+// A schemeless catalog entry parses with an empty Host, which made siteOrigin
+// return "://" and every candidate URL invalid — a silent whole-site skip.
+func TestSiteOriginSchemeless(t *testing.T) {
+	for _, raw := range []string{"site.example/x", "site.example"} {
+		if got := siteOrigin(raw); got != "https://site.example" {
+			t.Errorf("siteOrigin(%q) = %q, want https://site.example", raw, got)
+		}
+	}
+	if got := siteOrigin("https://site.example/x"); got != "https://site.example" {
+		t.Errorf("siteOrigin(absolute) = %q", got)
 	}
 }

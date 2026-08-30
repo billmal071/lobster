@@ -46,6 +46,21 @@ func TestMirrorDomains(t *testing.T) {
 	}
 }
 
+// A port in the URL must not defeat provider matching: the mirror has to land
+// under "flixhqws", not "flixhq", or ResolveDomain("flixhqws") never sees it.
+func TestMirrorDomainsIgnoresPort(t *testing.T) {
+	sites := []Site{
+		{URL: "https://flixhq.ws:8443/", Category: "movies"},
+	}
+	got := MirrorDomains(sites)
+	want := map[string][]string{
+		"flixhqws": {"flixhq.ws:8443"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("MirrorDomains = %+v, want %+v", got, want)
+	}
+}
+
 func TestLivePlaylists(t *testing.T) {
 	c := &Catalog{Sites: []Site{
 		{URL: "https://a.example/list.m3u8", Category: "livetv", Enabled: true, Status: "trusted"},
@@ -61,5 +76,19 @@ func TestLivePlaylists(t *testing.T) {
 	}
 	if len(c.LivePlaylists(true)) != 3 {
 		t.Fatalf("LivePlaylists(true) want 3 (adds untrusted d)")
+	}
+}
+
+// The catalog is remote data, so a schemeless entry is realistic. url.Parse
+// gives it an empty Host, and the raw fallback must still yield a bare host —
+// ResolveDomain consumers cannot use "flixhq.to/path" as a domain override.
+func TestMirrorDomainsSchemelessURL(t *testing.T) {
+	sites := []Site{
+		{URL: "flixhq.to/path", Category: "movies"},
+	}
+	got := MirrorDomains(sites)
+	want := map[string][]string{"flixhq": {"flixhq.to"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("MirrorDomains = %+v, want %+v", got, want)
 	}
 }
