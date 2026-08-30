@@ -47,7 +47,10 @@ func tbcplCatalog() *tbcpl.Catalog {
 
 // liveTVSources returns configured IPTV sources plus TBCPL live-tv playlists.
 func liveTVSources() []string {
-	sources := cfg.LiveTV.Sources()
+	var sources []string
+	if cfg != nil {
+		sources = cfg.LiveTV.Sources()
+	}
 	cat := tbcplCatalog()
 	if cat == nil {
 		return sources

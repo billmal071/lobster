@@ -1,12 +1,12 @@
 package cmd
 
 import (
-	"sync"
 	"testing"
 
 	"lobster/internal/config"
 	"lobster/internal/media"
 	"lobster/internal/provider"
+	"lobster/internal/tbcpl"
 )
 
 func TestFallbackCandidatesPreferSameType(t *testing.T) {
@@ -64,10 +64,9 @@ func TestMergeSubtitlesDedupesByURL(t *testing.T) {
 }
 
 func TestFallbackProvidersIncludesTBCPLEmbed(t *testing.T) {
-	tbcplCatOnce = sync.Once{}
-	tbcplCatVal = nil
-	cfg = &config.Config{TBCPLFeed: true}
-	defer func() { cfg = nil; tbcplCatOnce = sync.Once{}; tbcplCatVal = nil }()
+	seedTBCPLCatalog(t, &config.Config{TBCPLFeed: true}, &tbcpl.Catalog{Sites: []tbcpl.Site{
+		{Name: "Fixture", URL: "https://fixture.example/", Category: "movies", Status: "trusted", Enabled: true},
+	}})
 	fbs := fallbackProviders(provider.NewMovieBox())
 	found := false
 	for _, p := range fbs {
@@ -81,10 +80,7 @@ func TestFallbackProvidersIncludesTBCPLEmbed(t *testing.T) {
 }
 
 func TestFallbackProvidersOmitsTBCPLEmbedWhenDisabled(t *testing.T) {
-	tbcplCatOnce = sync.Once{}
-	tbcplCatVal = nil
-	cfg = &config.Config{TBCPLFeed: false}
-	defer func() { cfg = nil; tbcplCatOnce = sync.Once{}; tbcplCatVal = nil }()
+	seedTBCPLCatalog(t, &config.Config{TBCPLFeed: false}, nil)
 	for _, p := range fallbackProviders(provider.NewMovieBox()) {
 		if _, ok := p.(*provider.TBCPLEmbed); ok {
 			t.Fatal("TBCPLEmbed present but feed disabled")
