@@ -45,6 +45,27 @@ func tbcplCatalog() *tbcpl.Catalog {
 	return tbcplCatVal
 }
 
+// liveTVSources returns configured IPTV sources plus TBCPL live-tv playlists.
+func liveTVSources() []string {
+	sources := cfg.LiveTV.Sources()
+	cat := tbcplCatalog()
+	if cat == nil {
+		return sources
+	}
+	include := cfg != nil && cfg.TBCPLIncludeUntrusted
+	seen := map[string]bool{}
+	for _, s := range sources {
+		seen[s] = true
+	}
+	for _, pl := range cat.LivePlaylists(include) {
+		if !seen[pl] {
+			sources = append(sources, pl)
+			seen[pl] = true
+		}
+	}
+	return sources
+}
+
 func sharedHealth() *resolver.HealthStore {
 	sharedHealthOnce.Do(func() {
 		p, err := config.HealthPath()

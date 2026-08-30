@@ -120,7 +120,7 @@ var (
 )
 
 // StartApp launches the TUI. If mgr is nil, download features are disabled.
-func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager, fallbacks ...provider.Provider) (*media.SearchResult, []media.SearchResult, int, provider.Provider, error) {
+func StartApp(p provider.Provider, cfg *config.Config, liveSources []string, mgr *dlmanager.Manager, fallbacks ...provider.Provider) (*media.SearchResult, []media.SearchResult, int, provider.Provider, error) {
 	ti := textinput.New()
 	ti.Placeholder = "Search..."
 	ti.CharLimit = 156
@@ -142,7 +142,7 @@ func StartApp(p provider.Provider, cfg *config.Config, mgr *dlmanager.Manager, f
 		provider:          p,
 		cartoonProvider:   provider.NewKimCartoon(provider.ResolveDomain("kimcartoon.com.co", "kimcartoon", cfg.DomainOverrides)),
 		animeProvider:     provider.NewAllAnime(cfg.AnimeDub),
-		liveTVProvider:    provider.NewLiveTV(cfg.LiveTV.Sources()),
+		liveTVProvider:    provider.NewLiveTV(liveSources),
 		fallbackProviders: fallbacks,
 		config:            cfg,
 		list:              l,
