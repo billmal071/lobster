@@ -149,10 +149,7 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 	}
 
 	if cat := tbcplCatalog(); cat != nil {
-		sites := cat.Trusted()
-		if cfg != nil && cfg.TBCPLIncludeUntrusted {
-			sites = cat.Sites
-		}
+		sites := cat.EligibleSites(cfg != nil && cfg.TBCPLIncludeUntrusted)
 		if _, ok := primary.(*provider.TBCPLEmbed); !ok && len(sites) > 0 {
 			embed := provider.NewTBCPLEmbed(sites)
 			embed.SetLogger(debugf)

@@ -65,11 +65,24 @@ func (c *Catalog) ByCategory(id string) []Site {
 
 // Trusted returns only enabled sites flagged status=="trusted".
 func (c *Catalog) Trusted() []Site {
+	return c.EligibleSites(false)
+}
+
+// EligibleSites returns the sites eligible to participate in the feed: always
+// excluding disabled sites, and — unless includeUntrusted is true — keeping only
+// sites flagged status=="trusted". This is the single eligibility filter shared
+// by every catalog consumer (mirror-domain matching and the embed provider) so
+// they never diverge.
+func (c *Catalog) EligibleSites(includeUntrusted bool) []Site {
 	var out []Site
 	for _, s := range c.Sites {
-		if s.Enabled && s.Status == "trusted" {
-			out = append(out, s)
+		if !s.Enabled {
+			continue
 		}
+		if !includeUntrusted && s.Status != "trusted" {
+			continue
+		}
+		out = append(out, s)
 	}
 	return out
 }

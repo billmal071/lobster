@@ -56,16 +56,20 @@ func TestEmbedCandidates(t *testing.T) {
 	}
 }
 
-func TestAbsoluteURL(t *testing.T) {
-	cases := []struct{ origin, src, want string }{
-		{"https://x.example", "//cdn.example/a", "https://cdn.example/a"},
-		{"https://x.example", "/e/abc", "https://x.example/e/abc"},
-		{"https://x.example", "e/abc", "https://x.example/e/abc"},
-		{"https://x.example/", "e/abc", "https://x.example/e/abc"},
+func TestResolveIframeURL(t *testing.T) {
+	cases := []struct{ page, src, want string }{
+		// scheme-relative resolves against the page scheme
+		{"https://x.example/embed/movie/42", "//cdn.example/a", "https://cdn.example/a"},
+		// root-relative resolves against the origin
+		{"https://x.example/embed/movie/42", "/e/abc", "https://x.example/e/abc"},
+		// page-relative resolves against the candidate page path, not the origin
+		{"https://x.example/embed/movie/42", "player/index.html", "https://x.example/embed/movie/player/index.html"},
+		// absolute src is preserved
+		{"https://x.example/embed/movie/42", "https://cdn.example/e/abc", "https://cdn.example/e/abc"},
 	}
 	for _, c := range cases {
-		if got := absoluteURL(c.origin, c.src); got != c.want {
-			t.Errorf("absoluteURL(%q, %q) = %q, want %q", c.origin, c.src, got, c.want)
+		if got := resolveIframeURL(c.page, c.src); got != c.want {
+			t.Errorf("resolveIframeURL(%q, %q) = %q, want %q", c.page, c.src, got, c.want)
 		}
 	}
 }

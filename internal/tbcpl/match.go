@@ -23,14 +23,27 @@ var providerMatches = []struct{ sub, name string }{
 }
 
 // ProviderFor maps a host to a lobster provider name key, if recognized.
+// Matching is on whole hostname-label boundaries so that lookalike hosts such
+// as "evil-flixhq.ws.example" or "notflixhq.example" are not classified as a
+// supported provider.
 func ProviderFor(host string) (string, bool) {
 	h := strings.ToLower(host)
 	for _, m := range providerMatches {
-		if strings.Contains(h, m.sub) {
+		if hostMatchesLabel(h, m.sub) {
 			return m.name, true
 		}
 	}
 	return "", false
+}
+
+// hostMatchesLabel reports whether sub appears in host as a contiguous run of
+// whole dot-separated labels (bounded by a dot or a string end on each side).
+// sub may itself contain dots (e.g. "flixhq.ws").
+func hostMatchesLabel(host, sub string) bool {
+	return host == sub ||
+		strings.HasPrefix(host, sub+".") ||
+		strings.HasSuffix(host, "."+sub) ||
+		strings.Contains(host, "."+sub+".")
 }
 
 // hostOf returns the bare host (no scheme, no trailing slash) of a site URL.

@@ -23,7 +23,7 @@ func newProvider() provider.Provider {
 
 	overrides := cfg.DomainOverrides
 	if cat := tbcplCatalog(); cat != nil {
-		overrides = provider.MergeOverrides(cfg.DomainOverrides, tbcpl.MirrorDomains(cat.Sites))
+		overrides = provider.MergeOverrides(cfg.DomainOverrides, tbcpl.MirrorDomains(cat.EligibleSites(cfg.TBCPLIncludeUntrusted)))
 	}
 
 	if strings.Contains(cfg.Base, "soap2day") {

@@ -15,6 +15,10 @@ func TestProviderFor(t *testing.T) {
 		"kimcartoon.com.rs":  "kimcartoon",
 		"allanime.to":        "",
 		"totallyunknown.xyz": "",
+		// Lookalike hosts must NOT match on embedded substrings.
+		"evil-flixhq.ws.example": "",
+		"notflixhq.example":      "",
+		"flixhq.dad":             "flixhq",
 	}
 	for host, want := range cases {
 		got, ok := ProviderFor(host)

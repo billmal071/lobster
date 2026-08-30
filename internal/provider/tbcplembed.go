@@ -178,18 +178,23 @@ func siteOrigin(rawURL string) string {
 	return u.Scheme + "://" + u.Host
 }
 
-// absoluteURL resolves a possibly-relative iframe src against a site origin.
-func absoluteURL(origin, src string) string {
-	switch {
-	case strings.HasPrefix(src, "//"):
-		return "https:" + src
-	case strings.HasPrefix(src, "/"):
-		return origin + src
-	case strings.Contains(src, "://"):
+// resolveIframeURL resolves a possibly-relative iframe src against the URL of
+// the page it was found on. Using the full candidate page URL (not just the
+// site origin) means a page-relative src like "player/index.html" found on
+// "https://site/embed/movie/42" correctly resolves to
+// "https://site/embed/movie/player/index.html". Absolute srcs, scheme-relative
+// ("//host/…") and root-relative ("/…") srcs are all handled by
+// url.URL.ResolveReference.
+func resolveIframeURL(pageURL, src string) string {
+	base, err := url.Parse(pageURL)
+	if err != nil {
 		return src
-	default:
-		return strings.TrimRight(origin, "/") + "/" + src
 	}
+	ref, err := url.Parse(strings.TrimSpace(src))
+	if err != nil {
+		return src
+	}
+	return base.ResolveReference(ref).String()
 }
 
 // fetchBytes performs a simple GET with a browser User-Agent.
@@ -248,7 +253,7 @@ func (p *TBCPLEmbed) Watch(mediaID, episodeID, server, quality string) (*media.S
 			if m == nil {
 				continue
 			}
-			embed := absoluteURL(origin, string(m[1]))
+			embed := resolveIframeURL(cand, string(m[1]))
 			stream, err := p.resolve(embed, origin+"/")
 			if err != nil || stream == nil || stream.URL == "" {
 				continue

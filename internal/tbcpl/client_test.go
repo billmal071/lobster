@@ -43,6 +43,52 @@ func TestLoadFallsBackToSnapshotOffline(t *testing.T) {
 	}
 }
 
+// TestLoadRegionsAreNotCrossContaminated verifies that loading one region and
+// then another (sequentially, sharing one cachePath) returns each region's own
+// catalog — the single global cache file must never serve region-B's data for a
+// region-A request.
+func TestLoadRegionsAreNotCrossContaminated(t *testing.T) {
+	indiaJSON := `{"categories":[{"id":"movies","name":"M","sites":[
+		{"name":"IndiaOnly","url":"https://india.example/","enabled":true,"status":"trusted"}]}]}`
+	brazilJSON := `{"categories":[{"id":"movies","name":"M","sites":[
+		{"name":"BrazilOnly","url":"https://brazil.example/","enabled":true,"status":"trusted"}]}]}`
+	mux := http.NewServeMux()
+	mux.HandleFunc("/Region-Links/links.INDIA.json", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(indiaJSON)) })
+	mux.HandleFunc("/Region-Links/links.BRAZIL.json", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(brazilJSON)) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ob, orf := baseURL, regionURLFmt
+	baseURL = srv.URL + "/links.json"
+	regionURLFmt = srv.URL + "/Region-Links/links.%s.json"
+	defer func() { baseURL, regionURLFmt = ob, orf }()
+
+	cache := filepath.Join(t.TempDir(), "tbcpl-cache.json")
+	cl := NewClient(cache, time.Hour, func(string, ...any) {})
+
+	india := cl.Load(context.Background(), "INDIA")
+	brazil := cl.Load(context.Background(), "BRAZIL")
+
+	has := func(cat *Catalog, url string) bool {
+		for _, s := range cat.Sites {
+			if s.URL == url {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(india, "https://india.example/") || has(india, "https://brazil.example/") {
+		t.Fatalf("INDIA load contaminated: %+v", india.Sites)
+	}
+	if !has(brazil, "https://brazil.example/") || has(brazil, "https://india.example/") {
+		t.Fatalf("BRAZIL load contaminated: %+v", brazil.Sites)
+	}
+	// Region loads must not have written the shared global cache file.
+	if _, err := os.Stat(cache); err == nil {
+		t.Fatalf("region load wrote the global cache file; it must not")
+	}
+}
+
 func TestLoadMergedOverlaysRegion(t *testing.T) {
 	globalJSON := sampleJSON
 	regionJSON := `{"categories":[{"id":"movies","name":"Movies & Shows","sites":[

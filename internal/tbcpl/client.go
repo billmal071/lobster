@@ -41,27 +41,41 @@ func NewClient(cachePath string, ttl time.Duration, log func(string, ...any)) *C
 
 // Load returns a non-nil catalog, preferring fresh cache, then network,
 // then stale cache, then the embedded snapshot. It never returns nil.
+//
+// The disk cache holds the global catalog only: cl.cachePath is a single file,
+// so caching a region-specific list there would let a later Load of a different
+// region serve the wrong catalog. Region loads therefore bypass the cache
+// entirely (network → embedded snapshot). Region overlays are normally obtained
+// via LoadMerged, which fetches them fresh.
 func (cl *Client) Load(ctx context.Context, region string) *Catalog {
-	// 1. Fresh cache.
-	if data, ok := cl.readCacheIfFresh(); ok {
-		if c, err := Parse(data); err == nil {
-			return c
+	useCache := region == ""
+
+	// 1. Fresh cache (global only).
+	if useCache {
+		if data, ok := cl.readCacheIfFresh(); ok {
+			if c, err := Parse(data); err == nil {
+				return c
+			}
 		}
 	}
 	// 2. Network.
 	if data, err := cl.fetch(ctx, region); err == nil {
 		if c, err := Parse(data); err == nil {
-			cl.writeCache(data)
+			if useCache {
+				cl.writeCache(data)
+			}
 			return c
 		}
 	} else {
 		cl.log("tbcpl: fetch failed, falling back: %v", err)
 	}
-	// 3. Stale cache.
-	if data, err := os.ReadFile(cl.cachePath); err == nil {
-		if c, err := Parse(data); err == nil {
-			cl.log("tbcpl: using stale cache")
-			return c
+	// 3. Stale cache (global only).
+	if useCache {
+		if data, err := os.ReadFile(cl.cachePath); err == nil {
+			if c, err := Parse(data); err == nil {
+				cl.log("tbcpl: using stale cache")
+				return c
+			}
 		}
 	}
 	// 4. Embedded snapshot.
