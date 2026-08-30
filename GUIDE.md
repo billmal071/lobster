@@ -151,6 +151,28 @@ auto_next = true
 download_dir = "~/Videos/lobster"
 ```
 
+### TBCPL catalog feed
+
+Lobster can pull site metadata from [tbcpl.lol](https://tbcpl.lol), a directory of streaming sites, to keep mirror domains fresh, add a best-effort fallback embed provider, and feed additional live-TV/sports channels. The catalog is cached for 12 hours with an embedded offline snapshot as a fallback.
+
+```toml
+# Participate in the TBCPL catalog feed (default: true)
+tbcpl_feed = true
+
+# Country overlay to add on top of the global list (default: "", global only)
+# Valid values: BRAZIL, EGYPT, FINLAND, FRANCE, GERMANY, INDIA, ITALY, JAPAN,
+# KURDISTAN, NETHERLANDS, POLAND, PORTUGAL, RUSSIA, SOUTHKOREA, SPAIN
+tbcpl_region = ""
+
+# Let sites not flagged "trusted" also participate in the generic-embed
+# fallback race and live-TV feed (default: false)
+tbcpl_include_untrusted = false
+```
+
+- `tbcpl_feed` — master switch for the feature. When `false`, lobster skips fetching the catalog entirely and none of the TBCPL-derived behavior (mirror refresh, fallback embeds, live-TV feed) is active.
+- `tbcpl_region` — set to one of the values above to overlay that country's sites on top of the global list. Leave blank for the global list only.
+- `tbcpl_include_untrusted` — by default only sites TBCPL flags as "trusted" participate in the generic TMDB-id embed fallback and the live-TV/IPTV feed. Set to `true` to widen that pool to all listed sites (lower confidence, more coverage).
+
 ## All Flags
 
 ```
