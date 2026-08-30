@@ -124,10 +124,21 @@ func deduplicateResults(primary []media.SearchResult, fallbackGroups [][]media.S
 	// year-bearing duplicate can never leave the merged entry year-less —
 	// an empty year disables the resolver's year-based candidate ranking.
 	keep := func(idx int, r media.SearchResult) {
+		// The ID of whichever entry arrived first is authoritative, and that is
+		// the primary provider's when it supplied this work. Playback resolves
+		// against the primary, and providers do not share an ID namespace — YTS
+		// answers to yts/3024, not to a TMDB movie/1930. Letting the richer
+		// duplicate donate its ID handed playback an ID its own provider could
+		// not resolve, so --base yts fell through to another provider and played
+		// that one's dub instead. Metadata still merges; only the ID is pinned.
+		id := merged[idx].ID
 		if resultScore(r) > resultScore(merged[idx]) {
 			r = fillGaps(r, merged[idx])
 		} else {
 			r = fillGaps(merged[idx], r)
+		}
+		if id != "" {
+			r.ID = id
 		}
 		merged[idx] = r
 	}

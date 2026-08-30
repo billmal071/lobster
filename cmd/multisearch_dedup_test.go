@@ -66,8 +66,16 @@ func TestDeduplicateResultsUpgradesYearlessEntry(t *testing.T) {
 	if len(merged) != 2 {
 		t.Fatalf("len(merged) = %d, want 2: %+v", len(merged), merged)
 	}
-	if merged[0].Year != "2002" || merged[0].ID != "movie/557" {
+	if merged[0].Year != "2002" {
 		t.Errorf("year-less entry was not upgraded: %+v", merged[0])
+	}
+	// The metadata is absorbed but the ID is not: playback resolves against the
+	// primary provider, and providers do not share an ID namespace. Handing the
+	// primary a fallback's ID is what made --base yts fall through to another
+	// provider. Cross-provider fallback still works, because the resolver
+	// matches on title rather than on this ID.
+	if merged[0].ID != "x" {
+		t.Errorf("primary ID was overwritten by the fallback's: %+v", merged[0])
 	}
 }
 
