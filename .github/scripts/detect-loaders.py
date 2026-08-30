@@ -234,8 +234,13 @@ def walk():
 def main():
     errors = []
 
+    # Discovery deliberately does NOT use SKIP_DIRS. Pruning .github, vendor or
+    # node_modules here hid any .vscode inside them, and an editor will load
+    # tasks from those directories just as readily when one is opened as a
+    # workspace folder — the content scan skipping a directory is a
+    # false-positive concession, not a statement that nothing there can run.
     for root, dirs, _ in os.walk("."):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS or d == ".vscode"]
+        dirs[:] = [d for d in dirs if d != ".git"]
         for d in list(dirs):
             if d == ".vscode":
                 errors.append(f"{os.path.join(root, d)} is committed; "

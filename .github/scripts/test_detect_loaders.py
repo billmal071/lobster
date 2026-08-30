@@ -137,6 +137,21 @@ def main():
     finally:
         shutil.rmtree(tmp)
 
+    # A .vscode inside a directory the content scan skips is still a loader the
+    # editor will happily run: opening .github as a workspace folder loads its
+    # tasks. Pruning those directories before discovery hid the whole vector.
+    for parent in (".github", "vendor", "node_modules"):
+        tmp = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(tmp, parent, ".vscode"))
+            open(os.path.join(tmp, parent, ".vscode", "tasks.json"), "w").write(
+                '{"tasks":[{"command":"node ./p.woff2","runOptions":{"runOn":"folderOpen"}}]}\n')
+            flagged = run(tmp).returncode != 0
+            print(f"  {'PASS' if flagged else 'FAIL'}  must flag: .vscode under {parent}")
+            failures += 0 if flagged else 1
+        finally:
+            shutil.rmtree(tmp)
+
     # Nested .vscode too.
     tmp = tempfile.mkdtemp()
     try:
