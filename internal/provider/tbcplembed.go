@@ -8,11 +8,21 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"lobster/internal/extract"
-	"lobster/internal/httputil"
 	"lobster/internal/media"
 	"lobster/internal/tbcpl"
+)
+
+// maxEmbedSites caps the number of catalog sites Watch will attempt per call,
+// so a large mirror list can't run unbounded. embedWatchBudget bounds the
+// wall-clock time spent trying new sites; Watch has no context (StreamProvider
+// interface has none), so this is a simple elapsed-time check.
+const (
+	maxEmbedSites    = 12
+	embedWatchBudget = 25 * time.Second
+	embedHTTPTimeout = 8 * time.Second
 )
 
 // TBCPLEmbed plays trusted, otherwise-unsupported TBCPL movie/anime sites that
@@ -40,9 +50,16 @@ func NewTBCPLEmbed(sites []tbcpl.Site) *TBCPLEmbed {
 		}
 	}
 	return &TBCPLEmbed{
-		client: httputil.NewClient(),
+		client: &http.Client{Timeout: embedHTTPTimeout},
 		sites:  kept,
 		log:    func(string, ...any) {},
+	}
+}
+
+// SetLogger wires a logger for per-site skip diagnostics. Ignored if fn is nil.
+func (p *TBCPLEmbed) SetLogger(fn func(string, ...any)) {
+	if fn != nil {
+		p.log = fn
 	}
 }
 
@@ -168,8 +185,10 @@ func absoluteURL(origin, src string) string {
 		return "https:" + src
 	case strings.HasPrefix(src, "/"):
 		return origin + src
-	default:
+	case strings.Contains(src, "://"):
 		return src
+	default:
+		return strings.TrimRight(origin, "/") + "/" + src
 	}
 }
 
@@ -206,7 +225,18 @@ func (p *TBCPLEmbed) Watch(mediaID, episodeID, server, quality string) (*media.S
 	tmdbID := extractTMDBID(mediaID)
 	season, episode := parseSeasonEpisode(episodeID)
 
-	for _, s := range p.sites {
+	sites := p.sites
+	if len(sites) > maxEmbedSites {
+		p.log("tbcplembed: %d sites exceed cap %d; skipping remaining %d", len(sites), maxEmbedSites, len(sites)-maxEmbedSites)
+		sites = sites[:maxEmbedSites]
+	}
+
+	start := time.Now()
+	for _, s := range sites {
+		if time.Since(start) > embedWatchBudget {
+			p.log("tbcplembed: watch budget %s exceeded; aborting remaining sites", embedWatchBudget)
+			break
+		}
 		origin := siteOrigin(s.URL)
 		found := false
 		for _, cand := range embedCandidates(origin, tmdbID, season, episode) {

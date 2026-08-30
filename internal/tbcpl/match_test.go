@@ -7,14 +7,14 @@ import (
 
 func TestProviderFor(t *testing.T) {
 	cases := map[string]string{
-		"flixhq.ws":            "flixhqws",
-		"www.flixhq.to":        "flixhq",
-		"www.1shows.org":       "tbcpl",
-		"1flex.org":            "tbcpl",
-		"soap2day.example":     "soap2day",
-		"kimcartoon.com.rs":    "kimcartoon",
-		"allanime.to":          "allanime",
-		"totallyunknown.xyz":   "",
+		"flixhq.ws":          "flixhqws",
+		"www.flixhq.to":      "flixhq",
+		"www.1shows.org":     "",
+		"1flex.org":          "",
+		"soap2day.example":   "",
+		"kimcartoon.com.rs":  "kimcartoon",
+		"allanime.to":        "",
+		"totallyunknown.xyz": "",
 	}
 	for host, want := range cases {
 		got, ok := ProviderFor(host)
@@ -36,7 +36,6 @@ func TestMirrorDomains(t *testing.T) {
 	got := MirrorDomains(sites)
 	want := map[string][]string{
 		"flixhq": {"flixhq.dad"},
-		"tbcpl":  {"www.1shows.org"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("MirrorDomains = %+v, want %+v", got, want)
@@ -48,8 +47,8 @@ func TestLivePlaylists(t *testing.T) {
 		{URL: "https://a.example/list.m3u8", Category: "livetv", Enabled: true, Status: "trusted"},
 		{URL: "https://b.example/get.php?type=m3u_plus", Category: "livetv", Enabled: true, Status: "trusted"},
 		{URL: "https://c.example/watch", Category: "livetv", Enabled: true, Status: "trusted"},     // not a playlist
-		{URL: "https://d.example/list.m3u8", Category: "livetv", Enabled: true, Status: ""},          // untrusted
-		{URL: "https://e.example/list.m3u8", Category: "movies", Enabled: true, Status: "trusted"},   // wrong category
+		{URL: "https://d.example/list.m3u8", Category: "livetv", Enabled: true, Status: ""},        // untrusted
+		{URL: "https://e.example/list.m3u8", Category: "movies", Enabled: true, Status: "trusted"}, // wrong category
 	}}
 	got := c.LivePlaylists(false)
 	want := []string{"https://a.example/list.m3u8", "https://b.example/get.php?type=m3u_plus"}

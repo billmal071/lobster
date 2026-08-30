@@ -56,6 +56,20 @@ func TestEmbedCandidates(t *testing.T) {
 	}
 }
 
+func TestAbsoluteURL(t *testing.T) {
+	cases := []struct{ origin, src, want string }{
+		{"https://x.example", "//cdn.example/a", "https://cdn.example/a"},
+		{"https://x.example", "/e/abc", "https://x.example/e/abc"},
+		{"https://x.example", "e/abc", "https://x.example/e/abc"},
+		{"https://x.example/", "e/abc", "https://x.example/e/abc"},
+	}
+	for _, c := range cases {
+		if got := absoluteURL(c.origin, c.src); got != c.want {
+			t.Errorf("absoluteURL(%q, %q) = %q, want %q", c.origin, c.src, got, c.want)
+		}
+	}
+}
+
 func TestWatchSniffsIframeAndExtracts(t *testing.T) {
 	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html><body><iframe src="https://megacloud.example/e/abc"></iframe></body></html>`))

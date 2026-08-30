@@ -7,15 +7,19 @@ import (
 
 // providerMatch pairs a host substring with the lobster provider name key.
 // Order matters: more specific hosts first.
+//
+// This table lists ONLY providers that actually consume mirror overrides via
+// provider.ResolveDomain (see cmd/provider.go / NewFlixHQ / NewKimCartoon).
+// Other TBCPL catalog hosts (1shows/1flex/1tube -> tbcpl, soap2day, allanime)
+// map to providers whose constructors ignore a domain override entirely
+// (fixed API endpoints or a hardcoded default), so listing them here would
+// silently discard the mirror mapping. Do not add an entry unless the
+// corresponding provider constructor threads the override through
+// ResolveDomain.
 var providerMatches = []struct{ sub, name string }{
 	{"flixhq.ws", "flixhqws"},
 	{"flixhq", "flixhq"},
-	{"1shows", "tbcpl"},
-	{"1flex", "tbcpl"},
-	{"1tube", "tbcpl"},
-	{"soap2day", "soap2day"},
 	{"kimcartoon", "kimcartoon"},
-	{"allanime", "allanime"},
 }
 
 // ProviderFor maps a host to a lobster provider name key, if recognized.

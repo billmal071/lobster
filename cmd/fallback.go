@@ -154,7 +154,9 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 			sites = cat.Sites
 		}
 		if _, ok := primary.(*provider.TBCPLEmbed); !ok && len(sites) > 0 {
-			fallbacks = append(fallbacks, provider.NewTBCPLEmbed(sites))
+			embed := provider.NewTBCPLEmbed(sites)
+			embed.SetLogger(debugf)
+			fallbacks = append(fallbacks, embed)
 		}
 	}
 
