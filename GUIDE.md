@@ -136,6 +136,7 @@ provider = "Vidcloud"
 
 # Subtitle language
 subs_language = "english"
+audio_language = "english"   # preferred audio track on multi-dub releases
 
 # Video quality (360, 480, 720, 1080)
 quality = "1080"
@@ -154,6 +155,7 @@ download_dir = "~/Videos/lobster"
 
 ```
 -c, --continue              Resume from watch history
+-a, --audio-language <lang> Preferred audio track language (default: english)
 -d, --download <path>       Download to path instead of streaming
 -j, --json                  Output stream metadata as JSON
 -l, --language <lang>       Subtitle language (default: english)

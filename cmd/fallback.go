@@ -71,7 +71,11 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 	}
 
 	if _, ok := primary.(*provider.TBCPL); !ok {
-		fallbacks = append(fallbacks, provider.NewTBCPL("tbcpl"))
+		tb := provider.NewTBCPL("tbcpl")
+		if cfg != nil {
+			tb.SetAudioLanguage(cfg.AudioLanguage)
+		}
+		fallbacks = append(fallbacks, tb)
 	}
 
 	if _, ok := primary.(*provider.FlixHQWS); !ok {

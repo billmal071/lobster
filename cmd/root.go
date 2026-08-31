@@ -16,16 +16,17 @@ var Version = "dev"
 
 // Global flags
 var (
-	flagDownload string
-	flagLanguage string
-	flagNoSubs   bool
-	flagProvider string
-	flagQuality  string
-	flagPlayer   string
-	flagBase     string
-	flagContinue bool
-	flagJSON     bool
-	flagDebug    bool
+	flagDownload  string
+	flagLanguage  string
+	flagAudioLang string
+	flagNoSubs    bool
+	flagProvider  string
+	flagQuality   string
+	flagPlayer    string
+	flagBase      string
+	flagContinue  bool
+	flagJSON      bool
+	flagDebug     bool
 )
 
 // cfg holds the loaded configuration (merged: defaults < config file < flags).
@@ -51,6 +52,7 @@ func Execute() {
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&flagDownload, "download", "d", "", "Download to path instead of playing (default: config download_dir)")
 	rootCmd.PersistentFlags().StringVarP(&flagLanguage, "language", "l", "", "Subtitle language (default: english)")
+	rootCmd.PersistentFlags().StringVarP(&flagAudioLang, "audio-language", "a", "", "Preferred audio track language (default: english)")
 	rootCmd.PersistentFlags().BoolVarP(&flagNoSubs, "no-subs", "n", false, "Disable subtitles")
 	rootCmd.PersistentFlags().StringVarP(&flagProvider, "provider", "p", "", "Server provider: Vidcloud | UpCloud")
 	rootCmd.PersistentFlags().StringVarP(&flagQuality, "quality", "q", "", "Video quality: 360 | 480 | 720 | 1080 | best")
@@ -84,6 +86,9 @@ func loadConfig(cmd *cobra.Command, args []string) error {
 	}
 	if flagQuality != "" {
 		cfg.Quality = flagQuality
+	}
+	if flagAudioLang != "" {
+		cfg.AudioLanguage = flagAudioLang
 	}
 	if flagLanguage != "" {
 		cfg.SubsLanguage = flagLanguage
