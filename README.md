@@ -27,6 +27,7 @@ Lobster is a security-hardened Go rewrite of [lobster.sh](https://github.com/jus
 - 🌍 Subtitles with automatic language matching
 - ▶ Watch history with resume support (`--continue`)
 - 🎞 Quality selection — 360p, 480p, 720p, 1080p (HLS variant matching)
+- 📺 Live TV — free IPTV channels including a 456-channel Sports category ([jump to guide](#live-tv-and-sports))
 - 📦 JSON output mode for scripting and piping
 
 See [GUIDE.md](GUIDE.md) for detailed usage instructions.
@@ -138,6 +139,91 @@ A failure at `search` usually means a moved domain or a renamed field. A failure
 at `watch` or `embed` means the player changed. Pass a title to probe with
 something else; anime providers are probed with an anime title automatically.
 Exits non-zero when nothing is usable, so it works as a check.
+## Live TV and Sports
+
+Live TV streams free, public IPTV playlists — by default the community-maintained
+[iptv-org](https://github.com/iptv-org/iptv) index. No account and no API key.
+
+### Watching football
+
+Live TV lives in the dashboard, so start it with **no search query**:
+
+```bash
+./lobster
+```
+
+Then:
+
+1. Press **`5`** to open the **Live TV** tab.
+2. Pick the **Sports** category and press **Enter**. (It currently carries **456 channels**.)
+3. Pick a channel and press **Enter** — it opens in your player.
+
+After a channel starts, you get a **Next channel / Previous channel / Back to browser / Quit**
+menu, so you can flip through the Sports lineup looking for the match without going
+back to the list each time. On **mpv** the dead channels are skipped automatically;
+on other players use the menu, and lobster tells you so on startup.
+
+### Finding a specific match faster
+
+456 channels is a lot to scroll. Press **`s`** or **`/`** to search channel names
+directly — searching is a plain case-insensitive substring match on the channel
+name, so search by **broadcaster, not by fixture**:
+
+```
+bein        → beIN SPORTS XTRA, beIN Sports USA, …
+sky sport   → Sky Sport channels
+espn        → ESPN feeds
+dazn        → DAZN Combat, DAZN Darts, …
+football    → CCTV-Storm Football, …
+sport       → the broadest net
+```
+
+Searching `arsenal vs chelsea` will find nothing — there is no fixture metadata
+in a playlist, only channel names.
+
+### What to expect
+
+These are free public streams, so a few things are worth knowing before kickoff:
+
+- **Channel names carry annotations.** `[Geo-blocked]` means it will fail unless
+  you are in the right country; `[Not 24/7]` means it only broadcasts part of the
+  day. `beIN Sports USA (1080p) [Geo-blocked]` is a typical Sports entry.
+- **Dead channels are normal.** Public IPTV links rot. mpv auto-skips them; after
+  12 consecutive failures lobster stops so a fully-unreachable network can't loop.
+- **Live channels can't be downloaded.** `--download` is rejected for Live TV.
+- **First load is slow.** The category playlist is ~3 MB and is fetched once, then
+  cached for the session.
+
+### Adding your own playlists
+
+If a match isn't on a free channel, point lobster at your own M3U playlists or an
+Xtream-codes subscription in `config.toml`:
+
+```toml
+[live_tv]
+# Include the built-in iptv-org playlist (default: true).
+# Set false to use only your own sources.
+iptv_org = true
+
+# Extra M3U URLs or local file paths.
+# Local paths must be absolute — unlike download_dir, `~` is NOT expanded here.
+playlists = [
+  "https://example.com/sports.m3u8",
+  "/home/you/playlists/mine.m3u",
+]
+
+# Optional Xtream-codes subscription. When server is set, lobster builds the
+# get.php m3u_plus URL for you.
+[live_tv.xtream]
+server = "example.com:8080"
+username = "your-username"
+password = "your-password"
+```
+
+Sources are merged in that order — iptv-org first, then your playlists, then
+Xtream — so your own channels appear alongside the free ones.
+
+---
 
 ## Configuration
 
@@ -163,6 +249,11 @@ download_dir = "~/Videos/lobster"
 # Self-host from: https://github.com/consumet/api.consumet.org
 # When set, lobster uses this API for search, streaming, etc.
 # api_url = "https://your-consumet-instance.example.com"
+
+# Live TV sources. See "Live TV and Sports" above.
+[live_tv]
+iptv_org = true          # include the built-in iptv-org playlist
+playlists = []           # extra M3U URLs or local file paths
 ```
 
 ---
