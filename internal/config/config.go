@@ -33,7 +33,13 @@ type Config struct {
 	MaxRetries             int                 `toml:"max_retries"`      // retry count for segment/file downloads
 	DomainOverrides        map[string][]string `toml:"domain_overrides"` // provider name -> fallback domains
 	AnimeDub               bool                `toml:"anime_dub"`
-	LiveTV                 LiveTVConfig        `toml:"live_tv"`
+	// TorrentFallback lets the resolver fall back to YTS when the streaming
+	// providers fail. Off by default and deliberately so: YTS resolves to a
+	// magnet, so falling back to it joins a BitTorrent swarm and exposes the
+	// user's IP to its peers. That is worth doing on request, not silently
+	// because a scraper broke.
+	TorrentFallback bool         `toml:"torrent_fallback"`
+	LiveTV          LiveTVConfig `toml:"live_tv"`
 }
 
 // XtreamConfig holds optional Xtream-codes credentials for a paid IPTV sub.
