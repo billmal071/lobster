@@ -12,10 +12,10 @@ import (
 	"lobster/internal/media"
 )
 
-const (
-	vaplayerBase    = "https://streamdata.vaplayer.ru/api.php"
-	vaplayerReferer = "https://nextgencloudfabric.com/"
-)
+const vaplayerReferer = "https://nextgencloudfabric.com/"
+
+// vaplayerBase is a var so tests can point it at a stub server.
+var vaplayerBase = "https://streamdata.vaplayer.ru/api.php"
 
 // VaPlayer implements the StreamProvider interface using the vaplayer
 // streaming API. It accepts TMDB IDs and returns direct HLS m3u8 URLs.
@@ -151,8 +151,51 @@ func (vp *VaPlayer) GetEpisodes(id string, seasonID string) ([]media.Episode, er
 }
 
 // GetServers returns a single server.
+// GetServers lists one entry per stream URL the API offers. They are separate
+// mirrors and, in practice, sometimes separate dubs — collapsing them to a
+// single "VaPlayer" server meant only the first was ever reachable, so an
+// English film served Hindi-first had no alternative to fall back to.
 func (vp *VaPlayer) GetServers(id string, episodeID string) ([]media.Server, error) {
-	return []media.Server{{Name: "VaPlayer", ID: "default"}}, nil
+	apiURL, err := vp.apiURLFor(id, episodeID)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := vp.fetchAPI(apiURL)
+	if err != nil {
+		return nil, fmt.Errorf("vaplayer: %w", err)
+	}
+	if len(resp.Data.StreamURLs) == 0 {
+		return nil, fmt.Errorf("vaplayer: no stream URLs")
+	}
+	servers := make([]media.Server, 0, len(resp.Data.StreamURLs))
+	for i := range resp.Data.StreamURLs {
+		servers = append(servers, media.Server{
+			Name: fmt.Sprintf("Source %d", i+1),
+			ID:   strconv.Itoa(i),
+		})
+	}
+	return servers, nil
+}
+
+// vaplayerSourceIndex maps a server name back to its stream_urls index. An
+// unknown name (the resolver and watch history both pass names this provider
+// never issued) keeps the first source rather than failing.
+func vaplayerSourceIndex(server string, n int) int {
+	var i int
+	name := strings.TrimSpace(server)
+	if _, err := fmt.Sscanf(name, "Source %d", &i); err != nil {
+		return 0
+	}
+	if i < 1 || i > n {
+		return 0
+	}
+	// Sscanf stops after %d and ignores anything that follows, so names like
+	// "Source 2 legacy" would otherwise select source 2. Only a name this
+	// provider actually issued may pick a source; everything else falls back.
+	if name != fmt.Sprintf("Source %d", i) {
+		return 0
+	}
+	return i - 1
 }
 
 // GetEmbedURL is not used for this provider.
@@ -161,33 +204,45 @@ func (vp *VaPlayer) GetEmbedURL(serverID string) (string, error) {
 }
 
 // Watch resolves a stream URL through the vaplayer API.
-func (vp *VaPlayer) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+// apiURLFor builds the vaplayer API URL for a movie or a specific episode.
+func (vp *VaPlayer) apiURLFor(mediaID, episodeID string) (string, error) {
 	tmdbID := extractTMDBID(mediaID)
 	if err := httputil.ValidateNumericID(tmdbID); err != nil {
-		return nil, fmt.Errorf("vaplayer: invalid TMDB ID: %w", err)
+		return "", fmt.Errorf("vaplayer: invalid TMDB ID: %w", err)
 	}
 
 	var apiURL string
 	if episodeID != "" {
 		parts := strings.SplitN(episodeID, ":", 3)
 		if len(parts) != 3 {
-			return nil, fmt.Errorf("invalid episode ID: %s", episodeID)
+			return "", fmt.Errorf("invalid episode ID: %s", episodeID)
 		}
 		if err := httputil.ValidateNumericID(parts[0]); err != nil {
-			return nil, fmt.Errorf("vaplayer: invalid TMDB ID in episode: %w", err)
+			return "", fmt.Errorf("vaplayer: invalid TMDB ID in episode: %w", err)
 		}
 		seasonNum, err := strconv.Atoi(parts[1])
 		if err != nil || seasonNum <= 0 {
-			return nil, fmt.Errorf("vaplayer: invalid season in episode ID: %s", episodeID)
+			return "", fmt.Errorf("vaplayer: invalid season in episode ID: %s", episodeID)
 		}
 		episodeNum, err := strconv.Atoi(parts[2])
 		if err != nil || episodeNum <= 0 {
-			return nil, fmt.Errorf("vaplayer: invalid episode in episode ID: %s", episodeID)
+			return "", fmt.Errorf("vaplayer: invalid episode in episode ID: %s", episodeID)
 		}
 		apiURL = fmt.Sprintf("%s?tmdb=%s&type=tv&season=%s&episode=%s",
 			vaplayerBase, parts[0], parts[1], parts[2])
 	} else {
 		apiURL = fmt.Sprintf("%s?tmdb=%s&type=movie", vaplayerBase, tmdbID)
+	}
+	return apiURL, nil
+}
+
+// Watch resolves a stream URL through the vaplayer API. server selects which of
+// the API's stream_urls to use ("Source N", as listed by GetServers); anything
+// unrecognised keeps the first, which is the historical behaviour.
+func (vp *VaPlayer) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+	apiURL, err := vp.apiURLFor(mediaID, episodeID)
+	if err != nil {
+		return nil, err
 	}
 
 	resp, err := vp.fetchAPI(apiURL)
@@ -216,7 +271,7 @@ func (vp *VaPlayer) Watch(mediaID, episodeID, server, quality string) (*media.St
 	}
 
 	return &media.Stream{
-		URL:       resp.Data.StreamURLs[0],
+		URL:       resp.Data.StreamURLs[vaplayerSourceIndex(server, len(resp.Data.StreamURLs))],
 		Quality:   quality,
 		Subtitles: subs,
 		Referer:   vaplayerReferer,
