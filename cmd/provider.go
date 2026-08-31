@@ -38,7 +38,9 @@ func newProvider() provider.Provider {
 		return provider.NewFlixHQ(base)
 	}
 	if strings.Contains(cfg.Base, "tbcpl") || strings.Contains(cfg.Base, "1shows") {
-		return provider.NewTBCPL(cfg.Base)
+		tb := provider.NewTBCPL(cfg.Base)
+		tb.SetAudioLanguage(cfg.AudioLanguage)
+		return tb
 	}
 	if strings.Contains(cfg.Base, "vidnest") {
 		return provider.NewVidNest()

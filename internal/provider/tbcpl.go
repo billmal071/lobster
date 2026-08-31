@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/sha256"
@@ -8,12 +9,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
-	"context"
-	"net"
 	"sync"
 	"time"
 
@@ -43,6 +43,15 @@ type TBCPL struct {
 	searchCache map[string]tbcplCatalogItem
 	seasonCache map[string]*tbcplSeasonResponse
 	vidzeeKey   string
+	audioLang   string
+}
+
+// SetAudioLanguage sets the preferred audio-track language used to order
+// Vidzee's per-dub sources. Empty keeps the provider's own order.
+func (t *TBCPL) SetAudioLanguage(lang string) {
+	t.mu.Lock()
+	t.audioLang = lang
+	t.mu.Unlock()
 }
 
 // NewTBCPL creates a new TBCPL provider.
@@ -58,6 +67,7 @@ func NewTBCPL(base string) *TBCPL {
 		tmdbBaseURL:   tbcplTMDBBase,
 		vidzeeBaseURL: tbcplVidzeeBase,
 		vidzeeKeyURL:  tbcplVidzeeKeyURL,
+		audioLang:     "english",
 		searchCache:   make(map[string]tbcplCatalogItem),
 		seasonCache:   make(map[string]*tbcplSeasonResponse),
 	}
@@ -479,7 +489,14 @@ func (t *TBCPL) watchWithServer(mediaID, episodeID string, server tbcplDirectSer
 		return nil, err
 	}
 
-	for _, source := range resp.URL {
+	// Vidzee returns one source per audio dub, in no dependable order, so
+	// taking the first is how an English film ends up playing in Hindi on every
+	// server. Order by the preferred language first; everything else stays as a
+	// fallback for when the preferred source will not decrypt.
+	t.mu.RLock()
+	pref := t.audioLang
+	t.mu.RUnlock()
+	for _, source := range preferAudioLang(resp.URL, pref) {
 		streamURL, err := decryptTBCPLVidzeeLink(source.Link, key)
 		if err != nil || streamURL == "" {
 			continue

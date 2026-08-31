@@ -9,7 +9,7 @@ import (
 )
 
 // VLC implements the Player interface for VLC media player.
-type VLC struct{}
+type VLC struct{ audioLang string }
 
 func (v *VLC) Name() string { return "vlc" }
 
@@ -38,6 +38,7 @@ func (v *VLC) Play(stream *media.Stream, title string, startPos float64, subFile
 		"--play-and-exit",
 	}
 
+	args = append(args, vlcAudioLangArgs(v.audioLang)...)
 	args = append(args, vlcHeaderArgs(stream)...)
 
 	if startPos > 0 {
