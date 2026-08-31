@@ -9,6 +9,7 @@
 ![ffmpeg](https://img.shields.io/badge/ffmpeg-download-red?style=flat)
 ![Security](https://img.shields.io/badge/security-hardened-green?style=flat)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat)
+![License](https://img.shields.io/badge/license-GPL--2.0-blue?style=flat)
 
 > **Search in your terminal. Stream instantly in your media player.**
 
@@ -192,3 +193,14 @@ Built to remove the shell attack surface entirely.
 - TLS 1.2+ enforced
 - Randomised mpv IPC sockets
 - Safe TOML config parsing (data only)
+
+---
+
+## License
+
+Licensed under the **GNU General Public License v2.0** — see [LICENSE](LICENSE).
+
+Lobster is a Go rewrite of [lobster.sh](https://github.com/justchokingaround/lobster),
+which is itself GPL-2.0. GPL-2.0 is copyleft, so this project stays under the same
+licence as the work it derives from: you are free to use, study, modify, and
+redistribute it, provided derivative works remain GPL-2.0 and ship their source.
