@@ -182,10 +182,17 @@ func (vp *VaPlayer) GetServers(id string, episodeID string) ([]media.Server, err
 // never issued) keeps the first source rather than failing.
 func vaplayerSourceIndex(server string, n int) int {
 	var i int
-	if _, err := fmt.Sscanf(strings.TrimSpace(server), "Source %d", &i); err != nil {
+	name := strings.TrimSpace(server)
+	if _, err := fmt.Sscanf(name, "Source %d", &i); err != nil {
 		return 0
 	}
 	if i < 1 || i > n {
+		return 0
+	}
+	// Sscanf stops after %d and ignores anything that follows, so names like
+	// "Source 2 legacy" would otherwise select source 2. Only a name this
+	// provider actually issued may pick a source; everything else falls back.
+	if name != fmt.Sprintf("Source %d", i) {
 		return 0
 	}
 	return i - 1

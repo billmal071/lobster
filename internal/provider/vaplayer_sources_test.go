@@ -54,7 +54,10 @@ func TestVaPlayerWatchUnknownSourceFallsBackToFirst(t *testing.T) {
 	defer srv.Close()
 
 	vp := NewVaPlayer()
-	for _, name := range []string{"", "Default", "VaPlayer", "Source 99"} {
+	// "Source 2 legacy" must NOT select source 2: fmt.Sscanf stops after %d
+	// and ignores the trailing text, so a name this provider never issued
+	// would otherwise index stream_urls[1] instead of falling back.
+	for _, name := range []string{"", "Default", "VaPlayer", "Source 99", "Source 2 legacy", "Source 2x", "Source 2."} {
 		st, err := vp.Watch("movie/1930", "", name, "1080")
 		if err != nil {
 			t.Fatalf("Watch(%q): %v", name, err)
