@@ -48,9 +48,9 @@ func fallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 }
 
 // fallbackProviders returns all available fallback providers, excluding the primary.
-// Both StreamProviders (Soap2Day, Consumet, MovieBox, TBCPL) and regular
-// Providers (FlixHQ, FlixHQWS) are included so the app tries every source
-// before giving up.
+// Both StreamProviders (Soap2Day, MovieBox, TBCPL) and regular Providers
+// (FlixHQWS, KimCartoon) are included so the app tries every source before
+// giving up. Consumet joins them only when api_url is configured.
 func fallbackProviders(primary provider.Provider) []provider.Provider {
 	var fallbacks []provider.Provider
 
@@ -78,13 +78,24 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 		fallbacks = append(fallbacks, tb)
 	}
 
+	// Consumet is an aggregator, so it is worth more than any single scraper —
+	// but it has no public instance, only whatever the user self-hosts. Without
+	// api_url there is nothing to talk to, so it joins the chain only when one
+	// is configured rather than failing every request.
+	if _, ok := primary.(*provider.Consumet); !ok {
+		if cfg != nil && cfg.APIURL != "" {
+			fallbacks = append(fallbacks, provider.NewConsumet(cfg.APIURL))
+		}
+	}
+
 	if _, ok := primary.(*provider.FlixHQWS); !ok {
 		fallbacks = append(fallbacks, provider.NewFlixHQWS("flixhq.ws"))
 	}
 
-	if _, ok := primary.(*provider.FlixHQ); !ok {
-		fallbacks = append(fallbacks, provider.NewFlixHQ("flixhq.to"))
-	}
+	// flixhq.to is gone — it does not answer at all, so every attempt spends the
+	// full request timeout before the resolver gives up on it. flixhq.ws is a
+	// separate deployment and still works, so nothing is lost by dropping this.
+	// It stays reachable through `--base flixhq.to` for anyone who sees it return.
 
 	if _, ok := primary.(*provider.KimCartoon); !ok {
 		fallbacks = append(fallbacks, provider.NewKimCartoon("kimcartoon.com.co"))

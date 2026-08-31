@@ -1,0 +1,85 @@
+package cmd
+
+import (
+	"fmt"
+	"testing"
+
+	"lobster/internal/config"
+	"lobster/internal/provider"
+)
+
+// providerNames lists the concrete Go types in a provider slice, which is what
+// these tests assert on — the chain is defined by which providers are in it,
+// not by their configuration. Provider has no Name method, so use %T.
+func providerNames(ps []provider.Provider) []string {
+	names := make([]string, 0, len(ps))
+	for _, p := range ps {
+		names = append(names, fmt.Sprintf("%T", p))
+	}
+	return names
+}
+
+func hasProvider[T provider.Provider](ps []provider.Provider) bool {
+	for _, p := range ps {
+		if _, ok := p.(T); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// Consumet is a full aggregator that was implemented but never reachable from
+// the fallback chain — it was only ever built as the primary, and only when
+// api_url was set. Wiring it in is the cheapest provider we can add.
+func TestFallbackProvidersIncludesConsumetWhenAPIURLSet(t *testing.T) {
+	prev := cfg
+	cfg = &config.Config{APIURL: "https://api.consumet.example"}
+	t.Cleanup(func() { cfg = prev })
+
+	got := fallbackProviders(nil)
+	if !hasProvider[*provider.Consumet](got) {
+		t.Fatalf("Consumet missing from fallback chain: %v", providerNames(got))
+	}
+}
+
+// Without a base URL there is nothing for Consumet to talk to, so it must stay
+// out rather than join the chain and fail every request.
+func TestFallbackProvidersOmitsConsumetWithoutAPIURL(t *testing.T) {
+	prev := cfg
+	cfg = &config.Config{}
+	t.Cleanup(func() { cfg = prev })
+
+	got := fallbackProviders(nil)
+	if hasProvider[*provider.Consumet](got) {
+		t.Fatalf("Consumet present without api_url: %v", providerNames(got))
+	}
+}
+
+// A nil cfg must not panic and must not produce a Consumet with an empty base.
+func TestFallbackProvidersOmitsConsumetWithNilConfig(t *testing.T) {
+	prev := cfg
+	cfg = nil
+	t.Cleanup(func() { cfg = prev })
+
+	got := fallbackProviders(nil)
+	if hasProvider[*provider.Consumet](got) {
+		t.Fatalf("Consumet present with nil cfg: %v", providerNames(got))
+	}
+}
+
+// flixhq.to stopped responding entirely; every attempt burns the full request
+// timeout before the resolver moves on. flixhq.ws is a separate, working
+// provider, so dropping the dead one costs no coverage.
+func TestFallbackProvidersOmitsDeadFlixHQ(t *testing.T) {
+	prev := cfg
+	cfg = &config.Config{}
+	t.Cleanup(func() { cfg = prev })
+
+	got := fallbackProviders(nil)
+	if hasProvider[*provider.FlixHQ](got) {
+		t.Fatalf("dead flixhq.to still in chain: %v", providerNames(got))
+	}
+	if !hasProvider[*provider.FlixHQWS](got) {
+		t.Fatalf("flixhq.ws must remain: %v", providerNames(got))
+	}
+}
