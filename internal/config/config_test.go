@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 )
@@ -264,5 +265,33 @@ func TestValidateAcceptsBestQuality(t *testing.T) {
 		if err := c.Validate(); err == nil {
 			t.Errorf("Quality=%q should be rejected: one documented spelling only", q)
 		}
+	}
+}
+
+// A "~/..." playlist path must expand like download_dir does, rather than
+// reaching os.ReadFile verbatim and failing with "no such file or directory".
+func TestLiveTVSourcesExpandsTilde(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir: %v", err)
+	}
+	c := LiveTVConfig{
+		IPTVOrg: false,
+		Playlists: []string{
+			"~/playlists/mine.m3u",
+			"https://example.com/keep.m3u8", // URLs must pass through untouched
+			"/already/absolute.m3u",
+			"~notauser/literal.m3u", // only "~/" is a home reference
+		},
+	}
+	got := c.Sources()
+	want := []string{
+		filepath.Join(home, "playlists/mine.m3u"),
+		"https://example.com/keep.m3u8",
+		"/already/absolute.m3u",
+		"~notauser/literal.m3u",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Sources() = %v, want %v", got, want)
 	}
 }

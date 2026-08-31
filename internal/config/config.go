@@ -59,7 +59,9 @@ func (c LiveTVConfig) Sources() []string {
 	if c.IPTVOrg {
 		s = append(s, iptvOrgPlaylist)
 	}
-	s = append(s, c.Playlists...)
+	for _, pl := range c.Playlists {
+		s = append(s, expandTilde(pl))
+	}
 	if c.Xtream.Server != "" {
 		server := c.Xtream.Server
 		if !strings.HasPrefix(server, "http://") && !strings.HasPrefix(server, "https://") {
@@ -187,6 +189,21 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// expandTilde resolves a leading "~/" (or `~\` on Windows) to the user's home
+// directory, leaving anything else — URLs, absolute paths, and "~user" forms we
+// cannot resolve — untouched. On failure it returns the input unchanged so the
+// caller reports the original path rather than a surprising one.
+func expandTilde(p string) string {
+	if !strings.HasPrefix(p, "~/") && !strings.HasPrefix(p, `~\`) {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	return filepath.Join(home, p[2:])
 }
 
 // ExpandDownloadDir resolves ~ in the download directory path.
