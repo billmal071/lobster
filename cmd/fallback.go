@@ -30,6 +30,10 @@ func sharedHealth() *resolver.HealthStore {
 	return sharedHealthStore
 }
 
+// flixhqDomain resolves a healthy FlixHQ mirror, memoized per session.
+// Package var so tests can stub the probe.
+var flixhqDomain = provider.FirstHealthyDomainCached
+
 func cfgQuality() string {
 	if cfg != nil && cfg.Quality != "" {
 		return cfg.Quality
@@ -92,21 +96,32 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 		fallbacks = append(fallbacks, provider.NewFlixHQWS("flixhq.ws"))
 	}
 
-	// flixhq.to is gone — it does not answer at all, so every attempt spends the
-	// full request timeout before the resolver gives up on it. flixhq.ws is a
-	// separate deployment and still works, so nothing is lost by dropping this.
-	// It stays reachable through `--base flixhq.to` for anyone who sees it return.
+	// The flixhq.to engine family (flixhq.to, sflix.to, myflixerz.to, ...) has
+	// been origin-down since ~Aug 2026, so the scraper joins the chain only when
+	// a health probe finds a live mirror. The probe runs in parallel across all
+	// candidates and is cached for the session, so while everything is dead this
+	// costs one probe timeout per run — and the provider revives automatically
+	// the moment any mirror answers again.
+	if _, ok := primary.(*provider.FlixHQ); !ok {
+		var overrides map[string][]string
+		if cfg != nil {
+			overrides = cfg.DomainOverrides
+		}
+		if d := flixhqDomain("flixhq", overrides); d != "" {
+			fallbacks = append(fallbacks, provider.NewFlixHQ(d))
+		}
+	}
 
 	if _, ok := primary.(*provider.KimCartoon); !ok {
 		fallbacks = append(fallbacks, provider.NewKimCartoon("kimcartoon.com.co"))
 	}
 
 	// Last so movie/TV scrapers keep priority; these catch anime the others
-	// lack. AniPub matters most: AllAnime's sources endpoint is crypto-gated
-	// (AA_CRYPTO_MISSING, mid-2026), so its Watch fails until that's cracked.
-	if _, ok := primary.(*provider.AllAnime); !ok {
-		fallbacks = append(fallbacks, provider.NewAllAnime(cfg != nil && cfg.AnimeDub))
-	}
+	// lack. AniPub is the anime path. AllAnime is retired: its API now sits behind a
+	// Cloudflare bot challenge on top of the crypto-gated sources endpoint
+	// (AA_CRYPTO_MISSING, mid-2026), so it can neither search nor stream. The
+	// provider code stays for the day either gate lifts.
+
 	if _, ok := primary.(*provider.AniPub); !ok {
 		fallbacks = append(fallbacks, provider.NewAniPub())
 	}

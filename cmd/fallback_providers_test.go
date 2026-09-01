@@ -83,3 +83,35 @@ func TestFallbackProvidersOmitsDeadFlixHQ(t *testing.T) {
 		t.Fatalf("flixhq.ws must remain: %v", providerNames(got))
 	}
 }
+
+// FlixHQ (the flixhq.to-engine scraper) is gated on a live health probe: it
+// joins the chain only when some mirror in knownDomains/overrides answers, so
+// a dead provider costs one parallel probe per session instead of a full
+// request timeout on every search.
+func TestFallbackProvidersIncludesFlixHQWhenDomainHealthy(t *testing.T) {
+	prev := flixhqDomain
+	flixhqDomain = func(name string, overrides map[string][]string) string { return "flixhq.to" }
+	t.Cleanup(func() { flixhqDomain = prev })
+
+	if !hasProvider[*provider.FlixHQ](fallbackProviders(nil)) {
+		t.Fatal("FlixHQ missing from chain despite a healthy domain")
+	}
+}
+
+func TestFallbackProvidersOmitsFlixHQWhenAllDomainsDead(t *testing.T) {
+	prev := flixhqDomain
+	flixhqDomain = func(name string, overrides map[string][]string) string { return "" }
+	t.Cleanup(func() { flixhqDomain = prev })
+
+	if hasProvider[*provider.FlixHQ](fallbackProviders(nil)) {
+		t.Fatal("FlixHQ present in chain although no domain is healthy")
+	}
+}
+
+// AllAnime is retired: its API sits behind a Cloudflare bot challenge and its
+// watch path has been crypto-gated since mid-2026. AniPub covers anime.
+func TestFallbackProvidersNeverIncludesAllAnime(t *testing.T) {
+	if hasProvider[*provider.AllAnime](fallbackProviders(nil)) {
+		t.Fatal("AllAnime should be retired from the fallback chain")
+	}
+}
