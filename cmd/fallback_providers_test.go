@@ -95,8 +95,12 @@ func TestFallbackProvidersOmitsFlixHQWhenAllDomainsDead(t *testing.T) {
 	flixhqDomain = func(name string, overrides map[string][]string) string { return "" }
 	t.Cleanup(func() { flixhqDomain = prev })
 
-	if hasProvider[*provider.FlixHQ](fallbackProviders(nil)) {
+	got := fallbackProviders(nil)
+	if hasProvider[*provider.FlixHQ](got) {
 		t.Fatal("FlixHQ present in chain although no domain is healthy")
+	}
+	if !hasProvider[*provider.FlixHQWS](got) {
+		t.Fatal("FlixHQWS should stay in the chain even when the flixhq gate is closed")
 	}
 }
 

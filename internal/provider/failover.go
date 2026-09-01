@@ -45,6 +45,7 @@ func checkDomainHealth(domain string) bool {
 			}).DialContext,
 		},
 	}
+	defer client.CloseIdleConnections()
 	resp, err := client.Head(healthURLFor(domain))
 	if err != nil {
 		return false
@@ -106,6 +107,11 @@ var (
 // FirstHealthyDomainCached memoizes FirstHealthyDomain per provider name for
 // the process lifetime. A miss ("" — nothing healthy) is cached too: a dead
 // provider costs one parallel probe per session, not one per search.
+//
+// Invariant: the cache key is providerName only, not overrides. Callers must
+// pass stable overrides for a given provider name within a process; calling
+// with differing overrides for the same name will share whatever result was
+// cached on the first call.
 func FirstHealthyDomainCached(providerName string, overrides map[string][]string) string {
 	domainCacheMu.Lock()
 	if d, ok := domainCache[providerName]; ok {
@@ -143,16 +149,12 @@ func ResolveDomain(configured string, providerName string, overrides map[string]
 	}
 	fmt.Fprintf(os.Stderr, "[failover] %s (%s) is unreachable, trying alternatives...\n", configured, providerName)
 
-	candidates := candidateDomains(providerName, overrides)
-
-	for _, domain := range candidates {
-		if domain == configured {
-			continue // already tried
-		}
-		if checkDomainHealth(domain) {
-			fmt.Fprintf(os.Stderr, "[failover] switching %s to %s\n", providerName, domain)
-			return domain
-		}
+	// Delegate the candidate scan to FirstHealthyDomain so the alternatives
+	// are probed in parallel (~one probeTimeout) instead of sequentially,
+	// which matters once a provider has several known mirrors.
+	if alt := FirstHealthyDomain(providerName, overrides); alt != "" && alt != configured {
+		fmt.Fprintf(os.Stderr, "[failover] switching %s to %s\n", providerName, alt)
+		return alt
 	}
 
 	fmt.Fprintf(os.Stderr, "[failover] no healthy domain found for %s, using %s anyway\n", providerName, configured)

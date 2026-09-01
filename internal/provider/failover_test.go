@@ -115,19 +115,25 @@ func TestFirstHealthyDomainCachedProbesOnce(t *testing.T) {
 func TestFirstHealthyDomainCachedCachesMiss(t *testing.T) {
 	ResetDomainCache()
 	t.Cleanup(ResetDomainCache)
-	pointProbesAt(t, nil)
+	var probes int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&probes, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	pointProbesAt(t, map[string]string{"a.example": srv.URL})
 	ov := map[string][]string{"deadprov": {"a.example"}}
+
 	if got := FirstHealthyDomainCached("deadprov", ov); got != "" {
 		t.Fatalf("got %q, want empty", got)
 	}
-	// Second call must not re-probe; verify by making probes impossible to
-	// distinguish — we just assert it still returns "" instantly.
-	start := time.Now()
+	firstCount := atomic.LoadInt32(&probes)
+
 	if got := FirstHealthyDomainCached("deadprov", ov); got != "" {
 		t.Fatalf("second call got %q, want empty", got)
 	}
-	if time.Since(start) > 100*time.Millisecond {
-		t.Fatal("second call re-probed instead of using the cache")
+	if n := atomic.LoadInt32(&probes); n != firstCount {
+		t.Fatalf("probed %d times after second call, want %d (cached, no re-probe)", n, firstCount)
 	}
 }
 
