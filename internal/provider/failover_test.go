@@ -3,6 +3,8 @@ package provider
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -86,5 +88,52 @@ func TestFirstHealthyDomainUsesKnownDomains(t *testing.T) {
 
 	if got := FirstHealthyDomain("_fhd_test", nil); got != "known.example" {
 		t.Fatalf("got %q, want known.example", got)
+	}
+}
+
+func TestFirstHealthyDomainCachedProbesOnce(t *testing.T) {
+	ResetDomainCache()
+	t.Cleanup(ResetDomainCache)
+	var probes int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&probes, 1)
+	}))
+	defer srv.Close()
+	pointProbesAt(t, map[string]string{"a.example": srv.URL})
+	ov := map[string][]string{"cachedprov": {"a.example"}}
+
+	first := FirstHealthyDomainCached("cachedprov", ov)
+	second := FirstHealthyDomainCached("cachedprov", ov)
+	if first != "a.example" || second != "a.example" {
+		t.Fatalf("got %q then %q, want a.example twice", first, second)
+	}
+	if n := atomic.LoadInt32(&probes); n != 1 {
+		t.Fatalf("probed %d times, want 1 (cached)", n)
+	}
+}
+
+func TestFirstHealthyDomainCachedCachesMiss(t *testing.T) {
+	ResetDomainCache()
+	t.Cleanup(ResetDomainCache)
+	pointProbesAt(t, nil)
+	ov := map[string][]string{"deadprov": {"a.example"}}
+	if got := FirstHealthyDomainCached("deadprov", ov); got != "" {
+		t.Fatalf("got %q, want empty", got)
+	}
+	// Second call must not re-probe; verify by making probes impossible to
+	// distinguish — we just assert it still returns "" instantly.
+	start := time.Now()
+	if got := FirstHealthyDomainCached("deadprov", ov); got != "" {
+		t.Fatalf("second call got %q, want empty", got)
+	}
+	if time.Since(start) > 100*time.Millisecond {
+		t.Fatal("second call re-probed instead of using the cache")
+	}
+}
+
+func TestKnownDomainsFlixhqSeeded(t *testing.T) {
+	want := []string{"flixhq.to", "flixhq.click", "flixhq.pe", "flixhq.bz", "sflix.to", "myflixerz.to"}
+	if !reflect.DeepEqual(knownDomains["flixhq"], want) {
+		t.Fatalf("knownDomains[flixhq] = %v, want %v", knownDomains["flixhq"], want)
 	}
 }

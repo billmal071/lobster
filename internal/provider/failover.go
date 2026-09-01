@@ -14,8 +14,12 @@ import (
 // The first domain in each list is the preferred one.
 var knownDomains = map[string][]string{
 	"kimcartoon": {"kimcartoon.com.co", "kimcartoon.com.rs", "kimcartoon.li"},
-	"flixhq":     {"flixhq.to"},
-	"flixhqws":   {"flixhq.ws"},
+	// flixhq.to's origin cluster has been down since ~Aug 2026 (Cloudflare 522).
+	// sflix.to and myflixerz.to run the identical engine (same markup and /ajax/
+	// endpoints), so the FlixHQ scraper works on them unchanged; they are listed
+	// as revival candidates for whenever any of the family's origins return.
+	"flixhq":   {"flixhq.to", "flixhq.click", "flixhq.pe", "flixhq.bz", "sflix.to", "myflixerz.to"},
+	"flixhqws": {"flixhq.ws"},
 }
 
 // healthURLFor maps a domain to the URL probed for health. A package var so
@@ -92,6 +96,37 @@ func FirstHealthyDomain(providerName string, overrides map[string][]string) stri
 		}
 	}
 	return ""
+}
+
+var (
+	domainCacheMu sync.Mutex
+	domainCache   = map[string]string{}
+)
+
+// FirstHealthyDomainCached memoizes FirstHealthyDomain per provider name for
+// the process lifetime. A miss ("" — nothing healthy) is cached too: a dead
+// provider costs one parallel probe per session, not one per search.
+func FirstHealthyDomainCached(providerName string, overrides map[string][]string) string {
+	domainCacheMu.Lock()
+	if d, ok := domainCache[providerName]; ok {
+		domainCacheMu.Unlock()
+		return d
+	}
+	domainCacheMu.Unlock()
+
+	d := FirstHealthyDomain(providerName, overrides)
+
+	domainCacheMu.Lock()
+	domainCache[providerName] = d
+	domainCacheMu.Unlock()
+	return d
+}
+
+// ResetDomainCache clears the memoized probe results. Test helper.
+func ResetDomainCache() {
+	domainCacheMu.Lock()
+	domainCache = map[string]string{}
+	domainCacheMu.Unlock()
 }
 
 // ResolveDomain picks a working domain for a provider. It checks the
