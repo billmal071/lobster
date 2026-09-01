@@ -28,6 +28,15 @@ func hasProvider[T provider.Provider](ps []provider.Provider) bool {
 	return false
 }
 
+func TestMain(m *testing.M) {
+	// Stub flixhqDomain to prevent live network probes in tests.
+	// Tests that need a healthy or dead result override this with t.Cleanup restore.
+	prev := flixhqDomain
+	flixhqDomain = func(string, map[string][]string) string { return "" }
+	defer func() { flixhqDomain = prev }()
+	m.Run()
+}
+
 // Consumet is a full aggregator that was implemented but never reachable from
 // the fallback chain — it was only ever built as the primary, and only when
 // api_url was set. Wiring it in is the cheapest provider we can add.
@@ -64,23 +73,6 @@ func TestFallbackProvidersOmitsConsumetWithNilConfig(t *testing.T) {
 	got := fallbackProviders(nil)
 	if hasProvider[*provider.Consumet](got) {
 		t.Fatalf("Consumet present with nil cfg: %v", providerNames(got))
-	}
-}
-
-// flixhq.to stopped responding entirely; every attempt burns the full request
-// timeout before the resolver moves on. flixhq.ws is a separate, working
-// provider, so dropping the dead one costs no coverage.
-func TestFallbackProvidersOmitsDeadFlixHQ(t *testing.T) {
-	prev := cfg
-	cfg = &config.Config{}
-	t.Cleanup(func() { cfg = prev })
-
-	got := fallbackProviders(nil)
-	if hasProvider[*provider.FlixHQ](got) {
-		t.Fatalf("dead flixhq.to still in chain: %v", providerNames(got))
-	}
-	if !hasProvider[*provider.FlixHQWS](got) {
-		t.Fatalf("flixhq.ws must remain: %v", providerNames(got))
 	}
 }
 
