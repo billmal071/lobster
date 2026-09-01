@@ -2,9 +2,11 @@ package provider
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,16 +18,80 @@ var knownDomains = map[string][]string{
 	"flixhqws":   {"flixhq.ws"},
 }
 
-// checkDomainHealth sends a HEAD request to https://<domain>/ and returns
-// true if the server responds with a non-error status within 5 seconds.
+// healthURLFor maps a domain to the URL probed for health. A package var so
+// tests can point probes at httptest servers instead of the live network.
+var healthURLFor = func(domain string) string { return "https://" + domain + "/" }
+
+// probeTimeout bounds a single health probe. Package var for tests.
+var probeTimeout = 3 * time.Second
+
+// checkDomainHealth sends a HEAD request to the domain's health URL and
+// returns true if the server responds with a non-5xx status in time.
 func checkDomainHealth(domain string) bool {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Head("https://" + domain + "/")
+	// Explicit dialer with Happy Eyeballs (FallbackDelay > 0): a broken IPv6
+	// route must not make a live domain look dead — the dial races v6 and v4
+	// and takes whichever connects. Go enables this by default; the explicit
+	// dialer pins the behavior so a future custom transport can't lose it.
+	client := &http.Client{
+		Timeout: probeTimeout,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:       probeTimeout,
+				FallbackDelay: 100 * time.Millisecond,
+			}).DialContext,
+		},
+	}
+	resp, err := client.Head(healthURLFor(domain))
 	if err != nil {
 		return false
 	}
 	resp.Body.Close()
 	return resp.StatusCode < 500
+}
+
+// candidateDomains returns the preference-ordered candidate list for a
+// provider: config overrides first (case-insensitive key match), then the
+// built-in known domains.
+func candidateDomains(providerName string, overrides map[string][]string) []string {
+	var candidates []string
+	if overrides != nil {
+		lowerName := strings.ToLower(providerName)
+		for key, domains := range overrides {
+			if strings.ToLower(key) == lowerName {
+				candidates = append(candidates, domains...)
+				break
+			}
+		}
+	}
+	return append(candidates, knownDomains[providerName]...)
+}
+
+// FirstHealthyDomain probes every candidate domain for a provider in parallel
+// and returns the first healthy one in preference order, or "" if none
+// respond. Wall-clock cost is roughly one probeTimeout regardless of how many
+// candidates are dead, which is what makes gating a usually-dead provider
+// affordable.
+func FirstHealthyDomain(providerName string, overrides map[string][]string) string {
+	candidates := candidateDomains(providerName, overrides)
+	if len(candidates) == 0 {
+		return ""
+	}
+	healthy := make([]bool, len(candidates))
+	var wg sync.WaitGroup
+	for i, d := range candidates {
+		wg.Add(1)
+		go func(i int, d string) {
+			defer wg.Done()
+			healthy[i] = checkDomainHealth(d)
+		}(i, d)
+	}
+	wg.Wait()
+	for i, ok := range healthy {
+		if ok {
+			return candidates[i]
+		}
+	}
+	return ""
 }
 
 // ResolveDomain picks a working domain for a provider. It checks the
@@ -42,19 +108,7 @@ func ResolveDomain(configured string, providerName string, overrides map[string]
 	}
 	fmt.Fprintf(os.Stderr, "[failover] %s (%s) is unreachable, trying alternatives...\n", configured, providerName)
 
-	// Build candidate list: config overrides first, then built-in known domains.
-	// Override keys are matched case-insensitively.
-	var candidates []string
-	if overrides != nil {
-		lowerName := strings.ToLower(providerName)
-		for key, domains := range overrides {
-			if strings.ToLower(key) == lowerName {
-				candidates = append(candidates, domains...)
-				break
-			}
-		}
-	}
-	candidates = append(candidates, knownDomains[providerName]...)
+	candidates := candidateDomains(providerName, overrides)
 
 	for _, domain := range candidates {
 		if domain == configured {
