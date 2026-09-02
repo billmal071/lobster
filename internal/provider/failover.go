@@ -102,7 +102,19 @@ func FirstHealthyDomain(providerName string, overrides map[string][]string) stri
 var (
 	domainCacheMu sync.Mutex
 	domainCache   = map[string]string{}
+	// domainProbes tracks probes currently in flight, keyed by provider name.
+	// Without it two callers can miss the cache at the same instant and both
+	// probe every candidate; the download manager runs several workers by
+	// default and each builds the fallback chain, so that is a real path.
+	domainProbes = map[string]*domainProbe{}
 )
+
+// domainProbe is one in-flight probe. done is closed when result is set, so
+// later callers wait rather than starting a probe of their own.
+type domainProbe struct {
+	done   chan struct{}
+	result string
+}
 
 // FirstHealthyDomainCached memoizes FirstHealthyDomain per provider name for
 // the process lifetime. A miss ("" — nothing healthy) is cached too: a dead
@@ -118,14 +130,29 @@ func FirstHealthyDomainCached(providerName string, overrides map[string][]string
 		domainCacheMu.Unlock()
 		return d
 	}
+	// Someone else is already probing this provider: wait for their result
+	// instead of duplicating the work.
+	if p, ok := domainProbes[providerName]; ok {
+		domainCacheMu.Unlock()
+		<-p.done
+		return p.result
+	}
+	p := &domainProbe{done: make(chan struct{})}
+	domainProbes[providerName] = p
 	domainCacheMu.Unlock()
 
-	d := FirstHealthyDomain(providerName, overrides)
+	// Publish to waiters even if FirstHealthyDomain panics, so a failure here
+	// cannot strand every other caller blocked on done forever.
+	defer func() {
+		domainCacheMu.Lock()
+		domainCache[providerName] = p.result
+		delete(domainProbes, providerName)
+		domainCacheMu.Unlock()
+		close(p.done)
+	}()
 
-	domainCacheMu.Lock()
-	domainCache[providerName] = d
-	domainCacheMu.Unlock()
-	return d
+	p.result = FirstHealthyDomain(providerName, overrides)
+	return p.result
 }
 
 // ResetDomainCache clears the memoized probe results. Test helper.

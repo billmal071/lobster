@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -46,8 +47,11 @@ func TestFirstHealthyDomainAllDeadReturnsEmpty(t *testing.T) {
 }
 
 func TestFirstHealthyDomainHangingProbeDoesNotBlock(t *testing.T) {
+	// Block until the client gives up rather than sleeping a fixed 10s: a bare
+	// sleep keeps running after the probe timeout cancels the request, and
+	// hang.Close() then waits the full remainder, adding ~10s to the suite.
 	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(10 * time.Second)
+		<-r.Context().Done()
 	}))
 	defer hang.Close()
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
@@ -141,5 +145,52 @@ func TestKnownDomainsFlixhqSeeded(t *testing.T) {
 	want := []string{"flixhq.to", "flixhq.click", "flixhq.pe", "flixhq.bz", "sflix.to", "myflixerz.to"}
 	if !reflect.DeepEqual(knownDomains["flixhq"], want) {
 		t.Fatalf("knownDomains[flixhq] = %v, want %v", knownDomains["flixhq"], want)
+	}
+}
+
+// Two goroutines missing the cache at the same moment must produce one probe,
+// not two. The download manager runs several workers by default, and each one
+// builds the fallback chain, so this path is genuinely concurrent in
+// production rather than only in tests.
+func TestFirstHealthyDomainCachedCoalescesConcurrentMisses(t *testing.T) {
+	ResetDomainCache()
+	t.Cleanup(ResetDomainCache)
+
+	var probes int32
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&probes, 1)
+		// Hold the first probe open so a second caller is guaranteed to arrive
+		// while it is still in flight; without that the race is timing-dependent
+		// and the test would pass by luck.
+		<-release
+	}))
+	defer srv.Close()
+	pointProbesAt(t, map[string]string{"a.example": srv.URL})
+	ov := map[string][]string{"raceprov": {"a.example"}}
+
+	const callers = 2
+	got := make([]string, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			got[i] = FirstHealthyDomainCached("raceprov", ov)
+		}(i)
+	}
+
+	// Give both goroutines time to reach the probe before letting it answer.
+	time.Sleep(200 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	if n := atomic.LoadInt32(&probes); n != 1 {
+		t.Fatalf("probed %d times, want 1 (concurrent misses must coalesce)", n)
+	}
+	for i, g := range got {
+		if g != "a.example" {
+			t.Fatalf("caller %d got %q, want a.example", i, g)
+		}
 	}
 }
