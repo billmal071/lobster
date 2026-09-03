@@ -34,6 +34,9 @@ func init() {
 	playCmd.Flags().StringVar(&flagRef, "ref", "", "Ref from lobster find (required)")
 	playCmd.Flags().IntVar(&flagSeason, "season", 0, "Season number (required for TV)")
 	playCmd.Flags().IntVar(&flagEpisode, "episode", 0, "Episode number (required for TV)")
+	playCmd.Flags().BoolVar(&flagDetach, "detach", false, "Start playback in the background and return immediately")
+	playCmd.Flags().BoolVar(&flagSupervised, "supervised", false, "Internal: marks the background supervisor process")
+	_ = playCmd.Flags().MarkHidden("supervised")
 }
 
 func playRun(cmd *cobra.Command, args []string) error {
@@ -52,6 +55,10 @@ func playRun(cmd *cobra.Command, args []string) error {
 	// it is not supported here.
 	if flagDownload != "" {
 		return emitErr("unsupported", 1, "--download is not supported by 'play'; use the interactive CLI")
+	}
+
+	if flagDetach && !flagSupervised {
+		return playDetached(cmd, r)
 	}
 
 	// Honor the ref's originating base unless the caller explicitly passed
