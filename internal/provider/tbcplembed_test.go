@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -83,7 +84,7 @@ func TestWatchSniffsIframeAndExtracts(t *testing.T) {
 
 	p := NewTBCPLEmbed([]tbcpl.Site{{Name: "X", URL: site.URL, Category: "movies", Status: "trusted", Enabled: true}})
 	var sniffed string
-	p.resolve = func(embed, referer string) (*media.Stream, error) {
+	p.resolve = func(_ context.Context, embed, referer string) (*media.Stream, error) {
 		sniffed = embed
 		return &media.Stream{URL: "https://cdn.example/x.m3u8"}, nil
 	}

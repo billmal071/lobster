@@ -43,7 +43,7 @@ type TBCPLEmbed struct {
 	sites   []tbcpl.Site
 	log     func(string, ...any)
 	quality string
-	resolve func(embed, referer string) (*media.Stream, error)
+	resolve func(ctx context.Context, embed, referer string) (*media.Stream, error)
 }
 
 // NewTBCPLEmbed keeps only movie/anime sites from the supplied catalog slice.
@@ -230,8 +230,15 @@ func fetchBytes(ctx context.Context, client *http.Client, rawURL string) ([]byte
 	return io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 }
 
-func (p *TBCPLEmbed) resolveDefault(embed, referer string) (*media.Stream, error) {
+func (p *TBCPLEmbed) resolveDefault(ctx context.Context, embed, referer string) (*media.Stream, error) {
 	ex, target := extract.ResolveForURL(embed, referer)
+	// Prefer a context-aware extractor so the watch budget bounds stream
+	// resolution too, not just the page fetches that precede it.
+	if cex, ok := ex.(interface {
+		ExtractContext(ctx context.Context, embedURL, preferredQuality string) (*media.Stream, error)
+	}); ok {
+		return cex.ExtractContext(ctx, target, p.quality)
+	}
 	return ex.Extract(target, p.quality)
 }
 
@@ -274,7 +281,7 @@ func (p *TBCPLEmbed) Watch(mediaID, episodeID, server, quality string) (*media.S
 				continue
 			}
 			embed := resolveIframeURL(cand, string(m[1]))
-			stream, err := p.resolve(embed, origin+"/")
+			stream, err := p.resolve(ctx, embed, origin+"/")
 			if err != nil || stream == nil || stream.URL == "" {
 				continue
 			}
