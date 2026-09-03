@@ -72,6 +72,7 @@ func init() {
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(findCmd)
 	rootCmd.AddCommand(episodesCmd)
+	rootCmd.AddCommand(playCmd)
 	rootCmd.AddCommand(historyCmd)
 	rootCmd.AddCommand(trendingCmd)
 	rootCmd.AddCommand(recentCmd)
