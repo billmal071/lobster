@@ -70,6 +70,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&flagDebug, "debug", "x", false, "Debug logging to stderr")
 
 	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(findCmd)
 	rootCmd.AddCommand(historyCmd)
 	rootCmd.AddCommand(trendingCmd)
 	rootCmd.AddCommand(recentCmd)
