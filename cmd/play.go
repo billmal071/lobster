@@ -16,9 +16,11 @@ var playCmd = &cobra.Command{
 	Short: "Play a ref returned by lobster find (no prompts)",
 	Long: `Play the exact title a ref identifies, without prompting.
 
-The ref pins the selection — title, year, type and originating base. It does
-not pin the stream: resolution still runs through the fallback chain at play
-time, so if the original source is down another provider's copy may be served.
+The ref pins the selection — title, year, type and originating base. The
+base is used as the resolution base unless --base is passed explicitly on
+this invocation, which overrides it. Neither pins the stream: resolution
+still runs through the fallback chain at play time, so if the original
+source is down another provider's copy may be served.
 
 For a series, both --season and --episode are required; without them playback
 would fall through to the interactive picker and hang.`,
@@ -50,6 +52,17 @@ func playRun(cmd *cobra.Command, args []string) error {
 	// it is not supported here.
 	if flagDownload != "" {
 		return emitErr("unsupported", 1, "--download is not supported by 'play'; use the interactive CLI")
+	}
+
+	// Honor the ref's originating base unless the caller explicitly passed
+	// --base on this invocation. An ID found under `--base yts` is meaningless
+	// under another base (playRef doc comment, cmd/ref.go) — without this, a
+	// `find --base yts` result would silently resolve against whatever base is
+	// currently configured, losing the ID's exact-match bonus and letting a
+	// different provider's copy be served. An explicit --base is a deliberate
+	// override and must win.
+	if r.Base != "" && cfg != nil && !cmd.Flags().Changed("base") {
+		cfg.Base = r.Base
 	}
 
 	var p provider.Provider = agentProvider()
