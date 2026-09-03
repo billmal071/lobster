@@ -62,6 +62,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagBase, "base", "", "Content source: flixhq.to | flixhq.ws | kimcartoon.com.co | soap2day | moviebox | vaplayer | vidnest | tbcpl | 1shows.org | allanime | yts")
 	rootCmd.PersistentFlags().BoolVarP(&flagDebug, "debug", "x", false, "Debug logging to stderr")
 
+	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(historyCmd)
 	rootCmd.AddCommand(trendingCmd)
 	rootCmd.AddCommand(recentCmd)
