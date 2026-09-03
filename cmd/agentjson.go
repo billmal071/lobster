@@ -38,10 +38,12 @@ func (e *exitError) Unwrap() error { return e.err }
 // emitJSON writes one payload to stdout with the schema marker attached.
 func emitJSON(payload map[string]any) error {
 	out := make(map[string]any, len(payload)+1)
-	out["schema"] = agentSchema
 	for k, v := range payload {
 		out[k] = v
 	}
+	// Set after the copy so a caller-supplied "schema" key can never win;
+	// the envelope's schema marker must always be authoritative.
+	out["schema"] = agentSchema
 	enc := json.NewEncoder(agentOut)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
