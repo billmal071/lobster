@@ -49,7 +49,7 @@ func searchRun(cmd *cobra.Command, args []string) error {
 		}
 
 		for {
-			selected, lineup, startIdx, selectedProvider, err := tui.StartApp(p, cfg, mgr, fallbackSearchProviders(p)...)
+			selected, lineup, startIdx, selectedProvider, err := tui.StartApp(p, cfg, liveTVSources(), mgr, fallbackSearchProviders(p)...)
 			if err != nil {
 				return err
 			}

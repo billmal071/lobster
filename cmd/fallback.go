@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"lobster/internal/config"
 	"lobster/internal/dlmanager"
 	"lobster/internal/media"
 	"lobster/internal/provider"
 	"lobster/internal/resolver"
+	"lobster/internal/tbcpl"
 	"lobster/internal/torrentstream"
 )
 
@@ -18,6 +20,55 @@ var (
 	sharedHealthOnce  sync.Once
 	sharedHealthStore *resolver.HealthStore
 )
+
+var (
+	tbcplCatOnce sync.Once
+	tbcplCatVal  *tbcpl.Catalog
+)
+
+// tbcplCatalog loads the TBCPL catalog once per process, or nil if disabled.
+func tbcplCatalog() *tbcpl.Catalog {
+	tbcplCatOnce.Do(func() {
+		if cfg == nil || !cfg.TBCPLFeed {
+			return
+		}
+		cache, err := config.TBCPLCachePath()
+		if err != nil {
+			return
+		}
+		cl := tbcpl.NewClient(cache, 12*time.Hour, debugf)
+		region := ""
+		if cfg != nil {
+			region = cfg.TBCPLRegion
+		}
+		tbcplCatVal = cl.LoadMerged(context.Background(), region)
+	})
+	return tbcplCatVal
+}
+
+// liveTVSources returns configured IPTV sources plus TBCPL live-tv playlists.
+func liveTVSources() []string {
+	var sources []string
+	if cfg != nil {
+		sources = cfg.LiveTV.Sources()
+	}
+	cat := tbcplCatalog()
+	if cat == nil {
+		return sources
+	}
+	include := cfg != nil && cfg.TBCPLIncludeUntrusted
+	seen := map[string]bool{}
+	for _, s := range sources {
+		seen[s] = true
+	}
+	for _, pl := range cat.LivePlaylists(include) {
+		if !seen[pl] {
+			sources = append(sources, pl)
+			seen[pl] = true
+		}
+	}
+	return sources
+}
 
 func sharedHealth() *resolver.HealthStore {
 	sharedHealthOnce.Do(func() {
@@ -125,6 +176,15 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 
 	if _, ok := primary.(*provider.AniPub); !ok {
 		fallbacks = append(fallbacks, provider.NewAniPub())
+	}
+
+	if cat := tbcplCatalog(); cat != nil {
+		sites := cat.EligibleSites(cfg != nil && cfg.TBCPLIncludeUntrusted)
+		if _, ok := primary.(*provider.TBCPLEmbed); !ok && len(sites) > 0 {
+			embed := provider.NewTBCPLEmbed(sites)
+			embed.SetLogger(debugf)
+			fallbacks = append(fallbacks, embed)
+		}
 	}
 
 	// YTS last, and only on request. It resolves to a magnet rather than an HTTP

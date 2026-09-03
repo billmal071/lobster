@@ -268,6 +268,30 @@ func TestValidateAcceptsBestQuality(t *testing.T) {
 	}
 }
 
+func TestTBCPLDefaults(t *testing.T) {
+	c := Default()
+	if !c.TBCPLFeed {
+		t.Errorf("TBCPLFeed default = false, want true")
+	}
+	if c.TBCPLRegion != "" {
+		t.Errorf("TBCPLRegion default = %q, want empty", c.TBCPLRegion)
+	}
+	if c.TBCPLIncludeUntrusted {
+		t.Errorf("TBCPLIncludeUntrusted default = true, want false")
+	}
+}
+
+func TestTBCPLCachePath(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	p, err := TBCPLCachePath()
+	if err != nil {
+		t.Fatalf("TBCPLCachePath: %v", err)
+	}
+	if filepath.Base(p) != "tbcpl-cache.json" {
+		t.Errorf("cache path base = %q, want tbcpl-cache.json", filepath.Base(p))
+	}
+}
+
 // A "~/..." playlist path must expand like download_dir does, rather than
 // reaching os.ReadFile verbatim and failing with "no such file or directory".
 func TestLiveTVSourcesExpandsTilde(t *testing.T) {

@@ -3,7 +3,10 @@ package cmd
 import (
 	"testing"
 
+	"lobster/internal/config"
 	"lobster/internal/media"
+	"lobster/internal/provider"
+	"lobster/internal/tbcpl"
 )
 
 func TestFallbackCandidatesPreferSameType(t *testing.T) {
@@ -57,5 +60,30 @@ func TestMergeSubtitlesDedupesByURL(t *testing.T) {
 	}
 	if got[0].Label != "English" || got[1].Label != "English SDH" {
 		t.Fatalf("unexpected subtitles: %+v", got)
+	}
+}
+
+func TestFallbackProvidersIncludesTBCPLEmbed(t *testing.T) {
+	seedTBCPLCatalog(t, &config.Config{TBCPLFeed: true}, &tbcpl.Catalog{Sites: []tbcpl.Site{
+		{Name: "Fixture", URL: "https://fixture.example/", Category: "movies", Status: "trusted", Enabled: true},
+	}})
+	fbs := fallbackProviders(provider.NewMovieBox())
+	found := false
+	for _, p := range fbs {
+		if _, ok := p.(*provider.TBCPLEmbed); ok {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected TBCPLEmbed in fallback providers when feed enabled")
+	}
+}
+
+func TestFallbackProvidersOmitsTBCPLEmbedWhenDisabled(t *testing.T) {
+	seedTBCPLCatalog(t, &config.Config{TBCPLFeed: false}, nil)
+	for _, p := range fallbackProviders(provider.NewMovieBox()) {
+		if _, ok := p.(*provider.TBCPLEmbed); ok {
+			t.Fatal("TBCPLEmbed present but feed disabled")
+		}
 	}
 }

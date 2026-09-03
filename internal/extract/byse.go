@@ -1,6 +1,7 @@
 package extract
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/base64"
@@ -49,12 +50,12 @@ type byseDecrypted struct {
 }
 
 type byseSource struct {
-	Quality    string `json:"quality"`
-	Label      string `json:"label"`
-	MimeType   string `json:"mime_type"`
-	URL        string `json:"url"`
-	BitrateKbps int   `json:"bitrate_kbps"`
-	Height     int    `json:"height"`
+	Quality     string `json:"quality"`
+	Label       string `json:"label"`
+	MimeType    string `json:"mime_type"`
+	URL         string `json:"url"`
+	BitrateKbps int    `json:"bitrate_kbps"`
+	Height      int    `json:"height"`
 }
 
 type byseTrack struct {
@@ -66,10 +67,17 @@ type byseTrack struct {
 
 // Extract resolves a vidcdn.co or weneverbeenfree.com embed URL into a stream.
 func (b *ByseExtractor) Extract(embedURL string, preferredQuality string) (*media.Stream, error) {
+	return b.ExtractContext(context.Background(), embedURL, preferredQuality)
+}
+
+// ExtractContext is Extract bounded by ctx: both the redirect resolution and
+// the playback API request abort when the caller's deadline expires, so a
+// watch budget upstream actually limits stream resolution.
+func (b *ByseExtractor) ExtractContext(ctx context.Context, embedURL string, preferredQuality string) (*media.Stream, error) {
 	// Step 1: Resolve the video code.
 	// embedURL may be a vidcdn.co URL that redirects to weneverbeenfree.com,
 	// or directly a weneverbeenfree.com URL.
-	code, err := b.resolveCode(embedURL)
+	code, err := b.resolveCode(ctx, embedURL)
 	if err != nil {
 		return nil, fmt.Errorf("resolving video code: %w", err)
 	}
@@ -78,7 +86,7 @@ func (b *ByseExtractor) Extract(embedURL string, preferredQuality string) (*medi
 	host := "weneverbeenfree.com"
 	apiURL := fmt.Sprintf("https://%s/api/videos/%s/embed/playback", host, code)
 
-	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
@@ -170,7 +178,7 @@ func (b *ByseExtractor) Extract(embedURL string, preferredQuality string) (*medi
 
 // resolveCode extracts the video code from an embed URL.
 // Handles vidcdn.co redirects and direct weneverbeenfree.com URLs.
-func (b *ByseExtractor) resolveCode(embedURL string) (string, error) {
+func (b *ByseExtractor) resolveCode(ctx context.Context, embedURL string) (string, error) {
 	if strings.Contains(embedURL, "weneverbeenfree.com") {
 		return extractCodeFromPath(embedURL), nil
 	}
@@ -182,7 +190,7 @@ func (b *ByseExtractor) resolveCode(embedURL string) (string, error) {
 		},
 	}
 
-	req, err := http.NewRequest(http.MethodGet, embedURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, embedURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("creating redirect request: %w", err)
 	}

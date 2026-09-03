@@ -187,3 +187,26 @@ func ResolveDomain(configured string, providerName string, overrides map[string]
 	fmt.Fprintf(os.Stderr, "[failover] no healthy domain found for %s, using %s anyway\n", providerName, configured)
 	return configured
 }
+
+// MergeOverrides unions two provider->domains maps, de-duplicating per key
+// while preserving first-seen order.
+func MergeOverrides(base, extra map[string][]string) map[string][]string {
+	out := map[string][]string{}
+	add := func(src map[string][]string) {
+		for k, vs := range src {
+			seen := map[string]bool{}
+			for _, existing := range out[k] {
+				seen[existing] = true
+			}
+			for _, v := range vs {
+				if !seen[v] {
+					out[k] = append(out[k], v)
+					seen[v] = true
+				}
+			}
+		}
+	}
+	add(base)
+	add(extra)
+	return out
+}

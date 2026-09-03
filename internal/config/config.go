@@ -34,6 +34,9 @@ type Config struct {
 	MaxRetries             int                 `toml:"max_retries"`      // retry count for segment/file downloads
 	DomainOverrides        map[string][]string `toml:"domain_overrides"` // provider name -> fallback domains
 	AnimeDub               bool                `toml:"anime_dub"`
+	TBCPLFeed              bool                `toml:"tbcpl_feed"`
+	TBCPLRegion            string              `toml:"tbcpl_region"`
+	TBCPLIncludeUntrusted  bool                `toml:"tbcpl_include_untrusted"`
 	// TorrentFallback lets the resolver fall back to YTS when the streaming
 	// providers fail. Off by default and deliberately so: YTS resolves to a
 	// magnet, so falling back to it joins a BitTorrent swarm and exposes the
@@ -101,6 +104,7 @@ func Default() *Config {
 		StallTimeout:           60,
 		MaxRetries:             3,
 		SubDLAPIKey:            "KCCm2v2q5ZObZOPQgQX8jpQ3-07IEY2c",
+		TBCPLFeed:              true,
 		LiveTV:                 LiveTVConfig{IPTVOrg: true},
 	}
 }
@@ -248,6 +252,15 @@ func HealthPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "health.json"), nil
+}
+
+// TBCPLCachePath returns the path to the cached TBCPL catalog JSON.
+func TBCPLCachePath() (string, error) {
+	dir, err := configDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "tbcpl-cache.json"), nil
 }
 
 // DownloadsDBPath returns the path to the downloads SQLite database.

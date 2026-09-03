@@ -30,6 +30,7 @@ Lobster is a security-hardened Go rewrite of [lobster.sh](https://github.com/jus
 - 🎞 Quality selection — 360p, 480p, 720p, 1080p (HLS variant matching)
 - 📺 Live TV — free IPTV channels including a 456-channel Sports category ([jump to guide](#live-tv-and-sports))
 - 📦 JSON output mode for scripting and piping
+- 🛰 TBCPL catalog feed — keeps mirror domains fresh and broadens source/live-TV coverage
 
 See [GUIDE.md](GUIDE.md) for detailed usage instructions.
 
