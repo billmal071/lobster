@@ -20,6 +20,10 @@ func TestFindEmitsResultsWithoutPrompting(t *testing.T) {
 	cfg = &config.Config{Base: "flixhq.ws"}
 	t.Cleanup(func() { cfg = prevCfg })
 
+	prevProv := agentProvider
+	agentProvider = func() provider.Provider { return &stubProvider{} }
+	t.Cleanup(func() { agentProvider = prevProv })
+
 	prevSearch := agentSearch
 	agentSearch = func(primary provider.Provider, fallbacks []provider.Provider, query string) ([]media.SearchResult, error) {
 		return []media.SearchResult{
@@ -82,6 +86,10 @@ func TestFindNoResultsExitsTwo(t *testing.T) {
 	cfg = &config.Config{Base: "flixhq.ws"}
 	t.Cleanup(func() { cfg = prevCfg })
 
+	prevProv := agentProvider
+	agentProvider = func() provider.Provider { return &stubProvider{} }
+	t.Cleanup(func() { agentProvider = prevProv })
+
 	prevSearch := agentSearch
 	agentSearch = func(provider.Provider, []provider.Provider, string) ([]media.SearchResult, error) {
 		return nil, nil
@@ -105,6 +113,10 @@ func TestFindLimitTruncates(t *testing.T) {
 	prevCfg := cfg
 	cfg = &config.Config{Base: "flixhq.ws"}
 	t.Cleanup(func() { cfg = prevCfg })
+
+	prevProv := agentProvider
+	agentProvider = func() provider.Provider { return &stubProvider{} }
+	t.Cleanup(func() { agentProvider = prevProv })
 
 	prevSearch := agentSearch
 	agentSearch = func(provider.Provider, []provider.Provider, string) ([]media.SearchResult, error) {

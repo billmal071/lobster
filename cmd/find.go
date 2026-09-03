@@ -17,6 +17,10 @@ var (
 // fixed results instead of reaching the network.
 var agentSearch = gatherSearchResults
 
+// agentProvider builds the primary provider. A package var so tests can supply
+// a stub instead of one that reaches the network.
+var agentProvider = newProvider
+
 var findCmd = &cobra.Command{
 	Use:   "find <query>",
 	Short: "Search for a movie or TV show and print JSON (no prompts)",
@@ -34,7 +38,7 @@ opaque "ref" which is the handle to pass to "lobster play --ref".`,
 func findRun(cmd *cobra.Command, args []string) error {
 	query := strings.Join(args, " ")
 
-	p := newProvider()
+	p := agentProvider()
 	results, err := agentSearch(p, fallbackSearchProviders(p), query)
 	if err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "search failed: %v", err)
