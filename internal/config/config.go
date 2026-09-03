@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -36,7 +37,13 @@ type Config struct {
 	TBCPLFeed              bool                `toml:"tbcpl_feed"`
 	TBCPLRegion            string              `toml:"tbcpl_region"`
 	TBCPLIncludeUntrusted  bool                `toml:"tbcpl_include_untrusted"`
-	LiveTV                 LiveTVConfig        `toml:"live_tv"`
+	// TorrentFallback lets the resolver fall back to YTS when the streaming
+	// providers fail. Off by default and deliberately so: YTS resolves to a
+	// magnet, so falling back to it joins a BitTorrent swarm and exposes the
+	// user's IP to its peers. That is worth doing on request, not silently
+	// because a scraper broke.
+	TorrentFallback bool         `toml:"torrent_fallback"`
+	LiveTV          LiveTVConfig `toml:"live_tv"`
 }
 
 // XtreamConfig holds optional Xtream-codes credentials for a paid IPTV sub.
@@ -62,7 +69,9 @@ func (c LiveTVConfig) Sources() []string {
 	if c.IPTVOrg {
 		s = append(s, iptvOrgPlaylist)
 	}
-	s = append(s, c.Playlists...)
+	for _, pl := range c.Playlists {
+		s = append(s, expandTilde(pl))
+	}
 	if c.Xtream.Server != "" {
 		server := c.Xtream.Server
 		if !strings.HasPrefix(server, "http://") && !strings.HasPrefix(server, "https://") {
@@ -191,6 +200,27 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// expandTilde resolves a leading "~/" (or `~\` on Windows) to the user's home
+// directory, leaving anything else — URLs, absolute paths, and "~user" forms we
+// cannot resolve — untouched. On failure it returns the input unchanged so the
+// caller reports the original path rather than a surprising one.
+//
+// The backslash form is gated on Windows deliberately. Everywhere else a
+// backslash is an ordinary filename character, so `~\playlists\mine.m3u` names
+// a real relative path; expanding it there would quietly load a different file
+// than the one written in the config.
+func expandTilde(p string) string {
+	if !strings.HasPrefix(p, "~/") &&
+		!(runtime.GOOS == "windows" && strings.HasPrefix(p, `~\`)) {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	return filepath.Join(home, p[2:])
 }
 
 // ExpandDownloadDir resolves ~ in the download directory path.

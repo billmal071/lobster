@@ -149,6 +149,13 @@ auto_next = true
 
 # Download directory
 download_dir = "~/Videos/lobster"
+
+# Fall back to YTS torrents when every streaming provider fails.
+# Off by default on purpose: YTS resolves to a magnet, so this makes lobster
+# join a BitTorrent swarm, and your IP is visible to its peers. `--base yts`
+# always works without this — the setting only controls automatic fallback.
+# Torrent sources can be played but not downloaded with --download.
+torrent_fallback = false
 ```
 
 ### TBCPL catalog feed

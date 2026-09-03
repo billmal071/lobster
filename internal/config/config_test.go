@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 )
@@ -288,5 +289,58 @@ func TestTBCPLCachePath(t *testing.T) {
 	}
 	if filepath.Base(p) != "tbcpl-cache.json" {
 		t.Errorf("cache path base = %q, want tbcpl-cache.json", filepath.Base(p))
+	}
+}
+
+// A "~/..." playlist path must expand like download_dir does, rather than
+// reaching os.ReadFile verbatim and failing with "no such file or directory".
+func TestLiveTVSourcesExpandsTilde(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir: %v", err)
+	}
+	c := LiveTVConfig{
+		IPTVOrg: false,
+		Playlists: []string{
+			"~/playlists/mine.m3u",
+			"https://example.com/keep.m3u8", // URLs must pass through untouched
+			"/already/absolute.m3u",
+			"~notauser/literal.m3u", // only "~/" is a home reference
+		},
+	}
+	got := c.Sources()
+	want := []string{
+		filepath.Join(home, "playlists/mine.m3u"),
+		"https://example.com/keep.m3u8",
+		"/already/absolute.m3u",
+		"~notauser/literal.m3u",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Sources() = %v, want %v", got, want)
+	}
+}
+
+// The `~\` form is a home reference on Windows only. On Unix a backslash is an
+// ordinary filename character, so `~\playlists\mine.m3u` names a real relative
+// path and expanding it silently loads a different file than the user asked
+// for. expandTilde's own doc comment says "on Windows"; this pins the code to
+// that promise.
+func TestExpandTildeBackslashIsWindowsOnly(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir: %v", err)
+	}
+	const in = `~\playlists\mine.m3u`
+	got := expandTilde(in)
+
+	if runtime.GOOS == "windows" {
+		want := filepath.Join(home, `playlists\mine.m3u`)
+		if got != want {
+			t.Fatalf("expandTilde(%q) = %q, want %q (backslash is a home reference on Windows)", in, got, want)
+		}
+		return
+	}
+	if got != in {
+		t.Fatalf("expandTilde(%q) = %q, want it unchanged: on %s a backslash is part of the filename, not a separator", in, got, runtime.GOOS)
 	}
 }

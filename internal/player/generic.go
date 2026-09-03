@@ -34,7 +34,7 @@ func (g *Generic) Play(stream *media.Stream, title string, startPos float64, sub
 
 	// Both iina and celluloid accept mpv-style flags
 	args = append(args, "--force-media-title="+title)
-	args = append(args, audioLangArgs(g.audioLang)...)
+	args = append(args, genericAudioLangArgs(g.name, g.audioLang)...)
 	args = append(args, genericHeaderArgs(stream)...)
 
 	if startPos > 0 {

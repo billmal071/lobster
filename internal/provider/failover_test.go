@@ -1,6 +1,199 @@
 package provider
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// pointProbesAt makes every probed "domain" hit the given handler by rewriting
+// the probe URL. The domain string itself is ignored except when it matches a
+// key in routes, which maps domain -> httptest server URL. Unrouted domains
+// get an unreachable address so they fail fast.
+func pointProbesAt(t *testing.T, routes map[string]string) {
+	t.Helper()
+	old := healthURLFor
+	healthURLFor = func(domain string) string {
+		if u, ok := routes[domain]; ok {
+			return u
+		}
+		return "http://127.0.0.1:1/" // closed port: immediate refusal
+	}
+	t.Cleanup(func() { healthURLFor = old })
+}
+
+func TestFirstHealthyDomainPrefersListOrder(t *testing.T) {
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer ok.Close()
+	pointProbesAt(t, map[string]string{"b.example": ok.URL, "c.example": ok.URL})
+
+	got := FirstHealthyDomain("testprov", map[string][]string{
+		"testprov": {"a.example", "b.example", "c.example"},
+	})
+	if got != "b.example" {
+		t.Fatalf("got %q, want b.example (first healthy in preference order)", got)
+	}
+}
+
+func TestFirstHealthyDomainAllDeadReturnsEmpty(t *testing.T) {
+	pointProbesAt(t, nil)
+	if got := FirstHealthyDomain("testprov", map[string][]string{"testprov": {"a.example", "b.example"}}); got != "" {
+		t.Fatalf("got %q, want empty", got)
+	}
+}
+
+func TestFirstHealthyDomainHangingProbeDoesNotBlock(t *testing.T) {
+	// Block until the client gives up rather than sleeping a fixed 10s: a bare
+	// sleep keeps running after the probe timeout cancels the request, and
+	// hang.Close() then waits the full remainder, adding ~10s to the suite.
+	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer hang.Close()
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer ok.Close()
+	pointProbesAt(t, map[string]string{"hang.example": hang.URL, "ok.example": ok.URL})
+
+	oldTimeout := probeTimeout
+	probeTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { probeTimeout = oldTimeout })
+
+	start := time.Now()
+	got := FirstHealthyDomain("testprov", map[string][]string{
+		"testprov": {"hang.example", "ok.example"},
+	})
+	elapsed := time.Since(start)
+	if got != "ok.example" {
+		t.Fatalf("got %q, want ok.example", got)
+	}
+	// Parallel: total time ~ one probe timeout, not the sum of probes.
+	if elapsed > 2*time.Second {
+		t.Fatalf("gate took %s; probes are not parallel or timeout ignored", elapsed)
+	}
+}
+
+func TestFirstHealthyDomainUsesKnownDomains(t *testing.T) {
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer ok.Close()
+	oldKnown := knownDomains["_fhd_test"]
+	knownDomains["_fhd_test"] = []string{"known.example"}
+	t.Cleanup(func() {
+		if oldKnown == nil {
+			delete(knownDomains, "_fhd_test")
+		} else {
+			knownDomains["_fhd_test"] = oldKnown
+		}
+	})
+	pointProbesAt(t, map[string]string{"known.example": ok.URL})
+
+	if got := FirstHealthyDomain("_fhd_test", nil); got != "known.example" {
+		t.Fatalf("got %q, want known.example", got)
+	}
+}
+
+func TestFirstHealthyDomainCachedProbesOnce(t *testing.T) {
+	ResetDomainCache()
+	t.Cleanup(ResetDomainCache)
+	var probes int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&probes, 1)
+	}))
+	defer srv.Close()
+	pointProbesAt(t, map[string]string{"a.example": srv.URL})
+	ov := map[string][]string{"cachedprov": {"a.example"}}
+
+	first := FirstHealthyDomainCached("cachedprov", ov)
+	second := FirstHealthyDomainCached("cachedprov", ov)
+	if first != "a.example" || second != "a.example" {
+		t.Fatalf("got %q then %q, want a.example twice", first, second)
+	}
+	if n := atomic.LoadInt32(&probes); n != 1 {
+		t.Fatalf("probed %d times, want 1 (cached)", n)
+	}
+}
+
+func TestFirstHealthyDomainCachedCachesMiss(t *testing.T) {
+	ResetDomainCache()
+	t.Cleanup(ResetDomainCache)
+	var probes int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&probes, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	pointProbesAt(t, map[string]string{"a.example": srv.URL})
+	ov := map[string][]string{"deadprov": {"a.example"}}
+
+	if got := FirstHealthyDomainCached("deadprov", ov); got != "" {
+		t.Fatalf("got %q, want empty", got)
+	}
+	firstCount := atomic.LoadInt32(&probes)
+
+	if got := FirstHealthyDomainCached("deadprov", ov); got != "" {
+		t.Fatalf("second call got %q, want empty", got)
+	}
+	if n := atomic.LoadInt32(&probes); n != firstCount {
+		t.Fatalf("probed %d times after second call, want %d (cached, no re-probe)", n, firstCount)
+	}
+}
+
+func TestKnownDomainsFlixhqSeeded(t *testing.T) {
+	want := []string{"flixhq.to", "flixhq.click", "flixhq.pe", "flixhq.bz", "sflix.to", "myflixerz.to"}
+	if !reflect.DeepEqual(knownDomains["flixhq"], want) {
+		t.Fatalf("knownDomains[flixhq] = %v, want %v", knownDomains["flixhq"], want)
+	}
+}
+
+// Two goroutines missing the cache at the same moment must produce one probe,
+// not two. The download manager runs several workers by default, and each one
+// builds the fallback chain, so this path is genuinely concurrent in
+// production rather than only in tests.
+func TestFirstHealthyDomainCachedCoalescesConcurrentMisses(t *testing.T) {
+	ResetDomainCache()
+	t.Cleanup(ResetDomainCache)
+
+	var probes int32
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&probes, 1)
+		// Hold the first probe open so a second caller is guaranteed to arrive
+		// while it is still in flight; without that the race is timing-dependent
+		// and the test would pass by luck.
+		<-release
+	}))
+	defer srv.Close()
+	pointProbesAt(t, map[string]string{"a.example": srv.URL})
+	ov := map[string][]string{"raceprov": {"a.example"}}
+
+	const callers = 2
+	got := make([]string, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			got[i] = FirstHealthyDomainCached("raceprov", ov)
+		}(i)
+	}
+
+	// Give both goroutines time to reach the probe before letting it answer.
+	time.Sleep(200 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	if n := atomic.LoadInt32(&probes); n != 1 {
+		t.Fatalf("probed %d times, want 1 (concurrent misses must coalesce)", n)
+	}
+	for i, g := range got {
+		if g != "a.example" {
+			t.Fatalf("caller %d got %q, want a.example", i, g)
+		}
+	}
+}
 
 func TestMergeOverrides(t *testing.T) {
 	base := map[string][]string{"flixhq": {"flixhq.to"}}

@@ -9,6 +9,7 @@
 ![ffmpeg](https://img.shields.io/badge/ffmpeg-download-red?style=flat)
 ![Security](https://img.shields.io/badge/security-hardened-green?style=flat)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat)
+![License](https://img.shields.io/badge/license-GPL--2.0-blue?style=flat)
 
 > **Search in your terminal. Stream instantly in your media player.**
 
@@ -117,6 +118,29 @@ Config is stored in `%APPDATA%\lobster\config.toml` and history in `%LOCALAPPDAT
 
 ---
 
+## Checking provider health
+
+Providers break constantly — a domain moves, a player is replaced, an API starts
+signing its requests. `lobster doctor` probes each one and names the stage that
+broke, which is the difference between a cheap fix and a rewrite:
+
+```
+$ lobster doctor
+Provider health (query: "The Matrix")
+
+  ok   AniPub         2.912s           26 results, stream resolved
+  ok   FlixHQWS       3.815s           4 results, 3 servers, embed via Vidmoly
+  FAIL FlixHQ        20.514s  search   unexpected status 522
+  FAIL MovieBox        569ms  search   unexpected status 440
+  FAIL Soap2Day       1.848s  watch    no embed ID in video URL
+
+4 of 11 providers usable.
+```
+
+A failure at `search` usually means a moved domain or a renamed field. A failure
+at `watch` or `embed` means the player changed. Pass a title to probe with
+something else; anime providers are probed with an anime title automatically.
+Exits non-zero when nothing is usable, so it works as a check.
 ## Live TV and Sports
 
 Live TV streams free, public IPTV playlists — by default the community-maintained
@@ -183,11 +207,10 @@ Xtream-codes subscription in `config.toml`:
 # Set false to use only your own sources.
 iptv_org = true
 
-# Extra M3U URLs or local file paths.
-# Local paths must be absolute — unlike download_dir, `~` is NOT expanded here.
+# Extra M3U URLs or local file paths. A leading "~/" is expanded.
 playlists = [
   "https://example.com/sports.m3u8",
-  "/home/you/playlists/mine.m3u",
+  "~/playlists/mine.m3u",
 ]
 
 # Optional Xtream-codes subscription. When server is set, lobster builds the
@@ -219,9 +242,15 @@ auto_next = true
 download_dir = "~/Videos/lobster"
 
 # Provider selection (default: moviebox)
-# Available: moviebox, flixhq.to, flixhq.ws, soap2day, kimcartoon
+# Available: moviebox, flixhq.to, flixhq.ws, soap2day, kimcartoon, yts
 # All other providers are automatically used as fallbacks.
 # base = "moviebox"
+
+# yts is BitTorrent, not HTTP streaming. It plays while downloading, but it
+# also makes you a participant in the swarm: your IP is visible to every peer
+# and to the monitoring firms that sit in them, which ordinary streaming never
+# does. Use a VPN, or use one of the HTTP providers above. Needs a 64-bit
+# build. Pieces land in a temp directory and are removed when playback ends.
 
 # Optional: use a consumet API backend instead of the built-in scraper.
 # Self-host from: https://github.com/consumet/api.consumet.org
@@ -285,3 +314,14 @@ Built to remove the shell attack surface entirely.
 - TLS 1.2+ enforced
 - Randomised mpv IPC sockets
 - Safe TOML config parsing (data only)
+
+---
+
+## License
+
+Licensed under the **GNU General Public License v2.0** — see [LICENSE](LICENSE).
+
+Lobster is a Go rewrite of [lobster.sh](https://github.com/justchokingaround/lobster),
+which is itself GPL-2.0. GPL-2.0 is copyleft, so this project stays under the same
+licence as the work it derives from: you are free to use, study, modify, and
+redistribute it, provided derivative works remain GPL-2.0 and ship their source.

@@ -59,9 +59,10 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagPlayer, "player", "", "Media player: mpv | vlc | iina | celluloid")
 	rootCmd.PersistentFlags().BoolVarP(&flagContinue, "continue", "c", false, "Auto-resume from history")
 	rootCmd.PersistentFlags().BoolVarP(&flagJSON, "json", "j", false, "Output stream metadata as JSON")
-	rootCmd.PersistentFlags().StringVar(&flagBase, "base", "", "Content source: flixhq.to | flixhq.ws | kimcartoon.com.co | soap2day | moviebox | vaplayer | vidnest | tbcpl | 1shows.org | allanime")
+	rootCmd.PersistentFlags().StringVar(&flagBase, "base", "", "Content source: flixhq.to | flixhq.ws | kimcartoon.com.co | soap2day | moviebox | vaplayer | vidnest | tbcpl | 1shows.org | allanime | yts")
 	rootCmd.PersistentFlags().BoolVarP(&flagDebug, "debug", "x", false, "Debug logging to stderr")
 
+	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(historyCmd)
 	rootCmd.AddCommand(trendingCmd)
 	rootCmd.AddCommand(recentCmd)
