@@ -11,6 +11,7 @@ import (
 	"lobster/internal/media"
 	"lobster/internal/provider"
 	"lobster/internal/resolver"
+	"lobster/internal/torrentstream"
 )
 
 var (
@@ -100,6 +101,16 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 		fallbacks = append(fallbacks, provider.NewAniPub())
 	}
 
+	// YTS last, and only on request. It resolves to a magnet rather than an HTTP
+	// stream, so falling back to it joins a BitTorrent swarm and makes the user's
+	// IP visible to its peers. Reaching it via `--base yts` is a deliberate act;
+	// reaching it because a scraper broke is not, so it stays opt-in.
+	if _, ok := primary.(*provider.YTS); !ok {
+		if cfg != nil && cfg.TorrentFallback {
+			fallbacks = append(fallbacks, provider.NewYTS())
+		}
+	}
+
 	return fallbacks
 }
 
@@ -142,7 +153,7 @@ func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 		if err != nil {
 			return nil, fmt.Errorf("all providers failed: %w", err)
 		}
-		return streamToResult(fbStream), nil
+		return streamToResultChecked(fbStream)
 	}
 }
 
@@ -157,4 +168,15 @@ func streamToResult(s *media.Stream) *dlmanager.StreamResult {
 		StreamType: streamType,
 		Referer:    s.Referer,
 	}
+}
+
+// streamToResultChecked is streamToResult for the download path, which cannot
+// open a magnet. The classification above is substring-based, so a magnet would
+// otherwise be labelled "http" and handed to an engine that fails on it long
+// after the user stopped watching. Refuse it up front and say why.
+func streamToResultChecked(s *media.Stream) (*dlmanager.StreamResult, error) {
+	if torrentstream.IsMagnet(s.URL) {
+		return nil, fmt.Errorf("this source is a torrent, which cannot be downloaded this way: play it instead, or pick another source")
+	}
+	return streamToResult(s), nil
 }

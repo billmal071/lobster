@@ -219,9 +219,15 @@ auto_next = true
 download_dir = "~/Videos/lobster"
 
 # Provider selection (default: moviebox)
-# Available: moviebox, flixhq.to, flixhq.ws, soap2day, kimcartoon
+# Available: moviebox, flixhq.to, flixhq.ws, soap2day, kimcartoon, yts
 # All other providers are automatically used as fallbacks.
 # base = "moviebox"
+
+# yts is BitTorrent, not HTTP streaming. It plays while downloading, but it
+# also makes you a participant in the swarm: your IP is visible to every peer
+# and to the monitoring firms that sit in them, which ordinary streaming never
+# does. Use a VPN, or use one of the HTTP providers above. Needs a 64-bit
+# build. Pieces land in a temp directory and are removed when playback ends.
 
 # Optional: use a consumet API backend instead of the built-in scraper.
 # Self-host from: https://github.com/consumet/api.consumet.org
