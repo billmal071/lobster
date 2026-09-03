@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -45,6 +46,12 @@ Search for movies and TV shows, stream them with mpv/vlc, or download with ffmpe
 // Execute runs the root command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		// Agent commands have already written a JSON error envelope to stdout
+		// and carry their own exit code; printing again would corrupt it.
+		var ee *exitError
+		if errors.As(err, &ee) {
+			os.Exit(ee.code)
+		}
 		os.Exit(1)
 	}
 }
