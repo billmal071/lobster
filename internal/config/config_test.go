@@ -295,3 +295,28 @@ func TestLiveTVSourcesExpandsTilde(t *testing.T) {
 		t.Fatalf("Sources() = %v, want %v", got, want)
 	}
 }
+
+// The `~\` form is a home reference on Windows only. On Unix a backslash is an
+// ordinary filename character, so `~\playlists\mine.m3u` names a real relative
+// path and expanding it silently loads a different file than the user asked
+// for. expandTilde's own doc comment says "on Windows"; this pins the code to
+// that promise.
+func TestExpandTildeBackslashIsWindowsOnly(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir: %v", err)
+	}
+	const in = `~\playlists\mine.m3u`
+	got := expandTilde(in)
+
+	if runtime.GOOS == "windows" {
+		want := filepath.Join(home, `playlists\mine.m3u`)
+		if got != want {
+			t.Fatalf("expandTilde(%q) = %q, want %q (backslash is a home reference on Windows)", in, got, want)
+		}
+		return
+	}
+	if got != in {
+		t.Fatalf("expandTilde(%q) = %q, want it unchanged: on %s a backslash is part of the filename, not a separator", in, got, runtime.GOOS)
+	}
+}

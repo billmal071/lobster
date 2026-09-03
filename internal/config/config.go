@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -195,8 +196,14 @@ func (c *Config) Validate() error {
 // directory, leaving anything else — URLs, absolute paths, and "~user" forms we
 // cannot resolve — untouched. On failure it returns the input unchanged so the
 // caller reports the original path rather than a surprising one.
+//
+// The backslash form is gated on Windows deliberately. Everywhere else a
+// backslash is an ordinary filename character, so `~\playlists\mine.m3u` names
+// a real relative path; expanding it there would quietly load a different file
+// than the one written in the config.
 func expandTilde(p string) string {
-	if !strings.HasPrefix(p, "~/") && !strings.HasPrefix(p, `~\`) {
+	if !strings.HasPrefix(p, "~/") &&
+		!(runtime.GOOS == "windows" && strings.HasPrefix(p, `~\`)) {
 		return p
 	}
 	home, err := os.UserHomeDir()
