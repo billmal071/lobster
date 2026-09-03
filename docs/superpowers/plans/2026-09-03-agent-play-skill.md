@@ -186,12 +186,16 @@ func (e *exitError) Error() string { return e.err.Error() }
 func (e *exitError) Unwrap() error { return e.err }
 
 // emitJSON writes one payload to stdout with the schema marker attached.
+//
+// The schema is set after the payload is copied, not before: a caller passing
+// a key named "schema" must not be able to override it, or the contract holds
+// only by convention.
 func emitJSON(payload map[string]any) error {
 	out := make(map[string]any, len(payload)+1)
-	out["schema"] = agentSchema
 	for k, v := range payload {
 		out[k] = v
 	}
+	out["schema"] = agentSchema
 	enc := json.NewEncoder(agentOut)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
