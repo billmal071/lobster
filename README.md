@@ -206,11 +206,10 @@ Xtream-codes subscription in `config.toml`:
 # Set false to use only your own sources.
 iptv_org = true
 
-# Extra M3U URLs or local file paths.
-# Local paths must be absolute — unlike download_dir, `~` is NOT expanded here.
+# Extra M3U URLs or local file paths. A leading "~/" is expanded.
 playlists = [
   "https://example.com/sports.m3u8",
-  "/home/you/playlists/mine.m3u",
+  "~/playlists/mine.m3u",
 ]
 
 # Optional Xtream-codes subscription. When server is set, lobster builds the
