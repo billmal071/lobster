@@ -44,7 +44,14 @@ still runs through the fallback chain at play time, so if the original
 source is down another provider's copy may be served.
 
 For a series, both --season and --episode are required; without them playback
-would fall through to the interactive picker and hang.`,
+would fall through to the interactive picker and hang.
+
+Only --detach honours the "stdout is JSON and nothing else" contract. Attached,
+the player inherits this process's stdout — that is deliberate, so a human
+running "lobster play --ref" still sees mpv's own output — but it means the
+player's progress lines are interleaved with the JSON envelope. A caller
+parsing stdout must pass --detach, which redirects the player's output to a log
+file and reports that log's path in the envelope.`,
 	Args: cobra.NoArgs,
 	RunE: playRun,
 }

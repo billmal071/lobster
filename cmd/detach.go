@@ -42,7 +42,7 @@ var forwardedStringFlags = []struct {
 // flagJSON is read inside playStream (cmd/search.go:470), where it prints
 // stream metadata and returns *before playing*. Forwarding it would make the
 // supervised child print JSON into its log and exit without ever starting
-// playback, while the parent had already reported "status":"playing".
+// playback, while the parent had already reported "status":"started".
 var forwardedBoolFlags = []struct {
 	name string
 	val  *bool
@@ -203,13 +203,25 @@ func playDetached(cmd *cobra.Command, r playRef) error {
 			"playback exited immediately; see %s", lf.Name())
 	}
 
-	return emitJSON(map[string]any{
-		"status":          "playing",
-		"pid":             c.Process.Pid,
-		"title":           r.Title,
-		"log":             lf.Name(),
+	return emitJSON(detachPayload(c.Process.Pid, r.Title, lf.Name()))
+}
+
+// detachPayload is the success envelope for a detached play.
+//
+// The status is "started", not "playing", and the difference is not cosmetic.
+// detachLiveness is one second, while provider search and stream extraction
+// routinely take five to thirty; the common failure therefore lands well after
+// the parent has already exited 0. All this envelope can honestly claim is
+// that a player process was started — which is why "log" is part of the
+// contract: it is the only way to find out what happened next.
+func detachPayload(pid int, title, log string) map[string]any {
+	return map[string]any{
+		"status":          "started",
+		"pid":             pid,
+		"title":           title,
+		"log":             log,
 		"resume_tracking": playerTracksPosition(),
-	})
+	}
 }
 
 // playerTracksPosition reports whether the configured player reports playback

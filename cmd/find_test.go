@@ -145,3 +145,103 @@ func TestFindLimitTruncates(t *testing.T) {
 		t.Fatalf("got %d results, want 2 (limit)", len(got.Results))
 	}
 }
+
+// withFindStub installs a fixed two-result search (one film, one series) and
+// the --type flag for the duration of the test.
+func withFindStub(t *testing.T, typ string) {
+	t.Helper()
+	hostileEnv(t)
+
+	prevCfg := cfg
+	cfg = &config.Config{Base: "flixhq.ws"}
+	t.Cleanup(func() { cfg = prevCfg })
+
+	prevProv := agentProvider
+	agentProvider = func() provider.Provider { return &stubProvider{} }
+	t.Cleanup(func() { agentProvider = prevProv })
+
+	prevSearch := agentSearch
+	agentSearch = func(provider.Provider, []provider.Provider, string) ([]media.SearchResult, error) {
+		return []media.SearchResult{
+			{ID: "movie/a", Title: "A Film", Type: media.Movie},
+			{ID: "tv/b", Title: "A Series", Type: media.TV},
+		}, nil
+	}
+	t.Cleanup(func() { agentSearch = prevSearch })
+
+	prevType := flagFindType
+	flagFindType = typ
+	t.Cleanup(func() { flagFindType = prevType })
+}
+
+// --type was compared to the literal "tv" and everything else fell through to
+// "movie", so `--type series` or `--type show` silently filtered to films and
+// reported success — the agent has no way to notice. Name the mistake.
+func TestFindRejectsUnknownType(t *testing.T) {
+	withFindStub(t, "series")
+	buf := captureAgentOut(t)
+
+	err := findRun(findCmd, []string{"x"})
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("findRun returned %T (%v), want *exitError", err, err)
+	}
+	if ee.code != exitUsage {
+		t.Fatalf("exit code = %d, want %d", ee.code, exitUsage)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+	}
+	if _, ok := got["results"]; ok {
+		t.Fatalf("an unrecognised --type still produced results: %q", buf.String())
+	}
+}
+
+// "TV" and "Movie" are what a human (or an agent echoing the user) naturally
+// writes; case is not a mistake worth failing on.
+func TestFindTypeIsCaseInsensitive(t *testing.T) {
+	for _, typ := range []string{"TV", "Tv", "tv"} {
+		t.Run(typ, func(t *testing.T) {
+			withFindStub(t, typ)
+			buf := captureAgentOut(t)
+
+			if err := findRun(findCmd, []string{"x"}); err != nil {
+				t.Fatalf("findRun: %v", err)
+			}
+			var got struct {
+				Results []struct {
+					Title string `json:"title"`
+					Type  string `json:"type"`
+				} `json:"results"`
+			}
+			if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+				t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+			}
+			if len(got.Results) != 1 || got.Results[0].Type != "tv" {
+				t.Fatalf("results = %+v, want only the series", got.Results)
+			}
+		})
+	}
+}
+
+// The movie side of the same filter must keep working, including mixed case.
+func TestFindTypeMovieFilters(t *testing.T) {
+	withFindStub(t, "Movie")
+	buf := captureAgentOut(t)
+
+	if err := findRun(findCmd, []string{"x"}); err != nil {
+		t.Fatalf("findRun: %v", err)
+	}
+	var got struct {
+		Results []struct {
+			Type string `json:"type"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+	}
+	if len(got.Results) != 1 || got.Results[0].Type != "movie" {
+		t.Fatalf("results = %+v, want only the film", got.Results)
+	}
+}

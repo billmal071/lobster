@@ -17,8 +17,18 @@ import (
 // and Year the provider is asked to Search("") and ranking collapses, which
 // does not fail loudly: it plays the wrong film.
 //
-// Base is carried because the primary provider is flag/config-selected, and an
-// ID found under --base yts is meaningless under the default base.
+// Base records the base that was *configured* when the ref was produced, not
+// necessarily the provider that supplied the ID. It is carried because the
+// primary provider is flag/config-selected, and an ID found under --base yts
+// is meaningless under the default base — so replaying the same base is a much
+// better starting point than whatever happens to be configured later.
+//
+// It is a hint, not a guarantee. find searches the primary provider *and* the
+// fallback chain (gatherSearchResults), and stamps cfg.Base on every result it
+// prints, so a result that actually came from a fallback provider carries the
+// primary's base. Nothing downstream depends on the stamp being exact:
+// resolution re-searches by title through the whole chain regardless, and the
+// base only decides where it starts.
 type playRef struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`

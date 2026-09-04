@@ -19,10 +19,10 @@ func (s gatherStubProvider) Search(string) ([]media.SearchResult, error) { retur
 func (s gatherStubProvider) GetDetails(string) (*media.ContentDetail, error) {
 	return &media.ContentDetail{}, nil
 }
-func (s gatherStubProvider) GetSeasons(string) ([]media.Season, error)         { return nil, nil }
+func (s gatherStubProvider) GetSeasons(string) ([]media.Season, error)           { return nil, nil }
 func (s gatherStubProvider) GetEpisodes(string, string) ([]media.Episode, error) { return nil, nil }
-func (s gatherStubProvider) GetServers(string, string) ([]media.Server, error) { return nil, nil }
-func (s gatherStubProvider) GetEmbedURL(string) (string, error)                { return "", nil }
+func (s gatherStubProvider) GetServers(string, string) ([]media.Server, error)   { return nil, nil }
+func (s gatherStubProvider) GetEmbedURL(string) (string, error)                  { return "", nil }
 func (s gatherStubProvider) Trending(media.MediaType) ([]media.SearchResult, error) {
 	return nil, nil
 }

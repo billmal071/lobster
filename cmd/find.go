@@ -21,6 +21,28 @@ var agentSearch = gatherSearchResults
 // a stub instead of one that reaches the network.
 var agentProvider = newProvider
 
+// parseFindType resolves --type. It reports whether filtering applies at all
+// (an empty --type means "no filter") and rejects anything else.
+//
+// Comparison is case-insensitive: "TV" and "Movie" are what a human — or an
+// agent echoing the user — naturally writes, and case is not a mistake worth
+// failing on. An unrecognised word is: the old code treated every value that
+// was not exactly "tv" as "movie", so `--type series` silently returned only
+// films and reported success, which the caller has no way to notice.
+func parseFindType(s string) (want media.MediaType, filter bool, err error) {
+	switch strings.ToLower(s) {
+	case "":
+		return media.Movie, false, nil
+	case "movie":
+		return media.Movie, true, nil
+	case "tv":
+		return media.TV, true, nil
+	default:
+		return media.Movie, false, emitErr("usage", exitUsage,
+			"unrecognised --type %q (valid: movie, tv; case-insensitive)", s)
+	}
+}
+
 var findCmd = &cobra.Command{
 	Use:   "find <query>",
 	Short: "Search for a movie or TV show and print JSON (no prompts)",
@@ -36,17 +58,21 @@ opaque "ref" which is the handle to pass to "lobster play --ref".`,
 func findRun(cmd *cobra.Command, args []string) error {
 	query := strings.Join(args, " ")
 
+	// Validated before the search so an unusable filter costs no network
+	// round trip, and so the error is unambiguous rather than arriving as an
+	// empty result set.
+	want, filter, err := parseFindType(flagFindType)
+	if err != nil {
+		return err
+	}
+
 	p := agentProvider()
 	results, err := agentSearch(p, fallbackSearchProviders(p), query)
 	if err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "search failed: %v", err)
 	}
 
-	if flagFindType != "" {
-		want := media.Movie
-		if flagFindType == "tv" {
-			want = media.TV
-		}
+	if filter {
 		filtered := results[:0:0]
 		for _, r := range results {
 			if r.Type == want {
@@ -64,6 +90,10 @@ func findRun(cmd *cobra.Command, args []string) error {
 		results = results[:flagFindLimit]
 	}
 
+	// The configured base, stamped on every result — including ones the
+	// fallback chain supplied, whose IDs came from a different provider. See
+	// playRef.Base (cmd/ref.go): the stamp is a starting point for resolution,
+	// not an attribution.
 	base := ""
 	if cfg != nil {
 		base = cfg.Base
@@ -94,6 +124,6 @@ func findRun(cmd *cobra.Command, args []string) error {
 
 func init() {
 	markAgentCommand(findCmd)
-	findCmd.Flags().StringVar(&flagFindType, "type", "", "Filter results: movie | tv")
+	findCmd.Flags().StringVar(&flagFindType, "type", "", "Filter results: movie | tv (case-insensitive)")
 	findCmd.Flags().IntVar(&flagFindLimit, "limit", 0, "Maximum results to print (0 = no limit)")
 }

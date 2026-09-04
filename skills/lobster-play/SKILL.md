@@ -52,14 +52,28 @@ lobster play --ref "eyJpZCI6..." --detach
 ```
 
 ```json
-{"schema": 1, "status": "playing", "pid": 48213,
- "title": "The Matrix (1999)",
+{"schema": 1, "status": "started", "pid": 48213,
+ "title": "The Matrix",
  "log": "/home/u/.cache/lobster/play-847264193.log",
  "resume_tracking": true}
 ```
 
-Always pass `--detach`. Without it the command blocks for the entire film and
-your tool call will not return. Report the pid so the user can stop playback.
+**`--detach` is mandatory for you.** Two separate reasons, either one fatal:
+
+1. Without it the command blocks for the entire film and your tool call will
+   not return.
+2. Without it the JSON-on-stdout contract does not hold. An attached player
+   inherits lobster's stdout, so mpv's progress output is interleaved with the
+   JSON envelope and stdout will not parse. Only `--detach` redirects the
+   player's output (to the `log` file) and leaves stdout clean.
+
+`"status": "started"` means a player process was started — not that anything is
+on screen yet. lobster returns after about a second, while finding a working
+source and extracting the stream usually takes five to thirty, so most failures
+happen after this response was sent. **If the user says nothing happened, read
+the `log` path from this response** — that is where the child's output went.
+
+Report the pid so the user can stop playback.
 
 The `log` path is randomly generated (`play-<random>.log` in the user cache
 dir) — it is not derived from the pid, so the only way to find a given run's
@@ -70,9 +84,9 @@ detached; a detached play runs the same attached playback internally, in a
 background process.
 
 A ref remembers the provider base it was found under (e.g. `find --base
-yts`). `play --ref` resolves against that same base automatically, so you
-normally don't need to pass `--base` yourself. Pass `--base` explicitly only
-to deliberately override it.
+yts`). Both `play --ref` and `episodes --ref` resolve against that same base
+automatically, so you normally don't need to pass `--base` yourself. Pass
+`--base` explicitly only to deliberately override it.
 
 ## TV series
 
@@ -121,7 +135,8 @@ Branch on the exit code:
 | Exit | Meaning | What to do |
 | ---- | ------- | ---------- |
 | 0 | success | — |
-| 2 | no results | Suggest a spelling correction, or a different title |
+| 1 | bad invocation | You called it wrong: a malformed `ref`, a missing `--season`/`--episode`, an unrecognised `--type`, `--download` (unsupported), or an invalid config value. Fix the command; do not retry it unchanged |
+| 2 | no results | Suggest a spelling correction, or a different title. Also returned when the season or episode number does not exist — re-run `lobster episodes` and check |
 | 3 | every provider failed | Run `lobster doctor` and report which sources are down. Do **not** suggest a spelling fix — the title was found, the sources are broken |
 | 4 | player unavailable | mpv (or the configured player) is not installed |
 

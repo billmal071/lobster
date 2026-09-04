@@ -247,11 +247,18 @@ lobster episodes --ref <REF> --season 2  # JSON season/episode listing
 lobster play --ref <REF> --detach        # start playback, return immediately
 ```
 
-All three print JSON on stdout and never prompt. `play --ref` resolves
-against the base the ref was found under, and forwards any flags you pass
+All three print JSON on stdout and never prompt — including on failure, so a
+caller can parse stdout unconditionally. `play --ref` and `episodes --ref` both
+resolve against the base the ref was found under, and `play` forwards any flags you pass
 explicitly (`--base`, `--quality`, `--player`, `--provider`, `--language`,
 `--audio-language`, `--no-subs`, `--debug`, `--continue`) to the detached
 child so overrides still apply in the background.
+
+`--detach` is what makes the stdout-is-only-JSON guarantee hold: attached, the
+player inherits lobster's stdout and its progress output is interleaved with
+the envelope. That is deliberate — a human running `lobster play --ref` should
+still see the player — so a script must pass `--detach` and read the player's
+output from the `log` path in the response.
 
 ## Configuration
 

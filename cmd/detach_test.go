@@ -248,7 +248,7 @@ func TestForwardedArgsIncludesExplicitContinue(t *testing.T) {
 // stream metadata and returns *before playing*. Forwarding it to the
 // supervised child would make the child print JSON into its log and exit
 // without ever starting playback, while the parent had already reported
-// "status":"playing" — so omitting it is a deliberate decision, not a gap.
+// "status":"started" — so omitting it is a deliberate decision, not a gap.
 // This test pins that decision so a later "make forwarding exhaustive"
 // change does not silently turn it back into a bug.
 func TestForwardedArgsNeverForwardsJSON(t *testing.T) {
@@ -358,7 +358,7 @@ func TestSupervisedPlayDoesNotDetachAgain(t *testing.T) {
 // The player-availability precondition must run before the --detach
 // dispatch, not after: otherwise a detached invocation would fork a
 // supervisor that fails silently into its own log file, leaving the caller
-// with a misleading "status":"playing"-or-hang instead of an immediate
+// with a misleading "status":"started"-or-hang instead of an immediate
 // exit-4 report. This test drives playRun with flagDetach=true and an
 // unavailable player and asserts it never reaches playDetached: if it did,
 // os.Executable()/exec.Command would run for real (no seam exists for
@@ -388,5 +388,29 @@ func TestPlayDetachedUnavailablePlayerExitsFourBeforeSpawning(t *testing.T) {
 	}
 	if ee.code != exitPlayerUnavailable {
 		t.Fatalf("exit code = %d, want %d", ee.code, exitPlayerUnavailable)
+	}
+}
+
+// The parent waits detachLiveness (one second) before declaring success, but
+// provider search and stream extraction routinely take five to thirty
+// seconds, so the common failure lands after the parent has already exited 0.
+// Claiming "playing" at that point is a claim the parent cannot support; all
+// it knows is that a player process started. The agent is told to read "log"
+// when the user reports nothing happened, so that key is part of the contract
+// too.
+func TestDetachPayloadReportsStartedNotPlaying(t *testing.T) {
+	got := detachPayload(4242, "Some Show", "/tmp/play-x.log")
+
+	if got["status"] != "started" {
+		t.Fatalf("status = %v, want \"started\" (a one-second liveness window cannot prove playback)", got["status"])
+	}
+	if got["log"] != "/tmp/play-x.log" {
+		t.Fatalf("log = %v, want the log path; it is the agent's only way to see what happened after the parent exited", got["log"])
+	}
+	if got["pid"] != 4242 {
+		t.Fatalf("pid = %v, want 4242", got["pid"])
+	}
+	if got["title"] != "Some Show" {
+		t.Fatalf("title = %v, want Some Show", got["title"])
 	}
 }
