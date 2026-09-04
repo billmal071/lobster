@@ -232,6 +232,10 @@ The exit code is what to branch on:
 | **3** | Every provider failed. The title is fine, the sources aren't — run `./lobster doctor` |
 | **4** | The configured player isn't installed or isn't on PATH |
 
+One exception to exit 3: from `play --detach` it means the background process
+started and then died within a second. That isn't a provider outage report, and
+`doctor` won't explain it — the error message names the log file that will.
+
 Check `schema`. If it isn't `1`, the output shape has changed and your script
 should say so rather than guess.
 
