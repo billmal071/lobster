@@ -205,13 +205,7 @@ func TestPlayAvailablePlayerReachesPlayback(t *testing.T) {
 // this invocation" the same way cobra would, and restores its state after.
 func withBaseFlag(t *testing.T) {
 	t.Helper()
-	playCmd.InheritedFlags() // side effect: merges rootCmd's persistent flags into playCmd.Flags()
-	f := playCmd.Flags().Lookup("base")
-	if f == nil {
-		t.Fatal("playCmd.Flags().Lookup(\"base\") is nil after merge; --base is not visible through the subcommand")
-	}
-	prevChanged, prevBase := f.Changed, flagBase
-	t.Cleanup(func() { f.Changed, flagBase = prevChanged, prevBase })
+	withInheritedFlags(t, playCmd, "base")
 }
 
 // A ref found under `--base yts` is meaningless resolved against another

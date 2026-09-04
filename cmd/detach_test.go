@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"lobster/internal/media"
 	"lobster/internal/provider"
 )
@@ -53,13 +55,13 @@ func hermeticCacheDir(t *testing.T) {
 // the same technique play_test.go's withBaseFlag uses, generalized to any
 // flag name a test needs to Set/Changed on playCmd directly rather than
 // through Execute(). Restores each flag's Changed bit and value afterward.
-func withInheritedFlags(t *testing.T, names ...string) {
+func withInheritedFlags(t *testing.T, c *cobra.Command, names ...string) {
 	t.Helper()
-	playCmd.InheritedFlags() // side effect: merges rootCmd's persistent flags into playCmd.Flags()
+	c.InheritedFlags() // side effect: merges rootCmd's persistent flags into c.Flags()
 	for _, name := range names {
-		f := playCmd.Flags().Lookup(name)
+		f := c.Flags().Lookup(name)
 		if f == nil {
-			t.Fatalf("playCmd.Flags().Lookup(%q) is nil after merge", name)
+			t.Fatalf("%s.Flags().Lookup(%q) is nil after merge", c.Name(), name)
 		}
 		prevChanged, prevVal := f.Changed, f.Value.String()
 		t.Cleanup(func() {
@@ -128,7 +130,7 @@ func TestSupervisorArgsOmitsExtraWhenNil(t *testing.T) {
 // exercise detachChildArgv itself, in both directions, driving Changed()
 // through playCmd the same way a real Execute() would.
 func TestDetachChildArgvPropagatesExplicitBase(t *testing.T) {
-	withInheritedFlags(t, "base")
+	withInheritedFlags(t, playCmd, "base")
 	prevRef, prevS, prevE := flagRef, flagSeason, flagEpisode
 	flagRef, flagSeason, flagEpisode = "REF", 0, 0
 	t.Cleanup(func() { flagRef, flagSeason, flagEpisode = prevRef, prevS, prevE })
@@ -144,7 +146,7 @@ func TestDetachChildArgvPropagatesExplicitBase(t *testing.T) {
 }
 
 func TestDetachChildArgvOmitsBaseWhenNotExplicit(t *testing.T) {
-	withInheritedFlags(t, "base")
+	withInheritedFlags(t, playCmd, "base")
 	prevRef, prevS, prevE := flagRef, flagSeason, flagEpisode
 	flagRef, flagSeason, flagEpisode = "REF", 0, 0
 	t.Cleanup(func() { flagRef, flagSeason, flagEpisode = prevRef, prevS, prevE })
@@ -161,7 +163,7 @@ func TestDetachChildArgvOmitsBaseWhenNotExplicit(t *testing.T) {
 // case, so a change that forwards unconditionally or drops the table entirely
 // cannot pass by accident.
 func TestForwardedArgsIncludesExplicitStringAndBoolFlags(t *testing.T) {
-	withInheritedFlags(t, "quality", "no-subs")
+	withInheritedFlags(t, playCmd, "quality", "no-subs")
 
 	if err := playCmd.Flags().Set("quality", "1080"); err != nil {
 		t.Fatalf("Set --quality: %v", err)
@@ -185,7 +187,7 @@ func TestForwardedArgsIncludesExplicitStringAndBoolFlags(t *testing.T) {
 // invert it — the child would resume from history when the caller explicitly
 // asked it not to. The value must travel with the flag.
 func TestForwardedArgsPreservesExplicitFalseBool(t *testing.T) {
-	withInheritedFlags(t, "continue")
+	withInheritedFlags(t, playCmd, "continue")
 
 	if err := playCmd.Flags().Set("continue", "false"); err != nil {
 		t.Fatalf("Set --continue=false: %v", err)
@@ -201,7 +203,7 @@ func TestForwardedArgsPreservesExplicitFalseBool(t *testing.T) {
 }
 
 func TestForwardedArgsOmitsFlagsNotPassed(t *testing.T) {
-	withInheritedFlags(t, "player", "provider", "language", "audio-language", "debug", "base")
+	withInheritedFlags(t, playCmd, "player", "provider", "language", "audio-language", "debug", "base")
 
 	got := forwardedArgs(playCmd)
 	if len(got) != 0 {
@@ -230,7 +232,7 @@ func TestForwardedArgsNeverForwardsDownload(t *testing.T) {
 // caller explicitly asking to resume — the same bug class as the other
 // seven flags.
 func TestForwardedArgsIncludesExplicitContinue(t *testing.T) {
-	withInheritedFlags(t, "continue")
+	withInheritedFlags(t, playCmd, "continue")
 
 	if err := playCmd.Flags().Set("continue", "true"); err != nil {
 		t.Fatalf("Set --continue: %v", err)
@@ -250,7 +252,7 @@ func TestForwardedArgsIncludesExplicitContinue(t *testing.T) {
 // This test pins that decision so a later "make forwarding exhaustive"
 // change does not silently turn it back into a bug.
 func TestForwardedArgsNeverForwardsJSON(t *testing.T) {
-	withInheritedFlags(t, "json")
+	withInheritedFlags(t, playCmd, "json")
 
 	if err := playCmd.Flags().Set("json", "true"); err != nil {
 		t.Fatalf("Set --json: %v", err)

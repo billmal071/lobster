@@ -59,6 +59,25 @@ func init() {
 	_ = playCmd.Flags().MarkHidden("supervised")
 }
 
+// applyRefBase honors the ref's originating base unless the caller explicitly
+// passed --base on this invocation. An ID found under `--base yts` is
+// meaningless under another base (playRef doc comment, cmd/ref.go) — without
+// this, a `find --base yts` result would silently resolve against whatever
+// base is currently configured, losing the ID's exact-match bonus and letting
+// a different provider's copy be served. An explicit --base is a deliberate
+// override and must win.
+//
+// Shared by play and episodes rather than living in playRun: while only play
+// applied it, a ref from `find --base flixhq.ws` played fine but listed
+// nothing under episodes, because a MovieBox provider was handed a FlixHQ ID
+// and reported "no seasons found". The two commands must agree on what one ref
+// means.
+func applyRefBase(cmd *cobra.Command, r playRef) {
+	if r.Base != "" && cfg != nil && !cmd.Flags().Changed("base") {
+		cfg.Base = r.Base
+	}
+}
+
 func playRun(cmd *cobra.Command, args []string) error {
 	r, err := decodeRef(flagRef)
 	if err != nil {
@@ -88,16 +107,7 @@ func playRun(cmd *cobra.Command, args []string) error {
 		return playDetached(cmd, r)
 	}
 
-	// Honor the ref's originating base unless the caller explicitly passed
-	// --base on this invocation. An ID found under `--base yts` is meaningless
-	// under another base (playRef doc comment, cmd/ref.go) — without this, a
-	// `find --base yts` result would silently resolve against whatever base is
-	// currently configured, losing the ID's exact-match bonus and letting a
-	// different provider's copy be served. An explicit --base is a deliberate
-	// override and must win.
-	if r.Base != "" && cfg != nil && !cmd.Flags().Changed("base") {
-		cfg.Base = r.Base
-	}
+	applyRefBase(cmd, r)
 
 	var p provider.Provider = agentProvider()
 	if err := agentResolveAndPlay(p, sel, flagSeason, flagEpisode); err != nil {
