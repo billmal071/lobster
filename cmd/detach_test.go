@@ -300,7 +300,12 @@ func TestWaitLivenessDetectsImmediateExit(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	if alive := waitLiveness(c, 200*time.Millisecond); alive {
+	// The window must outlast child *startup*, not just its exit: on a cold
+	// Windows CI runner, spawning the test binary alone can exceed 200ms, so a
+	// tight window sees a child that hasn't exited yet and correctly — but
+	// uselessly — reports it alive. Wait returns the moment the child exits,
+	// so a generous window costs nothing when the test passes.
+	if alive := waitLiveness(c, 10*time.Second); alive {
 		t.Fatal("waitLiveness reported alive for a process that already exited")
 	}
 }
