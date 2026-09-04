@@ -534,3 +534,40 @@ func TestPlayDetachedRejectsUnknownSeasonBeforeSpawning(t *testing.T) {
 		t.Fatal("playback was dispatched despite an unknown season")
 	}
 }
+
+// The decode-time type check, seen from the command: a series ref whose Type
+// was lost must never reach playback. Without it the ref reads as a movie,
+// season/episode are not required, and resolveAndPlay is handed season 0.
+func TestPlayRejectsRefWithUnknownType(t *testing.T) {
+	hostileEnv(t)
+	captureAgentOut(t)
+
+	prevCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return true, "" }
+	t.Cleanup(func() { agentPlayerCheck = prevCheck })
+
+	played := false
+	prevPlay := agentResolveAndPlay
+	agentResolveAndPlay = func(provider.Provider, media.SearchResult, int, int) error {
+		played = true
+		return nil
+	}
+	t.Cleanup(func() { agentResolveAndPlay = prevPlay })
+
+	withStubProvider(t, twoSeasonStub())
+
+	ref, err := encodeRef(playRef{ID: "tv/show-1", Title: "Some Show", Type: ""})
+	if err != nil {
+		t.Fatalf("encodeRef: %v", err)
+	}
+	prevRef, prevSeason, prevEpisode := flagRef, flagSeason, flagEpisode
+	flagRef, flagSeason, flagEpisode = ref, 0, 0
+	t.Cleanup(func() { flagRef, flagSeason, flagEpisode = prevRef, prevSeason, prevEpisode })
+
+	if err := playRun(playCmd, nil); err == nil {
+		t.Fatal("playRun accepted a ref with no type, want a bad_ref error")
+	}
+	if played {
+		t.Fatal("resolveAndPlay was reached with an untyped ref")
+	}
+}

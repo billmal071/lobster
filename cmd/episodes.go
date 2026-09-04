@@ -4,6 +4,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"lobster/internal/media"
+	"lobster/internal/provider"
+	"lobster/internal/resolver"
 )
 
 var (
@@ -40,12 +42,12 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 
 	applyRefBase(cmd, r)
 
-	p := agentProvider()
-	seasons, err := p.GetSeasons(r.ID)
-	if err != nil {
-		return emitErr("providers_failed", exitProvidersFailed, "getting seasons: %v", err)
-	}
+	primary := agentProvider()
+	p, id, seasons, primaryErr := seasonSource(primary, r)
 	if len(seasons) == 0 {
+		if primaryErr != nil {
+			return emitErr("providers_failed", exitProvidersFailed, "getting seasons: %v", primaryErr)
+		}
 		return emitErr("no_results", exitNoResults, "no seasons found for %q", r.Title)
 	}
 
@@ -63,7 +65,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	eps, err := p.GetEpisodes(r.ID, sel.ID)
+	eps, err := p.GetEpisodes(id, sel.ID)
 	if err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "getting episodes: %v", err)
 	}
@@ -83,4 +85,62 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		"season":   sel.Number,
 		"episodes": out,
 	})
+}
+
+// agentFallbackProviders is the fallback chain, as a package var so tests can
+// supply stubs instead of providers that reach the network.
+var agentFallbackProviders = fallbackProviders
+
+// seasonSource returns the provider that can actually enumerate this ref's
+// seasons, the ID to ask it about, that season list, and the primary's error
+// if it had one.
+//
+// The primary is asked first and almost always answers. It fails for one
+// specific, non-rare reason: a ref's ID need not belong to the primary at all.
+// find searches the primary *and* the fallback chain (gatherSearchResults
+// broadens whenever the primary returns fewer than three results) while
+// stamping the configured base on every ref it prints — playRef.Base is a
+// starting point, not an attribution (cmd/ref.go). A ref whose ID came from a
+// fallback provider therefore reaches the primary as a foreign ID, and the
+// primary answers "no seasons" or errors.
+//
+// play already survives that: resolveAndPlay has a branch for exactly this
+// condition (cmd/search.go, `if err != nil || len(seasons) == 0`) that
+// re-searches by title across the whole chain. episodes did not, so `find` →
+// `episodes --ref` reported "no seasons found" for a show `play --ref` then
+// played without complaint. The two commands must agree on what one ref means.
+//
+// The re-search is by title and ranked by resolver.Candidates, so the ref's
+// ID/Title/Year all count — the same ranking the resolver uses, and the reason
+// a ref carries more than an ID. A fallback is only accepted when it returns a
+// non-empty season list; an empty one means it does not really have this show.
+func seasonSource(primary provider.Provider, r playRef) (provider.Provider, string, []media.Season, error) {
+	seasons, err := primary.GetSeasons(r.ID)
+	if err == nil && len(seasons) > 0 {
+		return primary, r.ID, seasons, nil
+	}
+	debugf("episodes: primary could not enumerate %q (err=%v, seasons=%d); re-searching the fallback chain by title", r.ID, err, len(seasons))
+
+	req := resolver.Request{
+		ID:        r.ID,
+		Title:     r.Title,
+		Year:      r.Year,
+		MediaType: media.TV,
+	}
+	for _, fb := range agentFallbackProviders(primary) {
+		results, searchErr := fb.Search(r.Title)
+		if searchErr != nil {
+			debugf("episodes: fallback %T search failed: %v", fb, searchErr)
+			continue
+		}
+		for _, c := range resolver.Candidates(results, req) {
+			fbSeasons, seasonsErr := fb.GetSeasons(c.ID)
+			if seasonsErr != nil || len(fbSeasons) == 0 {
+				continue
+			}
+			debugf("episodes: %T answers for %q (ID %s)", fb, c.Title, c.ID)
+			return fb, c.ID, fbSeasons, nil
+		}
+	}
+	return primary, r.ID, nil, err
 }

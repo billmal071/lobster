@@ -26,9 +26,14 @@ import (
 // It is a hint, not a guarantee. find searches the primary provider *and* the
 // fallback chain (gatherSearchResults), and stamps cfg.Base on every result it
 // prints, so a result that actually came from a fallback provider carries the
-// primary's base. Nothing downstream depends on the stamp being exact:
-// resolution re-searches by title through the whole chain regardless, and the
-// base only decides where it starts.
+// primary's base. It cannot be made exact either: most fallback providers are
+// not addressable as a --base value at all (newProvider, cmd/provider.go).
+//
+// So nothing downstream may assume the ID resolves against the base, and
+// nothing does. play re-searches by title through the whole chain
+// (resolveAndPlay, cmd/search.go) and episodes does the same via seasonSource
+// (cmd/episodes.go) when the base's provider cannot enumerate the ID. The base
+// only decides where that search starts.
 type playRef struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -63,13 +68,25 @@ func decodeRef(s string) (playRef, error) {
 	if r.ID == "" || r.Title == "" {
 		return playRef{}, fmt.Errorf("ref is missing id or title")
 	}
+	// Type decides whether play requires --season/--episode, and searchResult
+	// maps everything that is not "tv" onto media.Movie. So an empty or
+	// misspelled type does not fail: a series reads as a film, the
+	// season/episode gate in playRun does not fire, and resolveAndPlay is
+	// entered with season 0 — the interactive-picker path these commands exist
+	// to avoid. Only the two canonical MediaType.String() values are accepted,
+	// and exactly as encodeRef writes them: a ref is machine-produced and
+	// opaque, so "TV" is a corrupted token, not a human typing.
+	if r.Type != media.Movie.String() && r.Type != media.TV.String() {
+		return playRef{}, fmt.Errorf("ref has unknown type %q (want %q or %q)",
+			r.Type, media.Movie.String(), media.TV.String())
+	}
 	return r, nil
 }
 
 // searchResult converts a ref back into the value the playback path expects.
 func (r playRef) searchResult() media.SearchResult {
 	t := media.Movie
-	if r.Type == "tv" {
+	if r.Type == media.TV.String() {
 		t = media.TV
 	}
 	return media.SearchResult{

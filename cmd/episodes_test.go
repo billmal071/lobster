@@ -169,6 +169,16 @@ func TestEpisodesUnknownSeasonExitsTwo(t *testing.T) {
 	}
 }
 
+// withNoFallbackProviders empties the fallback chain for the duration of the
+// test. Required wherever the primary cannot enumerate seasons: seasonSource
+// then re-searches the chain, and the real chain reaches the network.
+func withNoFallbackProviders(t *testing.T) {
+	t.Helper()
+	prev := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider { return nil }
+	t.Cleanup(func() { agentFallbackProviders = prev })
+}
+
 // A provider that errors is exit 3, so the agent runs doctor rather than
 // suggesting a different season number.
 func TestEpisodesProviderErrorExitsThree(t *testing.T) {
@@ -178,6 +188,7 @@ func TestEpisodesProviderErrorExitsThree(t *testing.T) {
 	p := twoSeasonStub()
 	p.seasonsErr = errors.New("upstream 503")
 	withStubProvider(t, p)
+	withNoFallbackProviders(t)
 	withEpisodesFlags(t, tvRef(t, ""), 1)
 
 	err := episodesRun(episodesCmd, nil)
@@ -328,5 +339,82 @@ func TestPlayAndEpisodesAgreeOnRefBase(t *testing.T) {
 	}
 	if seen["play"] != "flixhq.ws" {
 		t.Fatalf("both commands used base %q, want the ref's flixhq.ws", seen["play"])
+	}
+}
+
+// find searches the fallback chain as well as the primary (gatherSearchResults)
+// but stamps the primary's base on every ref, so a ref's ID can belong to a
+// provider that is not the one episodes will ask. Handing a foreign ID to the
+// primary yields no seasons — and episodes reported "no seasons found" for a
+// show play resolves and plays without trouble, because resolveAndPlay
+// re-searches by title across the chain (cmd/search.go). episodes must do the
+// same or the two commands disagree about what one ref means.
+func TestEpisodesFallsBackWhenPrimaryCannotEnumerate(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+
+	// The primary does not index this ID: no error, just nothing.
+	withStubProvider(t, &stubProvider{})
+
+	fb := twoSeasonStub()
+	fb.results = []media.SearchResult{
+		{ID: "fb/some-show", Title: "Some Show", Type: media.TV},
+	}
+	prevFB := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider {
+		return []provider.Provider{fb}
+	}
+	t.Cleanup(func() { agentFallbackProviders = prevFB })
+
+	withEpisodesFlags(t, tvRef(t, ""), 2)
+
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+
+	var got struct {
+		Seasons  []int `json:"seasons"`
+		Season   int   `json:"season"`
+		Episodes []struct {
+			Number int    `json:"number"`
+			Title  string `json:"title"`
+		} `json:"episodes"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+	}
+	if len(got.Seasons) != 2 {
+		t.Fatalf("seasons = %v, want the fallback provider's two", got.Seasons)
+	}
+	if got.Season != 2 || len(got.Episodes) != 2 || got.Episodes[0].Title != "Return" {
+		t.Fatalf("season = %d, episodes = %+v; want the fallback's season 2", got.Season, got.Episodes)
+	}
+}
+
+// The fallback must be looked up under the ref's own title, and it must not
+// silently accept a provider that answers about a different show.
+func TestEpisodesFallbackIgnoresUnrelatedFallbackResults(t *testing.T) {
+	hostileEnv(t)
+	captureAgentOut(t)
+
+	withStubProvider(t, &stubProvider{})
+
+	fb := twoSeasonStub()
+	fb.results = nil // the fallback does not have this title at all
+	prevFB := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider {
+		return []provider.Provider{fb}
+	}
+	t.Cleanup(func() { agentFallbackProviders = prevFB })
+
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+
+	err := episodesRun(episodesCmd, nil)
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("episodesRun returned %T (%v), want *exitError", err, err)
+	}
+	if ee.code != exitNoResults {
+		t.Fatalf("exit code = %d, want %d", ee.code, exitNoResults)
 	}
 }

@@ -800,6 +800,16 @@ func findRun(cmd *cobra.Command, args []string) error {
 }
 ```
 
+Note on `Base`, added after review: this block stamps the *configured* base on
+every result, including ones the fallback chain supplied, whose IDs belong to a
+different provider. That stamp is a starting point for resolution, not an
+attribution, and it cannot be made exact — most fallback providers are not
+addressable as a `--base` value at all (`newProvider`, `cmd/provider.go`). What
+matters is that no consumer of a ref may assume its ID resolves against the
+primary: `play` re-searches by title through the whole chain (`resolveAndPlay`,
+`cmd/search.go`) and `episodes` does the same via `seasonSource`
+(`cmd/episodes.go`) when the primary cannot enumerate the ref's ID. See Task 4.
+
 Note the import block above deliberately omits `lobster/internal/provider`:
 `newProvider()` and `fallbackSearchProviders()` are used through type
 inference, so the package is never named in this file. Importing it would fail

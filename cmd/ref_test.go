@@ -63,3 +63,34 @@ func TestRefSearchResultMapsType(t *testing.T) {
 		t.Fatalf("movie mapped to %v, want media.Movie", got)
 	}
 }
+
+// A ref whose Type is empty or unrecognised must be rejected at decode time.
+//
+// searchResult() maps everything that is not "tv" onto media.Movie, so a
+// truncated or hand-edited ref for a series arrives at playRun looking like a
+// film: the "--season and --episode are required" gate does not fire, and the
+// selection is handed to resolveAndPlay with season 0, which is precisely the
+// path that falls through to the interactive picker this whole command set
+// exists to avoid. Failing loudly on the token is the only place the mistake
+// is still cheap.
+func TestDecodeRefRejectsUnknownType(t *testing.T) {
+	for _, typ := range []string{"", "series", "TV", "Movie", "film"} {
+		tok, err := encodeRef(playRef{ID: "x", Title: "T", Type: typ})
+		if err != nil {
+			t.Fatalf("encodeRef(%q): %v", typ, err)
+		}
+		if _, err := decodeRef(tok); err == nil {
+			t.Errorf("decodeRef accepted type %q, want an error", typ)
+		}
+	}
+	// The two canonical values must still round-trip.
+	for _, typ := range []string{media.Movie.String(), media.TV.String()} {
+		tok, err := encodeRef(playRef{ID: "x", Title: "T", Type: typ})
+		if err != nil {
+			t.Fatalf("encodeRef(%q): %v", typ, err)
+		}
+		if _, err := decodeRef(tok); err != nil {
+			t.Errorf("decodeRef rejected canonical type %q: %v", typ, err)
+		}
+	}
+}

@@ -247,8 +247,10 @@ lobster episodes --ref <REF> --season 2  # JSON season/episode listing
 lobster play --ref <REF> --detach        # start playback, return immediately
 ```
 
-All three print JSON on stdout and never prompt — including on failure, so a
-caller can parse stdout unconditionally. `play --ref` and `episodes --ref` both
+All three print JSON on stdout and never prompt — including on failure. `find`
+and `episodes` print nothing else, so their stdout is always parseable; `play`
+shares stdout with the player unless you pass `--detach` (see below).
+`play --ref` and `episodes --ref` both
 resolve against the base the ref was found under, and `play` forwards any flags you pass
 explicitly (`--base`, `--quality`, `--player`, `--provider`, `--language`,
 `--audio-language`, `--no-subs`, `--debug`, `--continue`) to the detached

@@ -124,6 +124,15 @@ func FallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 	return fallbackCandidates(results, mediaType)
 }
 
+// Candidates ranks results against the work req identifies, best first, capped
+// at MaxCandidates. Unlike FallbackCandidates it uses ID, Title and Year rather
+// than the provider's own relevance order — the same ranking resolveWithProvider
+// applies, exported for callers outside the resolver that re-search a foreign
+// catalog by title (cmd.seasonSource).
+func Candidates(results []media.SearchResult, req Request) []media.SearchResult {
+	return candidatesFor(results, req)
+}
+
 func fallbackCandidates(results []media.SearchResult, mediaType media.MediaType) []media.SearchResult {
 	return truncateCandidates(dedupeByType(results, mediaType))
 }
