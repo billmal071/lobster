@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 )
 
 // ipcSocket holds the IPC named pipe path and cleanup function.
@@ -29,19 +28,17 @@ func newIPCSocket() (*ipcSocket, error) {
 	}, nil
 }
 
-// dial connects to the mpv IPC named pipe.
-// Windows named pipes can be opened as regular files.
+// dial makes a single attempt to open the mpv IPC named pipe (Windows named
+// pipes can be opened as regular files). It must not retry or sleep here:
+// retry pacing, the overall deadline, and the stop channel (mpv already
+// exited) all live in dialWithRetry, whose 30s bound comfortably covers
+// antivirus- or slow-I/O-delayed pipe creation. An earlier in-dial loop slept
+// through 30 attempts (~6s) with no way to observe stop, so a dead-on-arrival
+// mpv held Play for the whole loop.
 func (s *ipcSocket) dial() (io.ReadWriteCloser, error) {
-	var f *os.File
-	var err error
-	// Retry as mpv may not have created the pipe yet.
-	// Use a longer timeout on Windows where antivirus and slower I/O can delay pipe creation.
-	for i := 0; i < 30; i++ {
-		f, err = os.OpenFile(s.path, os.O_RDWR, 0)
-		if err == nil {
-			return f, nil
-		}
-		time.Sleep(200 * time.Millisecond)
+	f, err := os.OpenFile(s.path, os.O_RDWR, 0)
+	if err != nil {
+		return nil, fmt.Errorf("opening named pipe %s: %w", s.path, err)
 	}
-	return nil, fmt.Errorf("opening named pipe %s: %w", s.path, err)
+	return f, nil
 }

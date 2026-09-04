@@ -117,7 +117,7 @@ func TestPlayStreamSkipsHistoryOnAbnormalExitWithoutPosition(t *testing.T) {
 // position of 0 (a finished watch mpv reports as 0 still records the entry).
 func TestPlayStreamStillSavesOnCleanExit(t *testing.T) {
 	playStreamHarness(t, &stubPlayerImpl{
-		result: player.PlayResult{Position: 42, Duration: 100},
+		result: player.PlayResult{Position: 0, Duration: 100},
 	})
 
 	stream := &media.Stream{URL: "http://127.0.0.1:1/never-dialed.m3u8"}
@@ -132,9 +132,12 @@ func TestPlayStreamStillSavesOnCleanExit(t *testing.T) {
 		t.Fatalf("history.Load: %v", loadErr)
 	}
 	for _, e := range entries {
-		if e.ID == "movie/y" && e.Position == 42 {
+		if e.ID == "movie/y" {
+			if e.Position != 0 {
+				t.Fatalf("history position = %g, want 0 preserved on clean exit", e.Position)
+			}
 			return
 		}
 	}
-	t.Fatalf("no history entry for movie/y after clean exit; entries: %+v", entries)
+	t.Fatalf("no history entry for movie/y after clean exit at position 0; entries: %+v", entries)
 }
