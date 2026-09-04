@@ -79,8 +79,24 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 }
 
-// loadConfig loads and merges configuration: defaults < config file < CLI flags.
+// loadConfig is the root's PersistentPreRunE, so it runs for the interactive
+// commands and the agent commands alike. The two need different failure
+// reporting: an interactive user gets cobra's "Error: ..." on stderr, while an
+// agent command must produce the JSON envelope its caller parses
+// unconditionally — and, because SilenceErrors is set there, a bare error
+// would otherwise vanish entirely.
 func loadConfig(cmd *cobra.Command, args []string) error {
+	if err := applyConfig(); err != nil {
+		if isAgentCommand(cmd) {
+			return emitErr("config_invalid", exitUsage, "%v", err)
+		}
+		return err
+	}
+	return nil
+}
+
+// applyConfig loads and merges configuration: defaults < config file < CLI flags.
+func applyConfig() error {
 	var err error
 	cfg, err = config.Load()
 	if err != nil {

@@ -45,13 +45,12 @@ source is down another provider's copy may be served.
 
 For a series, both --season and --episode are required; without them playback
 would fall through to the interactive picker and hang.`,
-	Args:          cobra.NoArgs,
-	RunE:          playRun,
-	SilenceErrors: true,
-	SilenceUsage:  true,
+	Args: cobra.NoArgs,
+	RunE: playRun,
 }
 
 func init() {
+	markAgentCommand(playCmd)
 	playCmd.Flags().StringVar(&flagRef, "ref", "", "Ref from lobster find (required)")
 	playCmd.Flags().IntVar(&flagSeason, "season", 0, "Season number (required for TV)")
 	playCmd.Flags().IntVar(&flagEpisode, "episode", 0, "Episode number (required for TV)")

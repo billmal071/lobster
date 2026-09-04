@@ -19,13 +19,12 @@ var episodesCmd = &cobra.Command{
 
 Takes a ref emitted by "lobster find". With --season it lists that season's
 episodes; without it, the first season's.`,
-	Args:          cobra.NoArgs,
-	RunE:          episodesRun,
-	SilenceErrors: true,
-	SilenceUsage:  true,
+	Args: cobra.NoArgs,
+	RunE: episodesRun,
 }
 
 func init() {
+	markAgentCommand(episodesCmd)
 	episodesCmd.Flags().StringVar(&flagRef, "ref", "", "Ref from lobster find (required)")
 	episodesCmd.Flags().IntVar(&flagSeason, "season", 0, "Season number (default: first)")
 }

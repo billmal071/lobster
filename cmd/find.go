@@ -29,10 +29,8 @@ var findCmd = &cobra.Command{
 Unlike the interactive commands, find never opens fzf and never waits for
 input, so it is safe to call from a script or an agent. Each result carries an
 opaque "ref" which is the handle to pass to "lobster play --ref".`,
-	Args:          cobra.MinimumNArgs(1),
-	RunE:          findRun,
-	SilenceErrors: true,
-	SilenceUsage:  true,
+	Args: cobra.MinimumNArgs(1),
+	RunE: findRun,
 }
 
 func findRun(cmd *cobra.Command, args []string) error {
@@ -95,6 +93,7 @@ func findRun(cmd *cobra.Command, args []string) error {
 }
 
 func init() {
+	markAgentCommand(findCmd)
 	findCmd.Flags().StringVar(&flagFindType, "type", "", "Filter results: movie | tv")
 	findCmd.Flags().IntVar(&flagFindLimit, "limit", 0, "Maximum results to print (0 = no limit)")
 }
