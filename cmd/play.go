@@ -172,6 +172,18 @@ func playRun(cmd *cobra.Command, args []string) error {
 		return emitErr("unsupported", 1, "--download is not supported by 'play'; use the interactive CLI")
 	}
 
+	// Resume from history by default: nothing in the JSON envelope tells a
+	// caller to pass -c, and the "resume_tracking":true it reports reads as a
+	// promise that replay will resume. An explicit --continue=false is a
+	// deliberate fresh start and must win. The detach path needs no special
+	// handling: an unchanged flag is not forwarded (forwardedArgs), so the
+	// supervised child re-applies this same default in its own playRun, and an
+	// explicit --continue=false is forwarded verbatim by detach.go's Changed()
+	// handling.
+	if !cmd.Flags().Changed("continue") {
+		flagContinue = true
+	}
+
 	// Checked before the --detach dispatch so a detached invocation reports
 	// exit 4 to the caller immediately, rather than forking a supervisor that
 	// fails into a log file the agent has no reason to read.

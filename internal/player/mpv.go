@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -89,17 +90,21 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 	// The ipcDone channel is used to synchronize the goroutine before reading final values.
 	var posBits, durBits atomic.Uint64
 	ipcDone := make(chan struct{})
+	procDone := make(chan struct{})
 	startTime := time.Now()
 	go func() {
 		defer close(ipcDone)
-		pos, dur := m.trackPlayback(ipc)
+		pos, dur := m.trackPlayback(ipc, procDone)
 		posBits.Store(math.Float64bits(pos))
 		durBits.Store(math.Float64bits(dur))
 	}()
 
 	waitErr := cmd.Wait()
-	// Wait for the IPC collector to finish so the final position/duration
-	// values are fully written before we read them.
+	// mpv is gone; tell the collector so a still-unconnected dial loop gives
+	// up now instead of running out its full retry bound, then wait for it to
+	// finish so the final position/duration values are fully written before
+	// we read them.
+	close(procDone)
 	<-ipcDone
 	elapsed := time.Since(startTime)
 	result := PlayResult{
@@ -124,15 +129,47 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 	return result, nil
 }
 
+// ipcDialTimeout bounds how long trackPlayback keeps retrying the IPC dial
+// while mpv starts up; ipcDialInterval is the pause between attempts. Package
+// vars so tests can shorten them.
+var (
+	ipcDialTimeout  = 30 * time.Second
+	ipcDialInterval = 250 * time.Millisecond
+)
+
+// dialWithRetry dials the mpv IPC socket until it succeeds, the retry bound
+// elapses, or stop closes (mpv exited). mpv creates the socket only once it
+// is up, which on a slow network stream can take well over any fixed grace
+// period — a single unretried dial here used to record whole watches as
+// position 0. Retrying is safe: a dead-on-arrival mpv closes stop within
+// seconds, which ends the loop long before the bound.
+func dialWithRetry(ipc *ipcSocket, stop <-chan struct{}) (io.ReadWriteCloser, error) {
+	deadline := time.Now().Add(ipcDialTimeout)
+	for {
+		conn, err := ipc.dial()
+		if err == nil {
+			return conn, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("no connection within %s: %w", ipcDialTimeout, err)
+		}
+		select {
+		case <-stop:
+			return nil, fmt.Errorf("mpv exited before the socket appeared: %w", err)
+		case <-time.After(ipcDialInterval):
+		}
+	}
+}
+
 // trackPlayback polls mpv's IPC for the current playback position and duration.
-func (m *MPV) trackPlayback(ipc *ipcSocket) (float64, float64) {
+func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, float64) {
 	var lastPos, lastDur float64
 
-	// Wait for IPC to become available
-	time.Sleep(500 * time.Millisecond)
-
-	conn, err := ipc.dial()
+	conn, err := dialWithRetry(ipc, stop)
 	if err != nil {
+		// Playback proceeds without tracking; say so instead of silently
+		// recording the watch as position 0.
+		fmt.Fprintf(os.Stderr, "mpv ipc: position tracking unavailable: %v\n", err)
 		return 0, 0
 	}
 	defer conn.Close()

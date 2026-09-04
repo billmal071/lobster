@@ -463,6 +463,11 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	return playStream(fbStream, title, selected, season, episode)
 }
 
+// newPlayer constructs the player playStream launches. A package var, seamed
+// like agentProvider and agentResolveAndPlay (cmd/play.go), so tests can
+// exercise playStream's post-playback handling without a real media player.
+var newPlayer = player.New
+
 // playStream handles all post-stream-resolution logic: JSON output, subtitle
 // download, download mode, playback, and history saving.
 func playStream(stream *media.Stream, title string, selected media.SearchResult, season, episode int) error {
@@ -568,18 +573,19 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		}
 	}
 
-	p2 := player.New(cfg.Player, cfg.AudioLanguage)
+	p2 := newPlayer(cfg.Player, cfg.AudioLanguage)
 	if !p2.Available() {
 		return player.NotFoundError(cfg.Player)
 	}
 
-	result, err := p2.Play(stream, title, startPos, subFiles)
-	if err != nil {
-		return fmt.Errorf("playback failed: %w", err)
-	}
+	result, playErr := p2.Play(stream, title, startPos, subFiles)
 
-	// Save to history
-	if cfg.History {
+	// Save to history before surfacing any player error: Play returns the
+	// tracked position alongside the error, and an abnormal exit (killed,
+	// crash) is exactly the watch whose resume point must not be lost. With no
+	// tracked position there is nothing to keep, and writing 0 would clobber a
+	// real position from an earlier watch of the same title.
+	if cfg.History && (playErr == nil || result.Position > 0) {
 		entry := media.HistoryEntry{
 			ID:       selected.ID,
 			Title:    selected.Title,
@@ -594,6 +600,9 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		}
 	}
 
+	if playErr != nil {
+		return fmt.Errorf("playback failed: %w", playErr)
+	}
 	return nil
 }
 
