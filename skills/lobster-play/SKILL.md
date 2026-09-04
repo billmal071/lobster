@@ -40,6 +40,9 @@ lobster find "the matrix" --limit 10
 }
 ```
 
+Add `--type tv` or `--type movie` when the user was specific ("play the
+*series*"), so a same-named film and show do not both come back.
+
 ### 2. Show the user the candidates and stop
 
 **Always ask which one before playing.** Do not pick for them, even when one
@@ -135,13 +138,19 @@ Branch on the exit code:
 | Exit | Meaning | What to do |
 | ---- | ------- | ---------- |
 | 0 | success | — |
-| 1 | bad invocation | You called it wrong: a malformed `ref`, a missing `--season`/`--episode`, an unrecognised `--type`, `--download` (unsupported), or an invalid config value. Fix the command; do not retry it unchanged |
+| 1 | bad invocation | You called it wrong: a malformed `ref`, a missing `--season`/`--episode`, `episodes` on a movie ref, an unrecognised `--type` or other flag, `--download` (unsupported), or an invalid config value. Also internal failures such as an unwritable cache directory. Fix the command; do not retry it unchanged |
 | 2 | no results | Suggest a spelling correction, or a different title. Also returned when the season or episode number does not exist — re-run `lobster episodes` and check |
 | 3 | every provider failed | Run `lobster doctor` and report which sources are down. Do **not** suggest a spelling fix — the title was found, the sources are broken |
-| 4 | player unavailable | mpv (or the configured player) is not installed |
+| 4 | player unavailable | mpv (or the configured player) is not installed, or the background process could not be started |
 
-Exit 3 is common. Providers break often; this usually means "try again later"
-or "try a different title", not "you typed it wrong".
+**A misspelling exits 2, not 3.** `find` distinguishes "every provider answered
+and none has this title" from "nothing answered at all", so exit 3 really does
+mean broken sources — never reach for a spelling fix on it. It is not the
+default failure; treat it as a genuine outage report and say so.
+
+Exit 3 from `play --detach` is a narrower case: the background process was
+started and then died within a second. The message names the log file. Read
+that log rather than running `doctor` — the cause is in it.
 
 ## Out of scope
 
