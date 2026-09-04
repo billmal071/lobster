@@ -123,6 +123,118 @@ Output format:
 }
 ```
 
+## Scripting and Agents
+
+The commands above all use fzf, so they wait for a human. Three commands don't:
+`find`, `episodes` and `play`. They never open a picker, never wait for input,
+and print a JSON envelope on stdout — including when they fail.
+
+### Finding something
+
+```bash
+./lobster find "the matrix"              # every match, as JSON
+./lobster find "the bear" --type tv      # only series (movie | tv, case-insensitive)
+./lobster find "dune" --limit 5          # cap the result count
+```
+
+```json
+{
+  "schema": 1,
+  "results": [
+    {"idx": 0, "ref": "eyJpZCI6...", "title": "The Matrix", "year": "1999", "type": "movie"}
+  ]
+}
+```
+
+The `ref` is the handle for everything else. It is opaque — don't build one or
+edit one, just pass back what `find` printed. It carries the title, year and
+type as well as the ID, plus the base it was found under, so `episodes` and
+`play` resolve it against the same source without you passing `--base` again.
+`idx` is only meaningful inside the payload it came from; results vary between
+runs, so don't hold on to it.
+
+### Listing episodes
+
+```bash
+./lobster episodes --ref "$REF"             # first season
+./lobster episodes --ref "$REF" --season 2  # a specific one
+```
+
+```json
+{
+  "schema": 1,
+  "title": "Some Show",
+  "seasons": [1, 2, 3],
+  "season": 2,
+  "episodes": [{"number": 1, "title": "Pilot"}]
+}
+```
+
+`seasons` is the full list, so one call tells you both what exists and what is
+in the season you asked for.
+
+### Playing
+
+```bash
+./lobster play --ref "$REF" --detach                          # a movie
+./lobster play --ref "$REF" --season 2 --episode 3 --detach   # an episode
+```
+
+```json
+{
+  "schema": 1,
+  "status": "started",
+  "pid": 48213,
+  "title": "The Matrix",
+  "log": "/home/you/.cache/lobster/play-847264193.log",
+  "resume_tracking": true
+}
+```
+
+A series ref needs both `--season` and `--episode` — without them playback would
+fall through to the interactive picker and hang, so `play` rejects it instead.
+
+Pass `--detach` from a script. Attached, the player inherits lobster's stdout so
+that a human running `play --ref` still sees mpv's output — which means the JSON
+envelope is interleaved with progress lines and won't parse. `--detach` sends
+the player's output to the `log` file and returns in about a second.
+
+That second is the whole caveat: `"status": "started"` means a player process
+exists, not that anything is on screen. Finding a working source usually takes
+five to thirty seconds, so most failures land after the envelope was printed.
+The `log` path is where they land, and it's randomly named rather than derived
+from the pid, so keep it. `resume_tracking` says whether the configured player
+reports playback position — only mpv does.
+
+Attached, playing an episode starts the same continuous-playback session
+described above: the countdown runs when it ends and the next episode follows.
+Detached there is no terminal for that menu, so playback stops after the episode
+you asked for.
+
+`--download` is not supported by `play` — batch downloading is a prompt-driven
+path. Use the interactive CLI for that.
+
+### Exit codes
+
+Errors are JSON on stdout too, so parse unconditionally:
+
+```json
+{"schema": 1, "error": {"code": "no_results", "message": "nothing matched \"the matirx\""}}
+```
+
+The exit code is what to branch on:
+
+| Exit | Meaning |
+|------|---------|
+| **0** | Success |
+| **1** | You called it wrong — bad ref, missing `--season`/`--episode`, unknown flag, invalid config value, `--download`. Also internal failures like an unwritable cache dir |
+| **2** | Nothing matched. A typo, or a season/episode number the show doesn't have |
+| **3** | Every provider failed. The title is fine, the sources aren't — run `./lobster doctor` |
+| **4** | The configured player isn't installed or isn't on PATH |
+
+Check `schema`. If it isn't `1`, the output shape has changed and your script
+should say so rather than guess.
+
 ## Configuration
 
 Config file: `~/.config/lobster/config.toml`

@@ -244,6 +244,7 @@ scripting on their own:
 
 ```bash
 lobster find "the matrix" --limit 5      # JSON candidates, each with a ref
+lobster find "the bear" --type tv        # filter to movie | tv (case-insensitive)
 lobster episodes --ref <REF> --season 2  # JSON season/episode listing
 lobster play --ref <REF> --detach        # start playback, return immediately
 ```
@@ -263,6 +264,19 @@ player inherits lobster's stdout and its progress output is interleaved with
 the envelope. That is deliberate — a human running `lobster play --ref` should
 still see the player — so a script must pass `--detach` and read the player's
 output from the `log` path in the response.
+
+Failures use the same envelope — `{"schema": 1, "error": {"code": ..., "message": ...}}`
+— so stdout always parses. The exit code is what to branch on:
+
+| Exit | Meaning | What it usually means |
+| ---- | ------- | --------------------- |
+| `0` | Success | — |
+| `1` | Bad invocation | Malformed `ref`, missing `--season`/`--episode`, unknown flag, unrecognised `--type`, `--download` (unsupported by `play`), or an invalid config value. Also internal failures such as an unwritable cache directory. Retrying unchanged will not help |
+| `2` | Nothing matched | A misspelling, or a season/episode number the show does not have |
+| `3` | Every provider failed | The title exists, the sources are down. Run `lobster doctor`; do not suggest a spelling fix |
+| `4` | Player unavailable | mpv (or whichever player is configured) is not installed or not on `PATH` |
+
+Check `schema` before trusting the shape of the rest.
 
 ## Configuration
 
