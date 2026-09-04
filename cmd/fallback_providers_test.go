@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"testing"
+	"time"
 
 	"lobster/internal/config"
 	"lobster/internal/provider"
@@ -29,6 +32,26 @@ func hasProvider[T provider.Provider](ps []provider.Provider) bool {
 }
 
 func TestMain(m *testing.M) {
+	// waitLiveness (detach_test.go) needs a real child process whose exit it
+	// can observe, without launching a real media player or depending on a
+	// shell being on PATH (this test binary also has to build and run on
+	// windows-latest CI). The trick: re-exec this same test binary with this
+	// env var set, and short-circuit straight to os.Exit before the testing
+	// package ever gets involved, so it behaves as a plain, portable,
+	// disposable helper process rather than another test run.
+	if code := os.Getenv("LOBSTER_TEST_HELPER_EXIT_CODE"); code != "" {
+		if ms := os.Getenv("LOBSTER_TEST_HELPER_SLEEP_MS"); ms != "" {
+			if n, err := strconv.Atoi(ms); err == nil {
+				time.Sleep(time.Duration(n) * time.Millisecond)
+			}
+		}
+		n, err := strconv.Atoi(code)
+		if err != nil {
+			n = 1
+		}
+		os.Exit(n)
+	}
+
 	// Stub flixhqDomain to prevent live network probes in tests.
 	// Tests that need a healthy or dead result override this with t.Cleanup restore.
 	prev := flixhqDomain

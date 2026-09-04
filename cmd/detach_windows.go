@@ -2,10 +2,7 @@
 
 package cmd
 
-import (
-	"os"
-	"syscall"
-)
+import "syscall"
 
 // detachedProcess is Win32's DETACHED_PROCESS creation flag. Go's syscall
 // package exports CREATE_NEW_PROCESS_GROUP but not this one, so it is spelled
@@ -18,11 +15,4 @@ func detachSpawnAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | detachedProcess,
 	}
-}
-
-// processAlive reports whether the pid is still running. On Windows
-// os.FindProcess fails outright for a dead pid, which is the check.
-func processAlive(pid int) bool {
-	_, err := os.FindProcess(pid)
-	return err == nil
 }
