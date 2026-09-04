@@ -85,8 +85,10 @@ func applyRefBase(cmd *cobra.Command, r playRef) {
 	}
 }
 
-// validateSeasonEpisode confirms the requested season and episode actually
-// exist on p before any playback is dispatched.
+// validateSeasonEpisode rejects a requested season or episode that the primary
+// provider positively reports does not exist, before any playback is
+// dispatched. It is a veto on a known-bad request, not a precondition for
+// playback: when it cannot tell, it says nothing.
 //
 // resolveAndPlay (cmd/search.go) initialises its seasonIdx/episodeIdx to 0 and
 // only overwrites them on an exact Number match, so a request for a season or
@@ -95,16 +97,33 @@ func applyRefBase(cmd *cobra.Command, r playRef) {
 // reported success. `episodes` already answers exit 2 for exactly that input,
 // so the two commands contradicted each other about whether a season exists.
 //
-// The distinction between the two failure modes is the point: a season that
-// does not exist is exitNoResults (2) — pick a different number — while a
-// provider that cannot answer is exitProvidersFailed (3) — run doctor. Mapping
-// the second onto the first would tell the agent to fix the user's input when
-// the sources are down.
+// It rejects one thing only: a season or episode genuinely absent from a list
+// the primary provider successfully returned. Everything else — an error, or
+// an empty list — means "cannot validate", and must fall through untouched.
+//
+// That distinction is load-bearing, not defensive coding. resolveAndPlay has a
+// purpose-built branch for an unenumerable show (cmd/search.go:237, `if err !=
+// nil || len(seasons) == 0`) that resolves by title/year/season/episode across
+// the whole fallback chain and plays. Because this gate runs first, turning a
+// GetSeasons failure into a verdict here makes that branch unreachable from
+// `play --ref`. And it is not a rare state: gatherSearchResults broadens to the
+// fallback providers whenever the primary returns fewer than three results,
+// while find stamps the primary's base on every result — so any ref whose ID
+// actually came from a fallback provider lands here, which is exactly when the
+// primary is degraded. A watchable show would report "every provider is down".
+//
+// So there is no exitProvidersFailed in this function. A primary that cannot
+// answer is not this function's verdict to give: resolveAndPlay tries the
+// fallbacks and reports exit 3 itself if they fail too, which is both later and
+// better informed.
 func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) error {
 	seasons, err := p.GetSeasons(r.ID)
-	if err != nil {
-		return emitErr("providers_failed", exitProvidersFailed, "getting seasons for %q: %v", r.Title, err)
+	if err != nil || len(seasons) == 0 {
+		// Same condition resolveAndPlay branches on. Let it do its job.
+		debugf("play: cannot validate season/episode against primary (err=%v, seasons=%d); deferring to the resolver", err, len(seasons))
+		return nil
 	}
+
 	seasonID := ""
 	found := false
 	for _, s := range seasons {
@@ -114,13 +133,17 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 		}
 	}
 	if !found {
+		// A real, non-empty season list that lacks this number. This is the
+		// silent-S1E1 bug: resolveAndPlay would leave seasonIdx at 0 and play
+		// season one while reporting success.
 		return emitErr("no_results", exitNoResults,
 			"season %d not found for %q (list them with 'lobster episodes --ref ...')", season, r.Title)
 	}
 
 	eps, err := p.GetEpisodes(r.ID, seasonID)
-	if err != nil {
-		return emitErr("providers_failed", exitProvidersFailed, "getting episodes for %q: %v", r.Title, err)
+	if err != nil || len(eps) == 0 {
+		debugf("play: cannot validate episode against primary (err=%v, episodes=%d); deferring to the resolver", err, len(eps))
+		return nil
 	}
 	for _, e := range eps {
 		if e.Number == episode {

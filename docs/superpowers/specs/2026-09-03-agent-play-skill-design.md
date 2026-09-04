@@ -205,7 +205,7 @@ do interactively — including resume tracking, which is preserved rather than
 sacrificed.
 
 ```json
-{"schema":1,"status":"playing","pid":48213,
+{"schema":1,"status":"started","pid":48213,
  "log":"~/.cache/lobster/play-48213.log","resume_tracking":true}
 ```
 
@@ -223,8 +223,11 @@ Implementation requirements:
 - **Liveness wait before reporting success.** `cmd.Start()` succeeding only
   means the binary exec'd. mpv's own "stream failed to load" detection is
   "exited in under 5s with no playback" (`mpv.go:120-122`). The foreground waits
-  ~1s and confirms the child is alive before emitting `status: playing`;
+  ~1s and confirms the child is alive before emitting `status: started`;
   otherwise it reports the failure with exit code 3 or 4 and points at the log.
+  The status word is "started", not "playing", precisely because the wait is
+  ~1s while extraction takes 5-30s: all the parent can honestly claim is that a
+  player process started, which is why the `log` path is part of the contract.
   This does not eliminate the race — a stream can still die at 3s — but it
   removes the common case of reporting success for a stream that never started.
 - **`resume_tracking` is player-dependent, not detach-dependent.** VLC and

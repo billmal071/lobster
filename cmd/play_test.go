@@ -440,41 +440,55 @@ func TestPlayValidSeasonEpisodeReachesPlayback(t *testing.T) {
 	}
 }
 
-// A provider that cannot answer is exit 3 ("sources are down"), never exit 2
-// ("no such season") — the advice attached to each is different.
-func TestPlaySeasonLookupProviderErrorExitsThree(t *testing.T) {
+// A primary provider that cannot enumerate seasons must NOT be turned into a
+// verdict. resolveAndPlay has a purpose-built branch for exactly this state
+// (cmd/search.go:237, `if err != nil || len(seasons) == 0`) that resolves by
+// title/year/season/episode across the whole fallback chain and plays. A ref
+// whose ID actually came from a fallback provider still carries the primary's
+// base (find stamps cfg.Base on every result), so this is the normal case
+// whenever the primary is degraded — which is this repo's normal state.
+// Validating here must not make that branch unreachable.
+func TestPlaySeasonLookupErrorFallsThroughToResolver(t *testing.T) {
 	p := twoSeasonStub()
-	p.seasonsErr = errors.New("upstream 503")
+	p.seasonsErr = errors.New("unexpected status 404")
 	dispatched := playHarness(t, p, showRef(t), 2, 1)
 
-	err := playRun(playCmd, nil)
-	var ee *exitError
-	if !errors.As(err, &ee) {
-		t.Fatalf("playRun returned %T (%v), want *exitError", err, err)
+	if err := playRun(playCmd, nil); err != nil {
+		t.Fatalf("playRun returned %v; a primary that cannot answer must fall through to the resolver's fallback branch, not become a verdict", err)
 	}
-	if ee.code != exitProvidersFailed {
-		t.Fatalf("exit code = %d, want %d", ee.code, exitProvidersFailed)
-	}
-	if *dispatched {
-		t.Fatal("playback was dispatched though the season lookup failed")
+	if !*dispatched {
+		t.Fatal("playback was not dispatched; the resolver's fallback-stream branch is unreachable")
 	}
 }
 
-func TestPlayEpisodeLookupProviderErrorExitsThree(t *testing.T) {
-	p := twoSeasonStub()
-	p.episodesErr = errors.New("upstream 503")
+// The empty list is the same state as the error: cmd/search.go:237 treats
+// `err != nil || len(seasons) == 0` identically, and the old code funnelled
+// the empty case into !found and answered exit 2 — "no such season" for a show
+// whose seasons simply were not enumerable.
+func TestPlayEmptySeasonListFallsThroughToResolver(t *testing.T) {
+	p := &stubProvider{} // GetSeasons returns nil, nil
 	dispatched := playHarness(t, p, showRef(t), 2, 1)
 
-	err := playRun(playCmd, nil)
-	var ee *exitError
-	if !errors.As(err, &ee) {
-		t.Fatalf("playRun returned %T (%v), want *exitError", err, err)
+	if err := playRun(playCmd, nil); err != nil {
+		t.Fatalf("playRun returned %v; an empty season list means \"cannot validate\", not \"no such season\"", err)
 	}
-	if ee.code != exitProvidersFailed {
-		t.Fatalf("exit code = %d, want %d", ee.code, exitProvidersFailed)
+	if !*dispatched {
+		t.Fatal("playback was not dispatched for an unenumerable show")
 	}
-	if *dispatched {
-		t.Fatal("playback was dispatched though the episode lookup failed")
+}
+
+// Same reasoning one level down: an error fetching episodes means the primary
+// cannot answer, so let the resolver decide rather than pre-empting it.
+func TestPlayEpisodeLookupErrorFallsThroughToResolver(t *testing.T) {
+	p := twoSeasonStub()
+	p.episodesErr = errors.New("unexpected status 404")
+	dispatched := playHarness(t, p, showRef(t), 2, 1)
+
+	if err := playRun(playCmd, nil); err != nil {
+		t.Fatalf("playRun returned %v; a failed episode lookup must fall through to the resolver", err)
+	}
+	if !*dispatched {
+		t.Fatal("playback was not dispatched though only the primary's episode lookup failed")
 	}
 }
 
