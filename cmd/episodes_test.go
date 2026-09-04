@@ -3,7 +3,9 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"lobster/internal/config"
 	"lobster/internal/media"
@@ -393,6 +395,43 @@ func TestEpisodesFallsBackWhenPrimaryCannotEnumerate(t *testing.T) {
 
 // The fallback must be looked up under the ref's own title, and it must not
 // silently accept a provider that answers about a different show.
+//
+// resolver.Candidates ranks but does not threshold — a score-0 result is still
+// returned — so "the first candidate whose GetSeasons is non-empty" accepts a
+// provider that answered about something else entirely. The failure is silent
+// and undetectable by the caller: the envelope echoes the ref's own title, so
+// the agent sees "Some Show" with a different show's seasons and episodes.
+// Listing the wrong work without failing loudly is the exact failure the ref
+// design exists to prevent.
+func TestEpisodesFallbackRefusesADifferentShow(t *testing.T) {
+	hostileEnv(t)
+	captureAgentOut(t)
+
+	withStubProvider(t, &stubProvider{})
+
+	fb := twoSeasonStub()
+	fb.results = []media.SearchResult{
+		{ID: "fb/totally-different", Title: "Completely Different Show", Year: "1999", Type: media.TV},
+	}
+	prevFB := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider {
+		return []provider.Provider{fb}
+	}
+	t.Cleanup(func() { agentFallbackProviders = prevFB })
+
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+
+	err := episodesRun(episodesCmd, nil)
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("episodesRun returned %T (%v) for an unrelated fallback match, want *exitError", err, err)
+	}
+	if ee.code != exitNoResults {
+		t.Fatalf("exit code = %d, want %d", ee.code, exitNoResults)
+	}
+}
+
+// A fallback that simply does not carry the title at all is exit 2 too.
 func TestEpisodesFallbackIgnoresUnrelatedFallbackResults(t *testing.T) {
 	hostileEnv(t)
 	captureAgentOut(t)
@@ -416,5 +455,90 @@ func TestEpisodesFallbackIgnoresUnrelatedFallbackResults(t *testing.T) {
 	}
 	if ee.code != exitNoResults {
 		t.Fatalf("exit code = %d, want %d", ee.code, exitNoResults)
+	}
+}
+
+// blockingProvider is a fallback that hangs in Search until its channel is
+// closed. provider.Provider takes no context, so this is what a wedged
+// upstream looks like from inside lobster: a call that simply does not return.
+type blockingProvider struct {
+	*stubProvider
+	block chan struct{}
+}
+
+func (b *blockingProvider) Search(string) ([]media.SearchResult, error) {
+	<-b.block
+	return nil, nil
+}
+
+// newBlockingProvider returns a provider wedged in Search, released either by
+// the test's cleanup or after grace — whichever comes first. The grace release
+// is what keeps the test an assertion failure rather than a hang if the scan is
+// ever unbounded again.
+func newBlockingProvider(t *testing.T, grace time.Duration) *blockingProvider {
+	t.Helper()
+	b := &blockingProvider{stubProvider: &stubProvider{}, block: make(chan struct{})}
+	var once sync.Once
+	release := func() { once.Do(func() { close(b.block) }) }
+	timer := time.AfterFunc(grace, release)
+	t.Cleanup(func() {
+		timer.Stop()
+		release()
+	})
+	return b
+}
+
+// The fallback scan must be bounded. It fans out over the whole chain — up to
+// eleven providers, each a Search plus several GetSeasons calls against a 30s
+// HTTP client timeout — and episodes is one of the commands whose entire
+// premise is that an agent is never left waiting. find bounds the same fan-out
+// at multiSearchTimeout (cmd/multisearch.go); this must too, or one wedged
+// provider turns a one-call command into minutes of silence.
+func TestEpisodesFallbackScanIsBounded(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+
+	prevTimeout := episodesFallbackTimeout
+	episodesFallbackTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { episodesFallbackTimeout = prevTimeout })
+
+	withStubProvider(t, &stubProvider{})
+
+	// Wedged provider first in chain order, so a scan that waits for it in turn
+	// cannot reach the healthy one until it gives up.
+	blocked := newBlockingProvider(t, 3*time.Second)
+	healthy := twoSeasonStub()
+	healthy.results = []media.SearchResult{
+		{ID: "fb/some-show", Title: "Some Show", Type: media.TV},
+	}
+	prevFB := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider {
+		return []provider.Provider{blocked, healthy}
+	}
+	t.Cleanup(func() { agentFallbackProviders = prevFB })
+
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+
+	start := time.Now()
+	err := episodesRun(episodesCmd, nil)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("episodesRun took %v with one wedged provider; the scan is not bounded by episodesFallbackTimeout (%v)", elapsed, episodesFallbackTimeout)
+	}
+
+	var got struct {
+		Episodes []struct {
+			Title string `json:"title"`
+		} `json:"episodes"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+	}
+	if len(got.Episodes) != 1 || got.Episodes[0].Title != "Pilot" {
+		t.Fatalf("episodes = %+v, want the healthy fallback's season 1", got.Episodes)
 	}
 }

@@ -26,8 +26,12 @@ import (
 // It is a hint, not a guarantee. find searches the primary provider *and* the
 // fallback chain (gatherSearchResults), and stamps cfg.Base on every result it
 // prints, so a result that actually came from a fallback provider carries the
-// primary's base. It cannot be made exact either: most fallback providers are
-// not addressable as a --base value at all (newProvider, cmd/provider.go).
+// primary's base. Making it exact would not help. A base is a config-time
+// choice of *primary* provider, not a per-row attribution, and by the time
+// find prints a row that row may not come from one provider at all:
+// deduplicateResults (cmd/multisearch.go) merges duplicates across providers,
+// keeping the first arrival's ID while filling its metadata gaps from the
+// others. There is no single honest base to stamp on the merged row.
 //
 // So nothing downstream may assume the ID resolves against the base, and
 // nothing does. play re-searches by title through the whole chain

@@ -803,9 +803,12 @@ func findRun(cmd *cobra.Command, args []string) error {
 Note on `Base`, added after review: this block stamps the *configured* base on
 every result, including ones the fallback chain supplied, whose IDs belong to a
 different provider. That stamp is a starting point for resolution, not an
-attribution, and it cannot be made exact — most fallback providers are not
-addressable as a `--base` value at all (`newProvider`, `cmd/provider.go`). What
-matters is that no consumer of a ref may assume its ID resolves against the
+attribution. Making it exact would not help: a base is a config-time choice of
+*primary* provider, and by the time this loop runs a row may not come from a
+single provider at all — `deduplicateResults` (`cmd/multisearch.go`) merges
+duplicates across providers, keeping the first arrival's ID and filling its
+metadata gaps from the others, so there is no one honest base to stamp on the
+merged row. What matters is that no consumer of a ref may assume its ID resolves against the
 primary: `play` re-searches by title through the whole chain (`resolveAndPlay`,
 `cmd/search.go`) and `episodes` does the same via `seasonSource`
 (`cmd/episodes.go`) when the primary cannot enumerate the ref's ID. See Task 4.

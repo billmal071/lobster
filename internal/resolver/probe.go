@@ -129,8 +129,35 @@ func FallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 // than the provider's own relevance order — the same ranking resolveWithProvider
 // applies, exported for callers outside the resolver that re-search a foreign
 // catalog by title (cmd.seasonSource).
+//
+// Ranking is not filtering. Every candidate of the right media type is
+// returned, including ones that match nothing about req: within resolution
+// that is safe, because a candidate still has to yield a playable stream. A
+// caller that only reads metadata off the candidate has no such check and must
+// gate on Matches first.
 func Candidates(results []media.SearchResult, req Request) []media.SearchResult {
 	return candidatesFor(results, req)
+}
+
+// Matches reports whether r can plausibly be the work req identifies.
+//
+// The test is the identity of the work, not the strength of the ranking:
+// candidateScore awards points for a year within one of req's, so a score
+// above zero is reachable by an unrelated show that happens to share a
+// release year. Only an identical ID — conclusive, the provider indexes the
+// same catalog — or a title that is req's title or begins with it counts.
+//
+// Deliberately the same title rule candidateScore rewards, so ranking and
+// admission cannot disagree about what a match is.
+func Matches(r media.SearchResult, req Request) bool {
+	if req.ID != "" && r.ID == req.ID {
+		return true
+	}
+	if req.Title == "" {
+		return false
+	}
+	title, want := normalize(r.Title), normalize(req.Title)
+	return title == want || strings.HasPrefix(title, want)
 }
 
 func fallbackCandidates(results []media.SearchResult, mediaType media.MediaType) []media.SearchResult {

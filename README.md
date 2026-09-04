@@ -250,11 +250,12 @@ lobster play --ref <REF> --detach        # start playback, return immediately
 All three print JSON on stdout and never prompt — including on failure. `find`
 and `episodes` print nothing else, so their stdout is always parseable; `play`
 shares stdout with the player unless you pass `--detach` (see below).
-`play --ref` and `episodes --ref` both
-resolve against the base the ref was found under, and `play` forwards any flags you pass
-explicitly (`--base`, `--quality`, `--player`, `--provider`, `--language`,
-`--audio-language`, `--no-subs`, `--debug`, `--continue`) to the detached
-child so overrides still apply in the background.
+
+`play --ref` and `episodes --ref` both resolve against the base the ref was
+found under, and `play` forwards any flags you pass explicitly (`--base`,
+`--quality`, `--player`, `--provider`, `--language`, `--audio-language`,
+`--no-subs`, `--debug`, `--continue`) to the detached child so overrides still
+apply in the background.
 
 `--detach` is what makes the stdout-is-only-JSON guarantee hold: attached, the
 player inherits lobster's stdout and its progress output is interleaved with
