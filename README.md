@@ -274,7 +274,7 @@ Failures use the same envelope — `{"schema": 1, "error": {"code": ..., "messag
 | `1` | Bad invocation | Malformed `ref`, missing `--season`/`--episode`, unknown flag, unrecognised `--type`, `--download` (unsupported by `play`), or an invalid config value. Also internal failures such as an unwritable cache directory. Retrying unchanged will not help |
 | `2` | Nothing matched | A misspelling, or a season/episode number the show does not have |
 | `3` | Every provider failed | The title exists, the sources are down. Run `lobster doctor`; do not suggest a spelling fix. From `play --detach` it means something narrower — the background process started and then died within a second, and the error message names the log that says why |
-| `4` | Player unavailable | mpv (or whichever player is configured) is not installed or not on `PATH` |
+| `4` | Player unavailable | mpv (or whichever player is configured) is not installed or not on `PATH`. From `play --detach` it also covers a background process that could not be started at all — distinct from exit 3, which is one that started and then died |
 
 Check `schema` before trusting the shape of the rest.
 

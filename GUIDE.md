@@ -230,7 +230,7 @@ The exit code is what to branch on:
 | **1** | You called it wrong — bad ref, missing `--season`/`--episode`, unknown flag, invalid config value, `--download`. Also internal failures like an unwritable cache dir |
 | **2** | Nothing matched. A typo, or a season/episode number the show doesn't have |
 | **3** | Every provider failed. The title is fine, the sources aren't — run `./lobster doctor` |
-| **4** | The configured player isn't installed or isn't on PATH |
+| **4** | The configured player isn't installed or isn't on PATH, or the background process couldn't be started |
 
 One exception to exit 3: from `play --detach` it means the background process
 started and then died within a second. That isn't a provider outage report, and
