@@ -172,9 +172,44 @@ func Candidates(results []media.SearchResult, req Request) []media.SearchResult 
 // This is deliberately stricter than candidateScore, which still awards a
 // point for a bare prefix. Ranking may prefer a near miss; admission may not
 // accept one.
+//
+// # Media type
+//
+// A candidate of the wrong media type is not the work req identifies, however
+// well its title reads. "Spider-Man" is the 2002 film and the 1994 animated
+// series under one title, so no title rule can separate them. Nor does ranking
+// remove the film: candidatesFor delegates to dedupeByType, which returns the
+// *other* type when the requested one is absent, so a provider holding only
+// the film offers the film. Without this check cmd.probeSeasons went on to call
+// GetSeasons on a movie ID and printed whatever came back as the show's
+// seasons, under the ref's own title, exit 0.
+//
+// Two things about where the check sits and what it assumes:
+//
+// The check is BELOW the identical-ID return, so an ID match still wins. IDs
+// here carry their own type — "tv/1396", "movie/557",
+// "series/watch-breaking-bad-39516" — so a candidate that shares a ref's ID
+// while disagreeing about its type has contradicted itself, and the ID is the
+// half that came from the catalogue rather than from a scraper inferring a type
+// out of a URL path. Above the ID return, one mislabelled row would throw away
+// the only conclusive evidence of identity there is.
+//
+// Request.MediaType has no "unspecified": media.Movie is the zero value of
+// media.MediaType, so a Request that never sets it asks for a film and this
+// gate refuses every TV candidate. Callers must set it. Both production sites
+// do — cmd/episodes.go's seasonSource passes media.TV outright, and
+// cmd/fallback.go's tryFallbackStream copies Type off the search result the
+// user picked — and TestMatchesTreatsAnUnsetRequestMediaTypeAsMovie pins the
+// consequence so a third caller finds out from a test rather than from an
+// empty season list. Adding a sentinel to media.MediaType was the alternative;
+// it renumbers an iota compared across the codebase to fix a hazard with no
+// instances, which is the worse trade.
 func Matches(r media.SearchResult, req Request) bool {
 	if req.ID != "" && r.ID == req.ID {
 		return true
+	}
+	if r.Type != req.MediaType {
+		return false
 	}
 	title, want := normalize(r.Title), normalize(req.Title)
 	if title == "" || want == "" {
