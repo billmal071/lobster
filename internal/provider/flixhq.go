@@ -64,7 +64,7 @@ func (f *FlixHQ) Search(query string) ([]media.SearchResult, error) {
 	}
 
 	if len(results) == 0 {
-		return nil, fmt.Errorf("no results found for %q", query)
+		return nil, fmt.Errorf("%w for %q", ErrNoResults, query)
 	}
 
 	// Sort by relevance to the original query

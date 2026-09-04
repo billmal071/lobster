@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -14,15 +15,40 @@ import (
 
 const multiSearchTimeout = 5 * time.Second
 
+// An empty search has two causes that call for opposite advice, so
+// gatherSearchResults reports which one happened and callers branch on it with
+// errors.Is rather than matching the message text.
+//
+// errNoResults means every provider that was asked answered, and none of them
+// indexes this title — usually a typo, so `find` exits 2 and the agent should
+// suggest a spelling. errProvidersFailed means nothing answered at all, so
+// `find` exits 3 and the agent should run `lobster doctor`. Conflating them is
+// not cosmetic: exit 3 on a typo sends an agent to diagnose provider health
+// over a misspelling, which is what the binary did until this split existed.
+var (
+	errNoResults       = errors.New("no results found")
+	errProvidersFailed = errors.New("no provider could be reached")
+)
+
 // gatherSearchResults runs the primary provider's search, then broadens to the
 // fallback providers whenever the primary errors or returns few results — so a
 // title the primary catalog lacks (e.g. anime, which only the TMDB/AllAnime/
-// AniPub providers index) is still discoverable. It only errors when no
-// provider yields anything.
+// AniPub providers index) is still discoverable.
+//
+// It errors only when no provider yields anything, with errNoResults or
+// errProvidersFailed wrapped in so the caller can tell the two apart. Both
+// messages name the query, because the interactive path (playFlow) prints the
+// error verbatim.
 func gatherSearchResults(primary provider.Provider, fallbacks []provider.Provider, query string) ([]media.SearchResult, error) {
 	stop := ui.StartSpinner(fmt.Sprintf("Searching for %q...", query))
 	results, err := primary.Search(query)
 	stop()
+	// A provider that answered with nothing still counts as reached: it is
+	// evidence the title does not exist, which a failed call is not. Most
+	// providers signal "nothing matched" with an error rather than an empty
+	// slice, so `err == nil` alone would classify every real typo as an
+	// outage — see provider.ErrNoResults.
+	reached := err == nil || errors.Is(err, provider.ErrNoResults)
 	if err != nil {
 		debugf("primary search (%T) failed: %v; broadening to fallback providers", primary, err)
 		results = nil
@@ -35,15 +61,19 @@ func gatherSearchResults(primary provider.Provider, fallbacks []provider.Provide
 	if len(results) < 3 {
 		debugf("primary returned %d results, searching fallback providers...", len(results))
 		stop = ui.StartSpinner("Searching more providers...")
-		merged := multiProviderSearch(results, fallbacks, query)
+		merged, fallbackReached := multiProviderSearch(results, fallbacks, query)
 		stop()
+		reached = reached || fallbackReached
 		if len(merged) > 0 {
 			results = merged
 		}
 	}
 
 	if len(results) == 0 {
-		return nil, fmt.Errorf("no results found for %q", query)
+		if !reached {
+			return nil, fmt.Errorf("%w (searching %q)", errProvidersFailed, query)
+		}
+		return nil, fmt.Errorf("%w for %q", errNoResults, query)
 	}
 	return results, nil
 }
@@ -53,13 +83,19 @@ func gatherSearchResults(primary provider.Provider, fallbacks []provider.Provide
 // primary is deliberately not re-queried: a thin-but-successful first search
 // followed by a transient second failure used to discard the only results the
 // user would have seen.
-func multiProviderSearch(primaryResults []media.SearchResult, fallbacks []provider.Provider, query string) []media.SearchResult {
+//
+// The second return reports whether at least one fallback actually answered —
+// with or without results. gatherSearchResults needs it to tell "no provider
+// indexes this title" from "no provider is up", and an empty merged slice
+// cannot distinguish the two on its own.
+func multiProviderSearch(primaryResults []media.SearchResult, fallbacks []provider.Provider, query string) ([]media.SearchResult, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), multiSearchTimeout)
 	defer cancel()
 
 	var mu sync.Mutex
 	// Pre-allocate slice for fallback results to maintain order.
 	fallbackResults := make([][]media.SearchResult, len(fallbacks))
+	reached := false
 
 	var wg sync.WaitGroup
 	for i, fb := range fallbacks {
@@ -69,17 +105,24 @@ func multiProviderSearch(primaryResults []media.SearchResult, fallbacks []provid
 			results, err := searchWithContext(ctx, p, query)
 			if err != nil {
 				debugf("multi-search fallback (%T) failed: %v", p, err)
+				// Answered, just emptily — still evidence about the title.
+				if errors.Is(err, provider.ErrNoResults) {
+					mu.Lock()
+					reached = true
+					mu.Unlock()
+				}
 				return
 			}
 			mu.Lock()
 			fallbackResults[idx] = results
+			reached = true
 			mu.Unlock()
 		}(i, fb)
 	}
 
 	wg.Wait()
 
-	return deduplicateResults(primaryResults, fallbackResults)
+	return deduplicateResults(primaryResults, fallbackResults), reached
 }
 
 // searchWithContext runs a provider search, aborting if the context expires.

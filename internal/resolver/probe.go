@@ -6,6 +6,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 
 	"lobster/internal/extract"
 	"lobster/internal/media"
@@ -124,6 +127,183 @@ func FallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 	return fallbackCandidates(results, mediaType)
 }
 
+// Candidates ranks results against the work req identifies, best first, capped
+// at MaxCandidates. Unlike FallbackCandidates it uses ID, Title and Year rather
+// than the provider's own relevance order — the same ranking resolveWithProvider
+// applies, exported for callers outside the resolver that re-search a foreign
+// catalog by title (cmd.seasonSource).
+//
+// Ranking is not filtering. Every candidate of the right media type is
+// returned, including ones that match nothing about req: within resolution
+// that is safe, because a candidate still has to yield a playable stream. A
+// caller that only reads metadata off the candidate has no such check and must
+// gate on Matches first.
+func Candidates(results []media.SearchResult, req Request) []media.SearchResult {
+	return candidatesFor(results, req)
+}
+
+// Matches reports whether r can plausibly be the work req identifies.
+//
+// The test is the identity of the work, not the strength of the ranking:
+// candidateScore awards points for a year within one of req's, so a score
+// above zero is reachable by an unrelated show that happens to share a
+// release year. Admission needs an identical ID — conclusive, the provider
+// indexes the same catalog — or titles that reduce to the same normalized key.
+//
+// The rule is equality of keys, never a prefix. A prefix test admits a
+// *different* work whose title merely starts with the ref's: "Lost" would take
+// "Lost in Space", "Star Trek" would take "Star Trek: Discovery", and the
+// envelope would print the ref's own title over the impostor's seasons with
+// nothing for the caller to detect. normalize is what absorbs the harmless
+// disagreements instead — case, accents, "&" against "and", hyphens, dots and
+// apostrophes — so "Rick & Morty", "Spider-Man" and "Pokémon" still meet
+// "Rick and Morty", "Spider Man" and "Pokemon".
+//
+// One controlled inequality survives: a *qualifier* one side carries and the
+// other does not — a trailing parenthetical ("The Office (US)") or a
+// season/part subtitle ("Attack on Titan: Final Season"). stripQualifier is
+// applied to one side at a time and only where it removes something, so the
+// side being compared against keeps its own qualifier intact. That is what
+// keeps siblings apart: "The Office (US)" against "The Office (UK)" compares
+// "the office" to "the office uk" and "the office us" to "the office", and
+// fails both ways. An arbitrary subtitle is not a qualifier, so
+// "Star Trek: Discovery" is never reduced to "Star Trek" in either direction.
+//
+// This is deliberately stricter than candidateScore, which still awards a
+// point for a bare prefix. Ranking may prefer a near miss; admission may not
+// accept one.
+//
+// # Media type
+//
+// A candidate of the wrong media type is not the work req identifies, however
+// well its title reads. "Spider-Man" is the 2002 film and the 1994 animated
+// series under one title, so no title rule can separate them. Nor does ranking
+// remove the film: candidatesFor delegates to dedupeByType, which returns the
+// *other* type when the requested one is absent, so a provider holding only
+// the film offers the film. Without this check cmd.probeSeasons went on to call
+// GetSeasons on a movie ID and printed whatever came back as the show's
+// seasons, under the ref's own title, exit 0.
+//
+// Two things about where the check sits and what it assumes:
+//
+// The check is BELOW the identical-ID return, so an ID match still wins. IDs
+// here carry their own type — "tv/1396", "movie/557",
+// "series/watch-breaking-bad-39516" — so a candidate that shares a ref's ID
+// while disagreeing about its type has contradicted itself, and the ID is the
+// half that came from the catalogue rather than from a scraper inferring a type
+// out of a URL path. Above the ID return, one mislabelled row would throw away
+// the only conclusive evidence of identity there is.
+//
+// Request.MediaType has no "unspecified": media.Movie is the zero value of
+// media.MediaType, so a Request that never sets it asks for a film and this
+// gate refuses every TV candidate. Callers must set it. Both production sites
+// do — cmd/episodes.go's seasonSource passes media.TV outright, and
+// cmd/fallback.go's tryFallbackStream copies Type off the search result the
+// user picked — and TestMatchesTreatsAnUnsetRequestMediaTypeAsMovie pins the
+// consequence so a third caller finds out from a test rather than from an
+// empty season list. Adding a sentinel to media.MediaType was the alternative;
+// it renumbers an iota compared across the codebase to fix a hazard with no
+// instances, which is the worse trade.
+func Matches(r media.SearchResult, req Request) bool {
+	if req.ID != "" && r.ID == req.ID {
+		return true
+	}
+	if r.Type != req.MediaType {
+		return false
+	}
+	title, want := normalize(r.Title), normalize(req.Title)
+	if title == "" || want == "" {
+		return false
+	}
+	if title == want {
+		return true
+	}
+	// Qualifier stripped from one side only, never both at once.
+	if base, ok := stripQualifier(r.Title); ok && base == want {
+		return true
+	}
+	if base, ok := stripQualifier(req.Title); ok && base == title {
+		return true
+	}
+	return false
+}
+
+// stripQualifier returns the normalized key of s with an edition qualifier
+// removed, and whether one was actually there. A qualifier is a trailing
+// parenthesised or bracketed group ("The Office (US)", "Doctor Who (2005)"),
+// or a subtitle after a colon or a spaced dash that names a season, part or
+// cour rather than a distinct work ("Attack on Titan: Final Season").
+//
+// Subtitles that are not season designators are left alone precisely so that
+// "Star Trek: Discovery" cannot be reduced to "Star Trek".
+func stripQualifier(s string) (string, bool) {
+	t := strings.TrimSpace(s)
+	full := normalize(t)
+
+	for {
+		trimmed := trimTrailingGroup(t)
+		if trimmed == t {
+			break
+		}
+		t = trimmed
+	}
+
+	if head, tail, ok := splitSubtitle(t); ok && isSeasonQualifier(tail) {
+		t = head
+	}
+
+	key := normalize(t)
+	if key == "" || key == full {
+		return "", false
+	}
+	return key, true
+}
+
+// trimTrailingGroup removes one trailing "(...)" or "[...]" group from s.
+func trimTrailingGroup(s string) string {
+	s = strings.TrimSpace(s)
+	var open byte
+	switch {
+	case strings.HasSuffix(s, ")"):
+		open = '('
+	case strings.HasSuffix(s, "]"):
+		open = '['
+	default:
+		return s
+	}
+	i := strings.LastIndexByte(s[:len(s)-1], open)
+	if i <= 0 {
+		return s
+	}
+	return strings.TrimSpace(s[:i])
+}
+
+// splitSubtitle splits s at the first colon or spaced dash separator. The
+// dash must be spaced so that "Spider-Man" is one title, not two.
+func splitSubtitle(s string) (head, tail string, ok bool) {
+	if i := strings.IndexByte(s, ':'); i > 0 {
+		return strings.TrimSpace(s[:i]), strings.TrimSpace(s[i+1:]), true
+	}
+	for _, sep := range []string{" - ", " – ", " — "} {
+		if i := strings.Index(s, sep); i > 0 {
+			return strings.TrimSpace(s[:i]), strings.TrimSpace(s[i+len(sep):]), true
+		}
+	}
+	return s, "", false
+}
+
+// isSeasonQualifier reports whether a subtitle names a slice of the same work
+// ("Final Season", "Part 2", "Cour 1") rather than a separate one.
+func isSeasonQualifier(tail string) bool {
+	for _, w := range strings.Fields(normalize(tail)) {
+		switch w {
+		case "season", "seasons", "part", "parts", "cour":
+			return true
+		}
+	}
+	return false
+}
+
 func fallbackCandidates(results []media.SearchResult, mediaType media.MediaType) []media.SearchResult {
 	return truncateCandidates(dedupeByType(results, mediaType))
 }
@@ -224,9 +404,47 @@ func candidateScore(r media.SearchResult, req Request) int {
 	return score
 }
 
-// normalize lowercases and trims a title for comparison.
+// normalize reduces a title to a comparison key, so that two catalogs
+// punctuating the same work differently still agree. It case-folds, strips
+// accents (NFD then drop the combining marks, so "Pokémon" keys as
+// "pokemon"), spells "&" as "and", drops apostrophes outright so "Marvel's"
+// keys as "marvels", and collapses every other non-alphanumeric run —
+// hyphens, colons, dots, brackets — to a single space.
+//
+// Dropping rather than spacing apostrophes is the one asymmetry: catalogs
+// write "Marvels", never "Marvel s". Dots become spaces because
+// "S.H.I.E.L.D." is written "S H I E L D" as often as it is elided.
+//
+// A key can legitimately be empty (a title of pure punctuation); callers must
+// treat that as "no title" rather than as something to compare.
 func normalize(s string) string {
-	return strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	b.Grow(len(s))
+	pendingSpace := false
+	for _, r := range norm.NFD.String(strings.ToLower(s)) {
+		switch {
+		case unicode.Is(unicode.Mn, r):
+			// A combining mark NFD split off an accented letter.
+		case r == '\'' || r == '’':
+			// Elided, not spaced.
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			if pendingSpace && b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			pendingSpace = false
+			b.WriteRune(r)
+		case r == '&':
+			// Always a word of its own, so "Rick&Morty" keys like "Rick & Morty".
+			if b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			b.WriteString("and")
+			pendingSpace = true
+		default:
+			pendingSpace = true
+		}
+	}
+	return b.String()
 }
 
 // yearDiff returns the absolute difference between two year strings, or a large

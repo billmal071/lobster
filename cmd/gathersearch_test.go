@@ -8,29 +8,29 @@ import (
 	"lobster/internal/provider"
 )
 
-// stubProvider is a minimal Provider whose Search returns canned results/error.
-type stubProvider struct {
+// gatherStubProvider is a minimal Provider whose Search returns canned results/error.
+type gatherStubProvider struct {
 	name    string
 	results []media.SearchResult
 	err     error
 }
 
-func (s stubProvider) Search(string) ([]media.SearchResult, error) { return s.results, s.err }
-func (s stubProvider) GetDetails(string) (*media.ContentDetail, error) {
+func (s gatherStubProvider) Search(string) ([]media.SearchResult, error) { return s.results, s.err }
+func (s gatherStubProvider) GetDetails(string) (*media.ContentDetail, error) {
 	return &media.ContentDetail{}, nil
 }
-func (s stubProvider) GetSeasons(string) ([]media.Season, error)         { return nil, nil }
-func (s stubProvider) GetEpisodes(string, string) ([]media.Episode, error) { return nil, nil }
-func (s stubProvider) GetServers(string, string) ([]media.Server, error) { return nil, nil }
-func (s stubProvider) GetEmbedURL(string) (string, error)                { return "", nil }
-func (s stubProvider) Trending(media.MediaType) ([]media.SearchResult, error) {
+func (s gatherStubProvider) GetSeasons(string) ([]media.Season, error)           { return nil, nil }
+func (s gatherStubProvider) GetEpisodes(string, string) ([]media.Episode, error) { return nil, nil }
+func (s gatherStubProvider) GetServers(string, string) ([]media.Server, error)   { return nil, nil }
+func (s gatherStubProvider) GetEmbedURL(string) (string, error)                  { return "", nil }
+func (s gatherStubProvider) Trending(media.MediaType) ([]media.SearchResult, error) {
 	return nil, nil
 }
-func (s stubProvider) Recent(media.MediaType) ([]media.SearchResult, error) { return nil, nil }
+func (s gatherStubProvider) Recent(media.MediaType) ([]media.SearchResult, error) { return nil, nil }
 
 func TestGatherSearchResultsFallsBackWhenPrimaryErrors(t *testing.T) {
-	primary := stubProvider{name: "primary", err: fmt.Errorf("no results found")}
-	fb := stubProvider{name: "fb", results: []media.SearchResult{
+	primary := gatherStubProvider{name: "primary", err: fmt.Errorf("no results found")}
+	fb := gatherStubProvider{name: "fb", results: []media.SearchResult{
 		{ID: "kam", Title: "KAMUI: He's Behind You", Type: media.TV},
 	}}
 
@@ -44,8 +44,8 @@ func TestGatherSearchResultsFallsBackWhenPrimaryErrors(t *testing.T) {
 }
 
 func TestGatherSearchResultsErrorsWhenNothingFound(t *testing.T) {
-	primary := stubProvider{err: fmt.Errorf("no results")}
-	fb := stubProvider{err: fmt.Errorf("no results")}
+	primary := gatherStubProvider{err: fmt.Errorf("no results")}
+	fb := gatherStubProvider{err: fmt.Errorf("no results")}
 	if _, err := gatherSearchResults(primary, []provider.Provider{fb}, "zzz"); err == nil {
 		t.Fatal("expected error when no provider has results")
 	}
@@ -54,7 +54,7 @@ func TestGatherSearchResultsErrorsWhenNothingFound(t *testing.T) {
 // flakyProvider succeeds on the first Search and fails on every one after,
 // mimicking a provider that rate-limits or drops a connection.
 type flakyProvider struct {
-	stubProvider
+	gatherStubProvider
 	calls int
 }
 
@@ -70,10 +70,10 @@ func (f *flakyProvider) Search(q string) ([]media.SearchResult, error) {
 // Re-querying the primary and replacing the originals on a transient failure
 // silently dropped the only results the user was going to see.
 func TestGatherSearchResultsKeepsInitialPrimaryResults(t *testing.T) {
-	primary := &flakyProvider{stubProvider: stubProvider{results: []media.SearchResult{
+	primary := &flakyProvider{gatherStubProvider: gatherStubProvider{results: []media.SearchResult{
 		{ID: "movie/557", Title: "Spider-Man", Type: media.Movie, Year: "2002"},
 	}}}
-	fb := stubProvider{results: []media.SearchResult{
+	fb := gatherStubProvider{results: []media.SearchResult{
 		{ID: "movie/558", Title: "Spider-Man 2", Type: media.Movie, Year: "2004"},
 	}}
 

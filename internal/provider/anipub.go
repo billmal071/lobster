@@ -98,7 +98,7 @@ func (p *AniPub) Search(query string) ([]media.SearchResult, error) {
 		})
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("no anime found for %q", query)
+		return nil, fmt.Errorf("%w: no anime found for %q", ErrNoResults, query)
 	}
 	return out, nil
 }
@@ -244,7 +244,7 @@ func (p *AniPub) searchVariants(title string) ([]media.SearchResult, error) {
 		}
 	}
 	if lastErr == nil {
-		lastErr = fmt.Errorf("no anime found for %q", title)
+		lastErr = fmt.Errorf("%w: no anime found for %q", ErrNoResults, title)
 	}
 	return nil, lastErr
 }

@@ -157,7 +157,7 @@ func (a *AllAnime) Search(query string) ([]media.SearchResult, error) {
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("no anime found for %q", query)
+		return nil, fmt.Errorf("%w: no anime found for %q", ErrNoResults, query)
 	}
 	// AllAnime returns specials/spinoffs (1 episode) ahead of the main series, so
 	// "Death Note" lands on a 1-ep special instead of the 37-ep show. Rank exact

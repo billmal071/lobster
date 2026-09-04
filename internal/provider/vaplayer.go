@@ -81,7 +81,7 @@ func (vp *VaPlayer) Search(query string) ([]media.SearchResult, error) {
 		return nil, fmt.Errorf("vaplayer search: %w", err)
 	}
 	if len(results) == 0 {
-		return nil, fmt.Errorf("no results found for %q", query)
+		return nil, fmt.Errorf("%w for %q", ErrNoResults, query)
 	}
 	return results, nil
 }
