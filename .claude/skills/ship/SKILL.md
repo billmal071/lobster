@@ -54,8 +54,13 @@ findings never reach a public PR:
 
 ```bash
 cd .worktrees/<name>
-coderabbit review --plain --type committed --base main > /tmp/cr-local.md
+git fetch origin
+coderabbit review --plain --type committed --base origin/main > /tmp/cr-local.md
 ```
+
+Use `origin/main`, not `main`: your local `main` is only as fresh as your last
+pull, so reviewing against it can compare the wrong range and hide or invent
+findings.
 
 `--type uncommitted` reviews the working tree; `--type all` does both. Use
 `--config CLAUDE.md` to give it this repo's conventions.
@@ -82,11 +87,26 @@ comment ends at the current head.** Nothing else is reliable:
 
 ```bash
 head=$(gh pr view N --json headRefOid --jq .headRefOid)
+# Select the walkthrough comment specifically, then read its range. Scanning
+# every bot comment and taking the last hash is unsound: any other bot comment
+# carrying a 40-hex sha wins, and a stale walkthrough then reads as current.
 rng=$(gh api repos/billmal071/lobster/issues/N/comments --paginate \
-        --jq '.[] | select(.user.login=="coderabbitai[bot]") | .body' \
+        --jq '.[] | select(.user.login=="coderabbitai[bot]")
+                  | select(.body | contains("<!-- walkthrough_start -->"))
+                  | .body' \
       | grep -oE 'and [0-9a-f]{40}' | tail -1 | cut -d' ' -f2)
-[ "$head" = "$rng" ] && echo "reviewed current head" || echo "STALE — do not merge"
+
+if [ -z "$rng" ]; then
+  echo "no walkthrough found — treat as NOT reviewed"   # fail closed
+elif [ "$head" = "$rng" ]; then
+  echo "reviewed current head"
+else
+  echo "STALE ($rng != $head) — do not merge"
+fi
 ```
+
+Fail closed on an empty result. An absent walkthrough means CodeRabbit has not
+reported on this head yet — never the same thing as a pass.
 
 Traps, each of which has caused a wrong call here:
 

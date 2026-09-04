@@ -38,16 +38,24 @@ output.
 ## The gate before any commit
 
 ```bash
-PATH=/usr/local/go/bin:$PATH CGO_ENABLED=0 go build ./... && go vet ./... && go test ./...
+export PATH=/usr/local/go/bin:$PATH CGO_ENABLED=0
+go build ./... && go vet ./... && go test ./...
 ```
+
+`export` matters. A `VAR=x cmd1 && cmd2` prefix applies only to `cmd1`, so the
+inline form silently runs `go vet` and `go test` with cgo enabled while only the
+build is cgo-disabled — the gate then validates a different configuration from
+the one that ships.
 
 CI runs ubuntu, windows and macos, so anything touching syscalls, paths or
 process handling also needs:
 
 ```bash
-CGO_ENABLED=0 GOOS=windows go build ./... && GOOS=windows go vet ./cmd/
-CGO_ENABLED=0 GOOS=darwin  go build ./...
+GOOS=windows go build ./... && GOOS=windows go vet ./cmd/
+GOOS=darwin  go build ./...
 ```
+
+(`CGO_ENABLED` is already exported above, so these do not need it inline.)
 
 Never commit on a red suite.
 
