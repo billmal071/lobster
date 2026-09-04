@@ -3,6 +3,8 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"lobster/internal/config"
@@ -77,32 +79,204 @@ func TestFindEmitsResultsWithoutPrompting(t *testing.T) {
 }
 
 // No results is a distinct, recoverable outcome and must not be conflated with
-// "every provider is down".
-func TestFindNoResultsExitsTwo(t *testing.T) {
+// "every provider is down": exit 2 tells the agent to suggest a spelling, exit
+// 3 tells it to run `lobster doctor`.
+//
+// The earlier version of this test stubbed agentSearch to return (nil, nil) —
+// a state gatherSearchResults never produces, since it turns an empty merge
+// into an error. It therefore exercised a branch findRun could not reach in
+// production and passed while the real binary exited 3 on every typo. Each
+// case below is a shape the real gatherSearchResults can actually return;
+// TestGatherSearchResultsErrorShapes pins that claim against the real one.
+func TestFindMapsSearchOutcomesToExitCodes(t *testing.T) {
+	tests := []struct {
+		name     string
+		results  []media.SearchResult
+		err      error
+		findType string
+		wantCode int
+		wantErr  string
+	}{
+		{
+			name:     "nothing matched",
+			err:      fmt.Errorf("%w for %q", errNoResults, "zzzznotathing"),
+			wantCode: exitNoResults,
+			wantErr:  "no_results",
+		},
+		{
+			name:     "nothing matched, wrapped again by a caller",
+			err:      fmt.Errorf("search failed: %w", fmt.Errorf("%w for %q", errNoResults, "zzzznotathing")),
+			wantCode: exitNoResults,
+			wantErr:  "no_results",
+		},
+		{
+			name:     "every provider unreachable",
+			err:      fmt.Errorf("%w (searching %q)", errProvidersFailed, "zzzznotathing"),
+			wantCode: exitProvidersFailed,
+			wantErr:  "providers_failed",
+		},
+		{
+			name:     "an unclassified error is still a provider failure",
+			err:      errors.New("dial tcp: connection refused"),
+			wantCode: exitProvidersFailed,
+			wantErr:  "providers_failed",
+		},
+		{
+			// The one way findRun still reaches len(results) == 0: a search
+			// that succeeded, filtered to nothing by --type. Driven through
+			// the real filter with a real non-empty result set — stubbing
+			// (nil, nil) here would repeat the mistake this test was written
+			// to correct, since gatherSearchResults cannot return that.
+			name: "a successful search that --type filters to empty",
+			results: []media.SearchResult{
+				{ID: "movie/a", Title: "A Film", Type: media.Movie},
+			},
+			findType: "tv",
+			wantCode: exitNoResults,
+			wantErr:  "no_results",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hostileEnv(t)
+			buf := captureAgentOut(t)
+
+			prevCfg := cfg
+			cfg = &config.Config{Base: "flixhq.ws"}
+			t.Cleanup(func() { cfg = prevCfg })
+
+			prevProv := agentProvider
+			agentProvider = func() provider.Provider { return &stubProvider{} }
+			t.Cleanup(func() { agentProvider = prevProv })
+
+			prevSearch := agentSearch
+			agentSearch = func(provider.Provider, []provider.Provider, string) ([]media.SearchResult, error) {
+				return tt.results, tt.err
+			}
+			t.Cleanup(func() { agentSearch = prevSearch })
+
+			prevType := flagFindType
+			flagFindType = tt.findType
+			t.Cleanup(func() { flagFindType = prevType })
+
+			err := findRun(findCmd, []string{"zzzznotathing"})
+			var ee *exitError
+			if !errors.As(err, &ee) {
+				t.Fatalf("findRun returned %T (%v), want *exitError", err, err)
+			}
+			if ee.code != tt.wantCode {
+				t.Fatalf("exit code = %d, want %d (envelope: %s)", ee.code, tt.wantCode, buf.String())
+			}
+			if !strings.Contains(buf.String(), `"code": "`+tt.wantErr+`"`) {
+				t.Fatalf("envelope = %s, want code %q", buf.String(), tt.wantErr)
+			}
+		})
+	}
+}
+
+// The stub above is only honest if the real gatherSearchResults really does
+// return these two sentinels, and really does tell the two states apart. This
+// exercises the real function against stub providers.
+func TestGatherSearchResultsErrorShapes(t *testing.T) {
+	boom := errors.New("dial tcp: connection refused")
+	// How a real provider reports an empty catalog hit: an *error* wrapping
+	// provider.ErrNoResults, not an empty slice. Observed from the live
+	// binary — FlixHQWS, VaPlayer, TBCPL, VidNest, Soap2Day, AniPub and
+	// KimCartoon all answer a nonsense query this way.
+	empty := fmt.Errorf("%w for %q", provider.ErrNoResults, "zzzznotathing")
+
+	tests := []struct {
+		name      string
+		primary   *stubProvider
+		fallbacks []provider.Provider
+		wantIs    error
+	}{
+		{
+			name:    "every provider answered, none had the title",
+			primary: &stubProvider{},
+			fallbacks: []provider.Provider{
+				&stubProvider{}, &stubProvider{},
+			},
+			wantIs: errNoResults,
+		},
+		{
+			name:      "primary answered emptily with no fallbacks at all",
+			primary:   &stubProvider{},
+			fallbacks: nil,
+			wantIs:    errNoResults,
+		},
+		{
+			name:    "primary failed but a fallback answered emptily",
+			primary: &stubProvider{searchErr: boom},
+			fallbacks: []provider.Provider{
+				&stubProvider{searchErr: boom}, &stubProvider{},
+			},
+			wantIs: errNoResults,
+		},
+		{
+			// The live shape: a typo, every provider up. This is the case the
+			// binary got wrong — it exited 3 and told the agent to run doctor.
+			name:    "every provider reports an empty catalog by erroring",
+			primary: &stubProvider{searchErr: empty},
+			fallbacks: []provider.Provider{
+				&stubProvider{searchErr: empty}, &stubProvider{searchErr: empty},
+			},
+			wantIs: errNoResults,
+		},
+		{
+			name:      "one provider is genuinely down, the rest report empty",
+			primary:   &stubProvider{searchErr: boom},
+			fallbacks: []provider.Provider{&stubProvider{searchErr: empty}},
+			wantIs:    errNoResults,
+		},
+		{
+			name:      "every provider failed",
+			primary:   &stubProvider{searchErr: boom},
+			fallbacks: []provider.Provider{&stubProvider{searchErr: boom}},
+			wantIs:    errProvidersFailed,
+		},
+		{
+			name:      "primary failed and there is nothing to fall back to",
+			primary:   &stubProvider{searchErr: boom},
+			fallbacks: nil,
+			wantIs:    errProvidersFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hostileEnv(t)
+
+			results, err := gatherSearchResults(tt.primary, tt.fallbacks, "zzzznotathing")
+			if results != nil {
+				t.Fatalf("results = %v, want nil", results)
+			}
+			if !errors.Is(err, tt.wantIs) {
+				t.Fatalf("gatherSearchResults error = %v, want errors.Is(..., %v)", err, tt.wantIs)
+			}
+			// The query must survive the wrap: the interactive path prints
+			// this error verbatim.
+			if !strings.Contains(err.Error(), `"zzzznotathing"`) {
+				t.Fatalf("error %q does not name the query", err)
+			}
+		})
+	}
+}
+
+// A search that does find something must not be dressed up as either failure.
+func TestGatherSearchResultsSucceeds(t *testing.T) {
 	hostileEnv(t)
-	captureAgentOut(t)
 
-	prevCfg := cfg
-	cfg = &config.Config{Base: "flixhq.ws"}
-	t.Cleanup(func() { cfg = prevCfg })
-
-	prevProv := agentProvider
-	agentProvider = func() provider.Provider { return &stubProvider{} }
-	t.Cleanup(func() { agentProvider = prevProv })
-
-	prevSearch := agentSearch
-	agentSearch = func(provider.Provider, []provider.Provider, string) ([]media.SearchResult, error) {
-		return nil, nil
+	primary := &stubProvider{results: []media.SearchResult{
+		{ID: "movie/1", Title: "The Matrix", Year: "1999", Type: media.Movie},
+	}}
+	results, err := gatherSearchResults(primary, nil, "the matrix")
+	if err != nil {
+		t.Fatalf("gatherSearchResults: %v", err)
 	}
-	t.Cleanup(func() { agentSearch = prevSearch })
-
-	err := findRun(findCmd, []string{"zzzznotathing"})
-	var ee *exitError
-	if !errors.As(err, &ee) {
-		t.Fatalf("findRun returned %T (%v), want *exitError", err, err)
-	}
-	if ee.code != exitNoResults {
-		t.Fatalf("exit code = %d, want %d", ee.code, exitNoResults)
+	if len(results) != 1 || results[0].Title != "The Matrix" {
+		t.Fatalf("results = %+v, want the one stub row", results)
 	}
 }
 

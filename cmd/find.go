@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -69,6 +70,13 @@ func findRun(cmd *cobra.Command, args []string) error {
 	p := agentProvider()
 	results, err := agentSearch(p, fallbackSearchProviders(p), query)
 	if err != nil {
+		// gatherSearchResults reports "nothing matched" as an error, not as an
+		// empty slice, so without this branch every typo exited 3 and sent the
+		// agent to `lobster doctor` over a misspelling. errors.Is, not a
+		// message match: the text is a display string and may be reworded.
+		if errors.Is(err, errNoResults) {
+			return emitErr("no_results", exitNoResults, "nothing matched %q", query)
+		}
 		return emitErr("providers_failed", exitProvidersFailed, "search failed: %v", err)
 	}
 
@@ -82,6 +90,8 @@ func findRun(cmd *cobra.Command, args []string) error {
 		results = filtered
 	}
 
+	// Reachable only via --type now: a search that found nothing arrives as
+	// errNoResults above, never as an empty slice.
 	if len(results) == 0 {
 		return emitErr("no_results", exitNoResults, "nothing matched %q", query)
 	}
