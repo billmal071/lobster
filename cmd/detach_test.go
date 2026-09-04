@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -174,8 +173,29 @@ func TestForwardedArgsIncludesExplicitStringAndBoolFlags(t *testing.T) {
 	if !containsArg(got, "--quality", "1080") {
 		t.Fatalf("forwardedArgs(...) = %v, missing explicit --quality", got)
 	}
-	if !containsArg(got, "--no-subs") {
-		t.Fatalf("forwardedArgs(...) = %v, missing explicit --no-subs", got)
+	if !containsArg(got, "--no-subs=true") {
+		t.Fatalf("forwardedArgs(...) = %v, missing explicit --no-subs=true", got)
+	}
+}
+
+// Changed() is also true for an explicit "--flag=false": the caller did pass
+// it, they just passed false. A bare "--"+name always means true to cobra,
+// so forwarding an explicit --continue=false as a bare --continue would
+// invert it — the child would resume from history when the caller explicitly
+// asked it not to. The value must travel with the flag.
+func TestForwardedArgsPreservesExplicitFalseBool(t *testing.T) {
+	withInheritedFlags(t, "continue")
+
+	if err := playCmd.Flags().Set("continue", "false"); err != nil {
+		t.Fatalf("Set --continue=false: %v", err)
+	}
+
+	got := forwardedArgs(playCmd)
+	if !containsArg(got, "--continue=false") {
+		t.Fatalf("forwardedArgs(...) = %v, missing explicit --continue=false", got)
+	}
+	if containsArg(got, "--continue") {
+		t.Fatalf("forwardedArgs(...) = %v, forwarded a bare --continue for an explicit false (inverts it)", got)
 	}
 }
 
@@ -216,8 +236,8 @@ func TestForwardedArgsIncludesExplicitContinue(t *testing.T) {
 	}
 
 	got := forwardedArgs(playCmd)
-	if !containsArg(got, "--continue") {
-		t.Fatalf("forwardedArgs(...) = %v, missing explicit --continue", got)
+	if !containsArg(got, "--continue=true") {
+		t.Fatalf("forwardedArgs(...) = %v, missing explicit --continue=true", got)
 	}
 }
 
@@ -238,25 +258,6 @@ func TestForwardedArgsNeverForwardsJSON(t *testing.T) {
 	got := forwardedArgs(playCmd)
 	if containsArg(got, "--json") {
 		t.Fatalf("forwardedArgs(...) = %v, forwarded --json; the child would print metadata and never play", got)
-	}
-}
-
-func TestDetachLogPathIsPerPID(t *testing.T) {
-	hermeticCacheDir(t)
-
-	a, err := detachLogPath(111)
-	if err != nil {
-		t.Fatalf("detachLogPath: %v", err)
-	}
-	b, err := detachLogPath(222)
-	if err != nil {
-		t.Fatalf("detachLogPath: %v", err)
-	}
-	if a == b {
-		t.Fatalf("log paths collide: %q", a)
-	}
-	if !strings.Contains(a, "111") {
-		t.Fatalf("log path %q does not identify the pid", a)
 	}
 }
 

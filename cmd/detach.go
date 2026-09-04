@@ -67,7 +67,13 @@ func forwardedArgs(cmd *cobra.Command) []string {
 	}
 	for _, f := range forwardedBoolFlags {
 		if cmd.Flags().Changed(f.name) {
-			args = append(args, "--"+f.name)
+			// Changed is also true for an explicit "--flag=false": the caller
+			// set it, they just set it to false. A bare "--"+name always means
+			// true to cobra, so an explicit --continue=false would forward as
+			// a bare --continue and the child would resume when the caller
+			// asked it not to — the opposite of what was requested. Emitting
+			// the value explicitly is required, not cosmetic.
+			args = append(args, "--"+f.name+"="+strconv.FormatBool(*f.val))
 		}
 	}
 	return args
@@ -110,20 +116,6 @@ func lobsterCacheDir() (string, error) {
 		return "", fmt.Errorf("creating %s: %w", dir, err)
 	}
 	return dir, nil
-}
-
-// detachLogPath is a deterministic per-pid path under lobsterCacheDir.
-// playDetached itself does not use it — it uses createDetachLog below, which
-// sidesteps a rename-after-Start scheme that turned out to be unreliable on
-// Windows — but it is kept as a small, independently useful, independently
-// testable building block (e.g. for locating a specific run's log by pid
-// from outside the process).
-func detachLogPath(pid int) (string, error) {
-	dir, err := lobsterCacheDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, fmt.Sprintf("play-%d.log", pid)), nil
 }
 
 // createDetachLog opens a fresh, uniquely named log file for a detached
