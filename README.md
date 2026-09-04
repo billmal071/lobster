@@ -225,6 +225,34 @@ Xtream — so your own channels appear alongside the free ones.
 
 ---
 
+## Use it from a coding agent
+
+`lobster` ships an agent skill so you can ask Claude Code (or another agent)
+to find and play something for you.
+
+```bash
+mkdir -p ~/.claude/skills
+cp -r skills/lobster-play ~/.claude/skills/
+```
+
+Then just ask: *"find me The Matrix and play it"*. The agent will show you the
+matches and wait for you to pick one before starting playback.
+
+Under the hood it uses three non-interactive commands, which are useful for
+scripting on their own:
+
+```bash
+lobster find "the matrix" --limit 5      # JSON candidates, each with a ref
+lobster episodes --ref <REF> --season 2  # JSON season/episode listing
+lobster play --ref <REF> --detach        # start playback, return immediately
+```
+
+All three print JSON on stdout and never prompt. `play --ref` resolves
+against the base the ref was found under, and forwards any flags you pass
+explicitly (`--base`, `--quality`, `--player`, `--provider`, `--language`,
+`--audio-language`, `--no-subs`, `--debug`, `--continue`) to the detached
+child so overrides still apply in the background.
+
 ## Configuration
 
 Config file location:
