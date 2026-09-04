@@ -571,3 +571,74 @@ func TestPlayRejectsRefWithUnknownType(t *testing.T) {
 		t.Fatal("resolveAndPlay was reached with an untyped ref")
 	}
 }
+
+// playMovieRefForContinue wires the stubs a continue-defaulting test needs:
+// a stub provider, a stubbed resolve-and-play that records flagContinue as
+// seen at dispatch time, and a movie ref in flagRef. Returns a pointer to
+// the recorded value.
+func playMovieRefForContinue(t *testing.T) *bool {
+	t.Helper()
+	hostileEnv(t)
+	captureAgentOut(t)
+
+	prevProv := agentProvider
+	agentProvider = func() provider.Provider { return &stubProvider{} }
+	t.Cleanup(func() { agentProvider = prevProv })
+
+	seen := new(bool)
+	prevPlay := agentResolveAndPlay
+	agentResolveAndPlay = func(provider.Provider, media.SearchResult, int, int) error {
+		*seen = flagContinue
+		return nil
+	}
+	t.Cleanup(func() { agentResolveAndPlay = prevPlay })
+
+	ref, err := encodeRef(playRef{ID: "movie/x", Title: "X", Type: "movie"})
+	if err != nil {
+		t.Fatalf("encodeRef: %v", err)
+	}
+	prevRef := flagRef
+	flagRef = ref
+	t.Cleanup(func() { flagRef = prevRef })
+
+	prevCont := flagContinue
+	t.Cleanup(func() { flagContinue = prevCont })
+
+	return seen
+}
+
+// The agent play command must resume from history by default: nothing in the
+// JSON envelope tells a caller to pass -c, and "resume_tracking":true reads
+// as a promise that it will. When --continue was not passed on this
+// invocation, playRun must behave as if it were.
+func TestPlayDefaultsContinueOn(t *testing.T) {
+	seen := playMovieRefForContinue(t)
+	withInheritedFlags(t, playCmd, "continue") // restores the Changed bit
+
+	flagContinue = false // cobra's default when the flag is not passed
+
+	if err := playRun(playCmd, nil); err != nil {
+		t.Fatalf("playRun: %v", err)
+	}
+	if !*seen {
+		t.Fatal("flagContinue was false at playback; play must resume from history by default")
+	}
+}
+
+// An explicit --continue=false is a deliberate fresh start and must survive
+// the defaulting.
+func TestPlayExplicitContinueFalseForcesFreshStart(t *testing.T) {
+	seen := playMovieRefForContinue(t)
+	withInheritedFlags(t, playCmd, "continue")
+
+	if err := playCmd.Flags().Set("continue", "false"); err != nil {
+		t.Fatalf("Set --continue=false: %v", err)
+	}
+
+	if err := playRun(playCmd, nil); err != nil {
+		t.Fatalf("playRun: %v", err)
+	}
+	if *seen {
+		t.Fatal("flagContinue was true at playback despite an explicit --continue=false")
+	}
+}
