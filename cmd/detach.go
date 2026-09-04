@@ -37,12 +37,19 @@ var forwardedStringFlags = []struct {
 }
 
 // forwardedBoolFlags is forwardedStringFlags' counterpart for boolean flags.
+//
+// --json is deliberately absent, and this is a decision, not an oversight:
+// flagJSON is read inside playStream (cmd/search.go:470), where it prints
+// stream metadata and returns *before playing*. Forwarding it would make the
+// supervised child print JSON into its log and exit without ever starting
+// playback, while the parent had already reported "status":"playing".
 var forwardedBoolFlags = []struct {
 	name string
 	val  *bool
 }{
 	{"no-subs", &flagNoSubs},
 	{"debug", &flagDebug},
+	{"continue", &flagContinue},
 }
 
 // forwardedArgs returns argv fragments for every persistent flag the caller

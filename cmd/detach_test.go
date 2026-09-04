@@ -203,6 +203,44 @@ func TestForwardedArgsNeverForwardsDownload(t *testing.T) {
 	}
 }
 
+// flagContinue is read inside playStream (cmd/search.go:560) to load history
+// and set the resume position. Without forwarding it, `lobster play --ref R
+// --continue --detach` would silently start from the beginning despite the
+// caller explicitly asking to resume — the same bug class as the other
+// seven flags.
+func TestForwardedArgsIncludesExplicitContinue(t *testing.T) {
+	withInheritedFlags(t, "continue")
+
+	if err := playCmd.Flags().Set("continue", "true"); err != nil {
+		t.Fatalf("Set --continue: %v", err)
+	}
+
+	got := forwardedArgs(playCmd)
+	if !containsArg(got, "--continue") {
+		t.Fatalf("forwardedArgs(...) = %v, missing explicit --continue", got)
+	}
+}
+
+// flagJSON is read inside playStream (cmd/search.go:470), where it prints
+// stream metadata and returns *before playing*. Forwarding it to the
+// supervised child would make the child print JSON into its log and exit
+// without ever starting playback, while the parent had already reported
+// "status":"playing" — so omitting it is a deliberate decision, not a gap.
+// This test pins that decision so a later "make forwarding exhaustive"
+// change does not silently turn it back into a bug.
+func TestForwardedArgsNeverForwardsJSON(t *testing.T) {
+	withInheritedFlags(t, "json")
+
+	if err := playCmd.Flags().Set("json", "true"); err != nil {
+		t.Fatalf("Set --json: %v", err)
+	}
+
+	got := forwardedArgs(playCmd)
+	if containsArg(got, "--json") {
+		t.Fatalf("forwardedArgs(...) = %v, forwarded --json; the child would print metadata and never play", got)
+	}
+}
+
 func TestDetachLogPathIsPerPID(t *testing.T) {
 	hermeticCacheDir(t)
 
