@@ -200,9 +200,8 @@ func TestPlayAvailablePlayerReachesPlayback(t *testing.T) {
 // withBaseFlag forces the same persistent-flag merge cobra performs before
 // RunE during a real Execute() (see (*cobra.Command).mergePersistentFlags),
 // so that cmd.Flags().Changed("base") reflects reality even though these
-// tests call playRun directly rather than going through Execute(). It
-// returns the shared *pflag.Flag so a test can drive "was --base passed on
-// this invocation" the same way cobra would, and restores its state after.
+// tests call playRun directly rather than going through Execute(), and
+// restores the flag's value and Changed bit afterwards.
 func withBaseFlag(t *testing.T) {
 	t.Helper()
 	withInheritedFlags(t, playCmd, "base")
@@ -341,5 +340,183 @@ func TestPlayLeavesConfigBaseUntouchedWhenRefBaseEmpty(t *testing.T) {
 	}
 	if seenBase != "flixhq.ws" {
 		t.Fatalf("cfg.Base seen by agentProvider = %q, want flixhq.ws (untouched)", seenBase)
+	}
+}
+
+// playHarness wires the seams every season/episode validation test needs: an
+// available player, a stub provider, a recording (non-launching) playback
+// entry point, and the play flags. It returns a pointer to the "did playback
+// run" flag so a test can assert dispatch happened or did not.
+func playHarness(t *testing.T, p *stubProvider, ref string, season, episode int) *bool {
+	t.Helper()
+	hostileEnv(t)
+	captureAgentOut(t)
+
+	prevCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return true, "" }
+	t.Cleanup(func() { agentPlayerCheck = prevCheck })
+
+	prevProv := agentProvider
+	agentProvider = func() provider.Provider { return p }
+	t.Cleanup(func() { agentProvider = prevProv })
+
+	dispatched := false
+	prevPlay := agentResolveAndPlay
+	agentResolveAndPlay = func(provider.Provider, media.SearchResult, int, int) error {
+		dispatched = true
+		return nil
+	}
+	t.Cleanup(func() { agentResolveAndPlay = prevPlay })
+
+	prevRef, prevS, prevE := flagRef, flagSeason, flagEpisode
+	flagRef, flagSeason, flagEpisode = ref, season, episode
+	t.Cleanup(func() { flagRef, flagSeason, flagEpisode = prevRef, prevS, prevE })
+
+	return &dispatched
+}
+
+// showRef builds a TV ref for the validation tests.
+func showRef(t *testing.T) string {
+	t.Helper()
+	ref, err := encodeRef(playRef{ID: "tv/show-1", Title: "Some Show", Type: "tv"})
+	if err != nil {
+		t.Fatalf("encodeRef: %v", err)
+	}
+	return ref
+}
+
+// resolveAndPlay initialises seasonIdx/episodeIdx to 0 and only overwrites
+// them on an exact Number match, so a season the show does not have silently
+// played S1E1 and reported success. episodes already answers exit 2 for the
+// same input; the two commands must not disagree about whether a season
+// exists.
+func TestPlayUnknownSeasonExitsTwo(t *testing.T) {
+	dispatched := playHarness(t, twoSeasonStub(), showRef(t), 5, 12)
+
+	err := playRun(playCmd, nil)
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("playRun returned %T (%v), want *exitError", err, err)
+	}
+	if ee.code != exitNoResults {
+		t.Fatalf("exit code = %d, want %d", ee.code, exitNoResults)
+	}
+	if *dispatched {
+		t.Fatal("playback was dispatched for a season the show does not have (this is the S1E1 bug)")
+	}
+}
+
+// The same hole exists one level down: a valid season with a non-existent
+// episode played that season's first episode.
+func TestPlayUnknownEpisodeExitsTwo(t *testing.T) {
+	dispatched := playHarness(t, twoSeasonStub(), showRef(t), 2, 12)
+
+	err := playRun(playCmd, nil)
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("playRun returned %T (%v), want *exitError", err, err)
+	}
+	if ee.code != exitNoResults {
+		t.Fatalf("exit code = %d, want %d", ee.code, exitNoResults)
+	}
+	if *dispatched {
+		t.Fatal("playback was dispatched for an episode the season does not have")
+	}
+}
+
+// Validation must not reject what does exist.
+func TestPlayValidSeasonEpisodeReachesPlayback(t *testing.T) {
+	p := twoSeasonStub()
+	dispatched := playHarness(t, p, showRef(t), 2, 2)
+
+	if err := playRun(playCmd, nil); err != nil {
+		t.Fatalf("playRun: %v", err)
+	}
+	if !*dispatched {
+		t.Fatal("a season and episode that both exist did not reach playback")
+	}
+	if p.lastSeasonID != "s2" {
+		t.Fatalf("validation looked up season %q, want s2", p.lastSeasonID)
+	}
+}
+
+// A provider that cannot answer is exit 3 ("sources are down"), never exit 2
+// ("no such season") — the advice attached to each is different.
+func TestPlaySeasonLookupProviderErrorExitsThree(t *testing.T) {
+	p := twoSeasonStub()
+	p.seasonsErr = errors.New("upstream 503")
+	dispatched := playHarness(t, p, showRef(t), 2, 1)
+
+	err := playRun(playCmd, nil)
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("playRun returned %T (%v), want *exitError", err, err)
+	}
+	if ee.code != exitProvidersFailed {
+		t.Fatalf("exit code = %d, want %d", ee.code, exitProvidersFailed)
+	}
+	if *dispatched {
+		t.Fatal("playback was dispatched though the season lookup failed")
+	}
+}
+
+func TestPlayEpisodeLookupProviderErrorExitsThree(t *testing.T) {
+	p := twoSeasonStub()
+	p.episodesErr = errors.New("upstream 503")
+	dispatched := playHarness(t, p, showRef(t), 2, 1)
+
+	err := playRun(playCmd, nil)
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("playRun returned %T (%v), want *exitError", err, err)
+	}
+	if ee.code != exitProvidersFailed {
+		t.Fatalf("exit code = %d, want %d", ee.code, exitProvidersFailed)
+	}
+	if *dispatched {
+		t.Fatal("playback was dispatched though the episode lookup failed")
+	}
+}
+
+// A film has no seasons. Validation must not run for it — a provider whose
+// GetSeasons errors would otherwise turn every movie play into exit 3.
+func TestPlayMovieSkipsSeasonValidation(t *testing.T) {
+	p := &stubProvider{seasonsErr: errors.New("GetSeasons must not be called for a film")}
+	ref, err := encodeRef(playRef{ID: "movie/x", Title: "A Film", Type: "movie"})
+	if err != nil {
+		t.Fatalf("encodeRef: %v", err)
+	}
+	dispatched := playHarness(t, p, ref, 0, 0)
+
+	if err := playRun(playCmd, nil); err != nil {
+		t.Fatalf("playRun: %v", err)
+	}
+	if !*dispatched {
+		t.Fatal("a movie ref did not reach playback")
+	}
+}
+
+// Validation must happen before the --detach dispatch. Otherwise the parent
+// forks a supervisor, waits one second, and reports success while the child
+// exits 2 into a log the caller has no reason to read. If it did reach
+// playDetached, os.Executable()/exec.Command would run for real (no seam
+// exists) and spawn a process this test does not permit.
+func TestPlayDetachedRejectsUnknownSeasonBeforeSpawning(t *testing.T) {
+	dispatched := playHarness(t, twoSeasonStub(), showRef(t), 5, 1)
+
+	prevD, prevS := flagDetach, flagSupervised
+	flagDetach, flagSupervised = true, false
+	t.Cleanup(func() { flagDetach, flagSupervised = prevD, prevS })
+
+	err := playRun(playCmd, nil)
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("playRun returned %T (%v), want *exitError", err, err)
+	}
+	if ee.code != exitNoResults {
+		t.Fatalf("exit code = %d, want %d", ee.code, exitNoResults)
+	}
+	if *dispatched {
+		t.Fatal("playback was dispatched despite an unknown season")
 	}
 }

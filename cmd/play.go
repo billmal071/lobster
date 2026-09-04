@@ -78,6 +78,52 @@ func applyRefBase(cmd *cobra.Command, r playRef) {
 	}
 }
 
+// validateSeasonEpisode confirms the requested season and episode actually
+// exist on p before any playback is dispatched.
+//
+// resolveAndPlay (cmd/search.go) initialises its seasonIdx/episodeIdx to 0 and
+// only overwrites them on an exact Number match, so a request for a season or
+// episode the show does not have fell through to index 0: `play --ref <show>
+// --season 5 --episode 12` against a three-season show played S1E1 and
+// reported success. `episodes` already answers exit 2 for exactly that input,
+// so the two commands contradicted each other about whether a season exists.
+//
+// The distinction between the two failure modes is the point: a season that
+// does not exist is exitNoResults (2) — pick a different number — while a
+// provider that cannot answer is exitProvidersFailed (3) — run doctor. Mapping
+// the second onto the first would tell the agent to fix the user's input when
+// the sources are down.
+func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) error {
+	seasons, err := p.GetSeasons(r.ID)
+	if err != nil {
+		return emitErr("providers_failed", exitProvidersFailed, "getting seasons for %q: %v", r.Title, err)
+	}
+	seasonID := ""
+	found := false
+	for _, s := range seasons {
+		if s.Number == season {
+			seasonID, found = s.ID, true
+			break
+		}
+	}
+	if !found {
+		return emitErr("no_results", exitNoResults,
+			"season %d not found for %q (list them with 'lobster episodes --ref ...')", season, r.Title)
+	}
+
+	eps, err := p.GetEpisodes(r.ID, seasonID)
+	if err != nil {
+		return emitErr("providers_failed", exitProvidersFailed, "getting episodes for %q: %v", r.Title, err)
+	}
+	for _, e := range eps {
+		if e.Number == episode {
+			return nil
+		}
+	}
+	return emitErr("no_results", exitNoResults,
+		"season %d of %q has no episode %d", season, r.Title, episode)
+}
+
 func playRun(cmd *cobra.Command, args []string) error {
 	r, err := decodeRef(flagRef)
 	if err != nil {
@@ -103,13 +149,27 @@ func playRun(cmd *cobra.Command, args []string) error {
 		return emitErr("player_unavailable", exitPlayerUnavailable, "%s is not installed or not on PATH", name)
 	}
 
+	// Both the base and the season/episode check must precede the --detach
+	// dispatch: the base decides which provider is asked, and a rejection
+	// after the fork would be written into a log the caller has no reason to
+	// read while the parent had already reported success.
+	applyRefBase(cmd, r)
+
+	var p provider.Provider
+	if sel.Type == media.TV {
+		p = agentProvider()
+		if err := validateSeasonEpisode(p, r, flagSeason, flagEpisode); err != nil {
+			return err
+		}
+	}
+
 	if flagDetach && !flagSupervised {
 		return playDetached(cmd, r)
 	}
 
-	applyRefBase(cmd, r)
-
-	var p provider.Provider = agentProvider()
+	if p == nil {
+		p = agentProvider()
+	}
 	if err := agentResolveAndPlay(p, sel, flagSeason, flagEpisode); err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "%v", err)
 	}
