@@ -4,12 +4,33 @@ import (
 	"github.com/spf13/cobra"
 
 	"lobster/internal/media"
+	"lobster/internal/player"
 	"lobster/internal/provider"
 )
 
 // agentResolveAndPlay is the playback entry point, as a package var so tests
 // can observe what selection reaches it without launching a player.
 var agentResolveAndPlay = resolveAndPlay
+
+// agentPlayerCheck reports whether the configured player binary is available,
+// and its display name for the error message. A package var, seamed the same
+// way as agentProvider and agentResolveAndPlay, so tests can force either
+// outcome without depending on what is actually installed on the machine
+// running the test.
+//
+// Without this precondition, a missing player binary reaches resolveAndPlay,
+// which returns a plain error from player.NotFoundError; playRun's catch-all
+// then maps it to "providers_failed" (exit 3), telling the agent the
+// providers are down when the real problem is that mpv (or whichever player
+// is configured) is not installed. Checking availability up front lets it
+// report exit 4 with the right message instead.
+var agentPlayerCheck = func() (available bool, name string) {
+	if cfg == nil {
+		return true, ""
+	}
+	p := player.New(cfg.Player, cfg.AudioLanguage)
+	return p.Available(), p.Name()
+}
 
 var playCmd = &cobra.Command{
 	Use:   "play --ref <REF>",
@@ -55,6 +76,13 @@ func playRun(cmd *cobra.Command, args []string) error {
 	// it is not supported here.
 	if flagDownload != "" {
 		return emitErr("unsupported", 1, "--download is not supported by 'play'; use the interactive CLI")
+	}
+
+	// Checked before the --detach dispatch so a detached invocation reports
+	// exit 4 to the caller immediately, rather than forking a supervisor that
+	// fails into a log file the agent has no reason to read.
+	if available, name := agentPlayerCheck(); !available {
+		return emitErr("player_unavailable", exitPlayerUnavailable, "%s is not installed or not on PATH", name)
 	}
 
 	if flagDetach && !flagSupervised {

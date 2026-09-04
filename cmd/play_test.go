@@ -110,6 +110,93 @@ func TestPlayResolutionFailureExitsThree(t *testing.T) {
 	}
 }
 
+// An unavailable configured player must exit 4 (player_unavailable), not 3
+// (providers_failed): the two call for completely different advice ("install
+// mpv" vs. "try again later"). Before the fix, playRun's catch-all mapped
+// every resolveAndPlay error, including player.NotFoundError, to exit 3.
+func TestPlayUnavailablePlayerExitsFour(t *testing.T) {
+	hostileEnv(t)
+	captureAgentOut(t)
+
+	prevProv := agentProvider
+	agentProvider = func() provider.Provider { return &stubProvider{} }
+	t.Cleanup(func() { agentProvider = prevProv })
+
+	called := false
+	prevPlay := agentResolveAndPlay
+	agentResolveAndPlay = func(provider.Provider, media.SearchResult, int, int) error {
+		called = true
+		return nil
+	}
+	t.Cleanup(func() { agentResolveAndPlay = prevPlay })
+
+	prevCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return false, "mpv" }
+	t.Cleanup(func() { agentPlayerCheck = prevCheck })
+
+	ref, err := encodeRef(playRef{ID: "movie/x", Title: "X", Type: "movie"})
+	if err != nil {
+		t.Fatalf("encodeRef: %v", err)
+	}
+	prevRef := flagRef
+	flagRef = ref
+	t.Cleanup(func() { flagRef = prevRef })
+
+	err = playRun(playCmd, nil)
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("playRun returned %T (%v), want *exitError", err, err)
+	}
+	if ee.code != exitPlayerUnavailable {
+		t.Fatalf("exit code = %d, want %d", ee.code, exitPlayerUnavailable)
+	}
+	if called {
+		t.Fatal("playback was dispatched despite the player being reported unavailable")
+	}
+}
+
+// The precondition check must not reject the happy path: an available player
+// still reaches playback normally.
+func TestPlayAvailablePlayerReachesPlayback(t *testing.T) {
+	hostileEnv(t)
+	captureAgentOut(t)
+
+	prevCfg := cfg
+	cfg = &config.Config{Player: "mpv"}
+	t.Cleanup(func() { cfg = prevCfg })
+
+	prevCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return true, "mpv" }
+	t.Cleanup(func() { agentPlayerCheck = prevCheck })
+
+	prevProv := agentProvider
+	agentProvider = func() provider.Provider { return &stubProvider{} }
+	t.Cleanup(func() { agentProvider = prevProv })
+
+	called := false
+	prevPlay := agentResolveAndPlay
+	agentResolveAndPlay = func(provider.Provider, media.SearchResult, int, int) error {
+		called = true
+		return nil
+	}
+	t.Cleanup(func() { agentResolveAndPlay = prevPlay })
+
+	ref, err := encodeRef(playRef{ID: "movie/x", Title: "X", Type: "movie"})
+	if err != nil {
+		t.Fatalf("encodeRef: %v", err)
+	}
+	prevRef := flagRef
+	flagRef = ref
+	t.Cleanup(func() { flagRef = prevRef })
+
+	if err := playRun(playCmd, nil); err != nil {
+		t.Fatalf("playRun: %v", err)
+	}
+	if !called {
+		t.Fatal("playback was not dispatched though the player was reported available")
+	}
+}
+
 // withBaseFlag forces the same persistent-flag merge cobra performs before
 // RunE during a real Execute() (see (*cobra.Command).mergePersistentFlags),
 // so that cmd.Flags().Changed("base") reflects reality even though these
@@ -139,6 +226,10 @@ func TestPlayHonorsRefBaseWhenNotOverridden(t *testing.T) {
 	prevCfg := cfg
 	cfg = &config.Config{Base: "flixhq.ws"}
 	t.Cleanup(func() { cfg = prevCfg })
+
+	prevCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return true, "" }
+	t.Cleanup(func() { agentPlayerCheck = prevCheck })
 
 	var seenBase string
 	prevProv := agentProvider
@@ -178,6 +269,10 @@ func TestPlayExplicitBaseFlagOverridesRef(t *testing.T) {
 	prevCfg := cfg
 	cfg = &config.Config{Base: "flixhq.ws"}
 	t.Cleanup(func() { cfg = prevCfg })
+
+	prevCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return true, "" }
+	t.Cleanup(func() { agentPlayerCheck = prevCheck })
 
 	if err := playCmd.Flags().Set("base", "moviebox"); err != nil {
 		t.Fatalf("Set --base: %v", err)
@@ -222,6 +317,10 @@ func TestPlayLeavesConfigBaseUntouchedWhenRefBaseEmpty(t *testing.T) {
 	prevCfg := cfg
 	cfg = &config.Config{Base: "flixhq.ws"}
 	t.Cleanup(func() { cfg = prevCfg })
+
+	prevCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return true, "" }
+	t.Cleanup(func() { agentPlayerCheck = prevCheck })
 
 	var seenBase string
 	prevProv := agentProvider

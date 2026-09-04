@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"runtime"
@@ -349,5 +350,41 @@ func TestSupervisedPlayDoesNotDetachAgain(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("supervised play did not reach playback; it re-detached instead")
+	}
+}
+
+// The player-availability precondition must run before the --detach
+// dispatch, not after: otherwise a detached invocation would fork a
+// supervisor that fails silently into its own log file, leaving the caller
+// with a misleading "status":"playing"-or-hang instead of an immediate
+// exit-4 report. This test drives playRun with flagDetach=true and an
+// unavailable player and asserts it never reaches playDetached: if it did,
+// os.Executable()/exec.Command would run for real (no seam exists for
+// playDetached itself), which would either fail loudly in a way distinct
+// from exitPlayerUnavailable or spawn a real child process — neither of
+// which this test permits.
+func TestPlayDetachedUnavailablePlayerExitsFourBeforeSpawning(t *testing.T) {
+	hostileEnv(t)
+	captureAgentOut(t)
+
+	prevCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return false, "vlc" }
+	t.Cleanup(func() { agentPlayerCheck = prevCheck })
+
+	ref, err := encodeRef(playRef{ID: "movie/x", Title: "X", Type: "movie"})
+	if err != nil {
+		t.Fatalf("encodeRef: %v", err)
+	}
+	prevRef, prevD, prevS := flagRef, flagDetach, flagSupervised
+	flagRef, flagDetach, flagSupervised = ref, true, false
+	t.Cleanup(func() { flagRef, flagDetach, flagSupervised = prevRef, prevD, prevS })
+
+	err = playRun(playCmd, nil)
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("playRun returned %T (%v), want *exitError", err, err)
+	}
+	if ee.code != exitPlayerUnavailable {
+		t.Fatalf("exit code = %d, want %d", ee.code, exitPlayerUnavailable)
 	}
 }
