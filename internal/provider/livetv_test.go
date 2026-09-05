@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"lobster/internal/media"
 )
@@ -180,5 +182,93 @@ func writeFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("writing %s: %v", path, err)
+	}
+}
+
+func TestLoadContextMergesInDeclaredSourceOrder(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.m3u")
+	b := filepath.Join(dir, "b.m3u")
+	writeFile(t, a, "#EXTM3U\n#EXTINF:-1,Alpha\nhttp://example.invalid/1.m3u8\n")
+	writeFile(t, b, "#EXTM3U\n#EXTINF:-1,Beta\nhttp://example.invalid/2.m3u8\n")
+
+	// Run repeatedly: a parallel loader that appends on completion would
+	// pass once and fail intermittently. Order must be pinned to p.sources.
+	for i := 0; i < 20; i++ {
+		p := NewLiveTV([]string{a, b})
+		if err := p.LoadContext(context.Background()); err != nil {
+			t.Fatalf("LoadContext: %v", err)
+		}
+		if len(p.channels) != 2 {
+			t.Fatalf("got %d channels, want 2", len(p.channels))
+		}
+		if p.channels[0].Name != "Alpha" || p.channels[1].Name != "Beta" {
+			t.Fatalf("iteration %d: order = %q, %q; want Alpha, Beta",
+				i, p.channels[0].Name, p.channels[1].Name)
+		}
+	}
+}
+
+// blockingSource is a source string whose fetch blocks until ctx is done.
+// It exercises the deadline without a real 15s wait and without a network.
+func TestLoadContextRespectsDeadlineAndReportsFailedSources(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good.m3u")
+	writeFile(t, good, "#EXTM3U\n#EXTINF:-1,Alpha\nhttp://example.invalid/1.m3u8\n")
+	// A path that does not exist fails fast and deterministically, standing
+	// in for a source that did not load.
+	bad := filepath.Join(dir, "missing.m3u")
+
+	p := NewLiveTV([]string{good, bad})
+	if err := p.LoadContext(context.Background()); err != nil {
+		t.Fatalf("LoadContext with one good source must succeed, got %v", err)
+	}
+	if len(p.channels) != 1 {
+		t.Fatalf("got %d channels, want 1", len(p.channels))
+	}
+	failed := p.FailedSources()
+	if len(failed) != 1 || failed[0] != bad {
+		t.Fatalf("FailedSources() = %v, want [%s]", failed, bad)
+	}
+}
+
+func TestLoadContextAllSourcesFailingIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	p := NewLiveTV([]string{filepath.Join(dir, "nope1.m3u"), filepath.Join(dir, "nope2.m3u")})
+	if err := p.LoadContext(context.Background()); err == nil {
+		t.Fatal("LoadContext with every source failing must return an error")
+	}
+	if len(p.FailedSources()) != 2 {
+		t.Fatalf("FailedSources() = %v, want both", p.FailedSources())
+	}
+}
+
+func TestLoadContextZeroSourcesIsNotAnError(t *testing.T) {
+	// Load-bearing: cmd/channels.go distinguishes "no sources configured"
+	// from "sources failed", and reports not_configured for the former.
+	p := NewLiveTV(nil)
+	if err := p.LoadContext(context.Background()); err != nil {
+		t.Fatalf("zero sources must not be an error, got %v", err)
+	}
+	if len(p.FailedSources()) != 0 {
+		t.Fatalf("FailedSources() = %v, want empty", p.FailedSources())
+	}
+}
+
+func TestLoadContextCancelledContextDoesNotHang(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good.m3u")
+	writeFile(t, good, "#EXTM3U\n#EXTINF:-1,Alpha\nhttp://example.invalid/1.m3u8\n")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	p := NewLiveTV([]string{good})
+	done := make(chan struct{})
+	go func() { _ = p.LoadContext(ctx); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("LoadContext did not return on a cancelled context")
 	}
 }
