@@ -151,3 +151,34 @@ func TestRedactURL(t *testing.T) {
 		}
 	}
 }
+
+func TestDoLoadStampsSourceOnEveryChannel(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.m3u")
+	b := filepath.Join(dir, "b.m3u")
+	writeFile(t, a, "#EXTM3U\n#EXTINF:-1 tvg-id=\"bbc1.uk\",BBC One\nhttp://example.invalid/1.m3u8\n")
+	writeFile(t, b, "#EXTM3U\n#EXTINF:-1 tvg-id=\"itv1.uk\",ITV1\nhttp://example.invalid/2.m3u8\n")
+
+	p := NewLiveTV([]string{a, b})
+	p.load()
+
+	bySource := map[string]string{}
+	for _, ch := range p.channels {
+		bySource[ch.Name] = ch.Source
+	}
+	if bySource["BBC One"] != a {
+		t.Errorf("BBC One Source = %q, want %q", bySource["BBC One"], a)
+	}
+	if bySource["ITV1"] != b {
+		t.Errorf("ITV1 Source = %q, want %q", bySource["ITV1"], b)
+	}
+}
+
+// writeFile is a helper; if internal/provider already has an equivalent,
+// use that one instead of adding a second.
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("writing %s: %v", path, err)
+	}
+}

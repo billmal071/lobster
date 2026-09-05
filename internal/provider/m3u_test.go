@@ -99,3 +99,30 @@ func TestParseM3UCRLF(t *testing.T) {
 		t.Fatalf("CRLF handling wrong: %+v", c)
 	}
 }
+
+func TestParseM3USetsTVGIDOnlyWhenAttributePresent(t *testing.T) {
+	data := []byte("#EXTM3U\n" +
+		"#EXTINF:-1 tvg-id=\"bbc1.uk\" group-title=\"News\",BBC One\n" +
+		"http://example.invalid/1.m3u8\n" +
+		"#EXTINF:-1 group-title=\"News\",Sky News\n" +
+		"http://example.invalid/2.m3u8\n")
+
+	got := ParseM3U(data)
+	if len(got) != 2 {
+		t.Fatalf("ParseM3U returned %d channels, want 2", len(got))
+	}
+	if got[0].TVGID != "bbc1.uk" {
+		t.Errorf("BBC One TVGID = %q, want %q", got[0].TVGID, "bbc1.uk")
+	}
+	// The channel with no tvg-id must report an empty TVGID, not its slug.
+	// If TVGID fell back to the slug, the ref design could not tell an
+	// upstream identifier from a name-derived one, and would treat a
+	// display-name change as a different channel.
+	if got[1].TVGID != "" {
+		t.Errorf("Sky News TVGID = %q, want empty", got[1].TVGID)
+	}
+	// ID keeps its existing meaning: tvg-id when present, else slug.
+	if got[0].ID != "bbc1.uk" || got[1].ID != "sky-news" {
+		t.Errorf("IDs = %q, %q; want %q, %q", got[0].ID, got[1].ID, "bbc1.uk", "sky-news")
+	}
+}

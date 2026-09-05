@@ -140,6 +140,7 @@ func (p *LiveTV) doLoad() {
 			if ch.URL == "" {
 				continue
 			}
+			ch.Source = src
 			ch.ID = p.uniqueID(ch.ID)
 			p.byID[ch.ID] = ch
 			p.channels = append(p.channels, ch)

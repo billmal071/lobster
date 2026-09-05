@@ -14,6 +14,8 @@ type Channel struct {
 	URL        string   // stream URL
 	Referer    string   // from #EXTVLCOPT:http-referrer
 	UserAgent  string   // from #EXTVLCOPT:http-user-agent
+	TVGID      string   // the tvg-id attribute verbatim; "" when absent
+	Source     string   // playlist this channel was loaded from; set by LiveTV.doLoad, not by the parser
 }
 
 var (
@@ -64,6 +66,7 @@ func parseExtinf(line string) *Channel {
 		Categories: splitCategories(attrs["group-title"]),
 	}
 	if id := attrs["tvg-id"]; id != "" {
+		c.TVGID = id
 		c.ID = id
 	} else {
 		c.ID = slug(c.Name)
