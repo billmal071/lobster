@@ -578,14 +578,25 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		return player.NotFoundError(cfg.Player)
 	}
 
+	// Periodic checkpoints while playback runs: a hard shutdown (power cut,
+	// kernel panic) kills the player and this process together, so waiting
+	// for Play to return would lose the whole watch position.
+	if cfg.History {
+		if cp, ok := p2.(player.Checkpointer); ok {
+			cp.SetCheckpoint(historyCheckpoint(selected.ID, selected.Title, selected.Type, season, episode))
+		}
+	}
+
 	result, playErr := p2.Play(stream, title, startPos, subFiles)
 
 	// Save to history before surfacing any player error: Play returns the
 	// tracked position alongside the error, and an abnormal exit (killed,
 	// crash) is exactly the watch whose resume point must not be lost. With no
 	// tracked position there is nothing to keep, and writing 0 would clobber a
-	// real position from an earlier watch of the same title.
-	if cfg.History && (playErr == nil || result.Position > 0) {
+	// real position from an earlier watch of the same title — which is also
+	// why a session whose tracker never observed a position is skipped even
+	// though it exited cleanly: its result is a default, not a measurement.
+	if cfg.History && !result.PositionUnknown && (playErr == nil || result.Position > 0) {
 		entry := media.HistoryEntry{
 			ID:       selected.ID,
 			Title:    selected.Title,

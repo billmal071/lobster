@@ -26,7 +26,7 @@ func (s *stubPlayerImpl) Available() bool { return true }
 // playStreamHarness points history at a temp dir, installs a stub player and
 // a minimal cfg, and pins the playStream-relevant flags so no subtitle
 // search, JSON mode or download path runs.
-func playStreamHarness(t *testing.T, stub *stubPlayerImpl) {
+func playStreamHarness(t *testing.T, stub player.Player) {
 	t.Helper()
 	tmp := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmp) // history location on unix (config.dataDir)
@@ -111,6 +111,46 @@ func TestPlayStreamSkipsHistoryOnAbnormalExitWithoutPosition(t *testing.T) {
 			t.Fatalf("history entry written for a failed play with position 0: %+v", e)
 		}
 	}
+}
+
+// The incident this guards against: a watch whose mpv IPC socket never came
+// up plays fine but is tracked as position 0, and quitting the player is a
+// clean exit — so the exit-time save wrote 0 over a good resume point from an
+// earlier watch, and the next launch restarted the film from the beginning.
+// A session that observed nothing must leave history alone.
+func TestPlayStreamKeepsExistingPositionWhenTrackerNeverObserved(t *testing.T) {
+	playStreamHarness(t, &stubPlayerImpl{
+		result: player.PlayResult{PositionUnknown: true},
+	})
+
+	prior := media.HistoryEntry{
+		ID: "movie/z", Title: "Z", Type: media.Movie,
+		Position: 2109, Duration: 5400,
+	}
+	if err := history.Save(prior); err != nil {
+		t.Fatalf("seeding history: %v", err)
+	}
+
+	stream := &media.Stream{URL: "http://127.0.0.1:1/never-dialed.m3u8"}
+	sel := media.SearchResult{ID: "movie/z", Title: "Z", Type: media.Movie}
+
+	if err := playStream(stream, "Z", sel, 0, 0); err != nil {
+		t.Fatalf("playStream: %v", err)
+	}
+
+	entries, loadErr := history.Load()
+	if loadErr != nil {
+		t.Fatalf("history.Load: %v", loadErr)
+	}
+	for _, e := range entries {
+		if e.ID == "movie/z" {
+			if e.Position != 2109 {
+				t.Fatalf("history position = %g, want 2109 kept: a session that never observed a position must not overwrite the previous one", e.Position)
+			}
+			return
+		}
+	}
+	t.Fatalf("the pre-existing history entry for movie/z is gone; entries: %+v", entries)
 }
 
 // The clean-exit path must keep saving exactly as before, including a

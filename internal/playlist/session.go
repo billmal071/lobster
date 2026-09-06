@@ -19,6 +19,11 @@ type Session struct {
 	EpisodeIdx   int
 	LastPosition float64 // playback position from most recent play
 	LastDuration float64 // total media duration from most recent play
+	// LastPositionUnknown carries player.PlayResult.PositionUnknown from the
+	// most recent play: the position tracker never observed a position, so
+	// LastPosition is a default rather than a measurement and must not be
+	// persisted over the episode's existing resume point.
+	LastPositionUnknown bool
 }
 
 // New creates a Session positioned at the given season and episode.

@@ -233,9 +233,24 @@ func playCurrentEpisode(sess *playlist.Session) error {
 	}
 
 	// Normal playback with retry on failure
-	p := player.New(cfg.Player, cfg.AudioLanguage)
+	p := newPlayer(cfg.Player, cfg.AudioLanguage)
 	if !p.Available() {
 		return player.NotFoundError(cfg.Player)
+	}
+
+	// Periodic checkpoints while the episode plays: a hard shutdown kills the
+	// player and this process together, so the exit-time saveHistory in
+	// runPlaybackLoop alone would lose the whole watch position.
+	if cfg.History {
+		if cp, ok := p.(player.Checkpointer); ok {
+			cp.SetCheckpoint(historyCheckpoint(
+				sess.Content.ID,
+				sess.Content.Title,
+				sess.Content.Type,
+				sess.CurrentSeason().Number,
+				sess.Current().Number,
+			))
+		}
 	}
 
 	var startPos float64
@@ -264,6 +279,7 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		if playErr == nil {
 			sess.LastPosition = result.Position
 			sess.LastDuration = result.Duration
+			sess.LastPositionUnknown = result.PositionUnknown
 			return nil
 		}
 
@@ -350,6 +366,13 @@ func downloadEpisode(stream *media.Stream, sess *playlist.Session, title string)
 // saveHistory persists the current episode to watch history.
 func saveHistory(sess *playlist.Session) {
 	if !cfg.History {
+		return
+	}
+	// The position tracker never observed anything for this episode, so
+	// LastPosition is 0 by default rather than by measurement. Writing it
+	// would overwrite the resume point an earlier, tracked watch recorded.
+	if sess.LastPositionUnknown {
+		debugf("skipping history save: no position was observed for this episode")
 		return
 	}
 
