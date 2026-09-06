@@ -58,8 +58,17 @@ func Load() ([]media.HistoryEntry, error) {
 }
 
 // Save writes or updates an entry in the history file.
-// Uses atomic write (write to temp file, then rename) to prevent corruption.
+// Uses atomic write (write to temp file, then rename) to prevent corruption,
+// under the history write lock so that a concurrent lobster process cannot
+// interleave its own load and rename with this one and drop rows.
 func Save(entry media.HistoryEntry) error {
+	return withHistoryLock(func() error { return saveLocked(entry) })
+}
+
+// saveLocked is Save's body. It must be called with the history write lock
+// held: on its own, load, mutate and rename is not atomic, so two writers can
+// each write back a file that never contained the other's row.
+func saveLocked(entry media.HistoryEntry) error {
 	path, err := config.HistoryPath()
 	if err != nil {
 		return err
@@ -136,25 +145,38 @@ func Save(entry media.HistoryEntry) error {
 // history's own identity for a row — the key Save updates in place — and two
 // copies of that rule would be free to drift apart.
 func SaveKeepingPosition(entry media.HistoryEntry) error {
-	// A read failure here is not recoverable by writing anyway: Save would
-	// then rebuild the file from this single entry and drop the rest of the
-	// history, which is a far worse outcome than not recording one watch.
-	entries, err := Load()
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if e.ID == entry.ID && e.Season == entry.Season && e.Episode == entry.Episode {
-			entry.Position = e.Position
-			entry.Duration = e.Duration
-			break
+	// The read and the write it feeds are one critical section: a checkpoint
+	// written by another lobster process in between would be overwritten by
+	// the position copied here, which is older than it.
+	return withHistoryLock(func() error {
+		// A read failure here is not recoverable by writing anyway: the save
+		// would then rebuild the file from this single entry and drop the rest
+		// of the history, which is a far worse outcome than not recording one
+		// watch.
+		entries, err := Load()
+		if err != nil {
+			return err
 		}
-	}
-	return Save(entry)
+		for _, e := range entries {
+			if e.ID == entry.ID && e.Season == entry.Season && e.Episode == entry.Episode {
+				entry.Position = e.Position
+				entry.Duration = e.Duration
+				break
+			}
+		}
+		return saveLocked(entry)
+	})
 }
 
-// Remove deletes an entry from the history.
+// Remove deletes an entry from the history, under the same write lock as
+// Save: it is the same load, mutate and rename, and so loses rows to a
+// concurrent writer in the same way if it runs unlocked.
 func Remove(id string, season, episode int) error {
+	return withHistoryLock(func() error { return removeLocked(id, season, episode) })
+}
+
+// removeLocked is Remove's body; it must be called with the write lock held.
+func removeLocked(id string, season, episode int) error {
 	entries, err := Load()
 	if err != nil {
 		return err
