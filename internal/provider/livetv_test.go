@@ -403,12 +403,75 @@ func TestLookupSourceNarrowsTheMatch(t *testing.T) {
 }
 
 func TestAllChannelsIsInMergeOrder(t *testing.T) {
+	// liveTVFixture sorts sources lexically before constructing the provider,
+	// which would make "declared order" indistinguishable from "sorted
+	// order" if we used it here (a.m3u, b.m3u). Construct the provider
+	// directly instead, declaring the lexically-later source ("z") first, so
+	// only a real merge-order bug (not accidental sorting) can pass this.
+	dir := t.TempDir()
+	z := filepath.Join(dir, "z.m3u")
+	a := filepath.Join(dir, "a.m3u")
+	writeFile(t, z, "#EXTM3U\n#EXTINF:-1,Beta\nhttp://example.invalid/2.m3u8\n")
+	writeFile(t, a, "#EXTM3U\n#EXTINF:-1,Alpha\nhttp://example.invalid/1.m3u8\n")
+
+	lt := NewLiveTV([]string{z, a}) // declared order: z (Beta) then a (Alpha)
+	if err := lt.LoadContext(context.Background()); err != nil {
+		t.Fatalf("LoadContext: %v", err)
+	}
+
+	got := lt.AllChannels()
+	if len(got) != 2 || got[0].Name != "Beta" || got[1].Name != "Alpha" {
+		t.Fatalf("AllChannels = %v, want Beta then Alpha (declared order, not sorted order)", got)
+	}
+}
+
+// TestLookupEmptyKeyMatchesNothing pins the guard that keeps a zero-value
+// ChannelKey from matching every channel. It matches nothing today only
+// because the `name != ""` check happens to short-circuit; nothing else
+// tests that. If that guard were ever relaxed, a ref carrying no identity
+// would silently resolve to the first channel in the playlist -- exactly
+// the failure the return-every-match design exists to prevent.
+func TestLookupEmptyKeyMatchesNothing(t *testing.T) {
 	lt, _ := liveTVFixture(t, map[string]string{
 		"a.m3u": "#EXTM3U\n#EXTINF:-1,Alpha\nhttp://example.invalid/1.m3u8\n",
-		"b.m3u": "#EXTM3U\n#EXTINF:-1,Beta\nhttp://example.invalid/2.m3u8\n",
 	})
-	got := lt.AllChannels()
-	if len(got) != 2 || got[0].Name != "Alpha" || got[1].Name != "Beta" {
-		t.Fatalf("AllChannels = %v, want Alpha then Beta", got)
+	got := lt.Lookup(ChannelKey{})
+	if len(got) != 0 {
+		t.Fatalf("Lookup(ChannelKey{}) = %v, want no matches", got)
+	}
+}
+
+// TestAllChannelsAndLookupDeepCopyCategories proves a caller cannot reach
+// through a returned Channel's Categories slice to mutate the provider's
+// own state. A plain struct copy duplicates the slice header, not its
+// backing array, so this must be tested explicitly rather than trusted from
+// the outer-slice copy alone.
+func TestAllChannelsAndLookupDeepCopyCategories(t *testing.T) {
+	lt, _ := liveTVFixture(t, map[string]string{
+		"a.m3u": "#EXTM3U\n#EXTINF:-1 group-title=\"Sports\",Alpha\nhttp://example.invalid/1.m3u8\n",
+	})
+
+	all := lt.AllChannels()
+	if len(all) != 1 || len(all[0].Categories) == 0 {
+		t.Fatalf("AllChannels = %v, want one channel with categories", all)
+	}
+	all[0].Categories[0] = "TAMPERED"
+
+	found := lt.Lookup(ChannelKey{Name: "Alpha", Source: all[0].Source})
+	if len(found) != 1 {
+		t.Fatalf("Lookup = %v, want one match", found)
+	}
+	if found[0].Categories[0] == "TAMPERED" {
+		t.Fatalf("mutating a Channel returned by AllChannels leaked into provider state: %v", found[0].Categories)
+	}
+
+	looked := lt.Lookup(ChannelKey{Name: "Alpha"})
+	if len(looked) != 1 {
+		t.Fatalf("Lookup = %v, want one match", looked)
+	}
+	looked[0].Categories[0] = "TAMPERED2"
+	again := lt.AllChannels()
+	if len(again) != 1 || again[0].Categories[0] == "TAMPERED2" {
+		t.Fatalf("mutating a Channel returned by Lookup leaked into provider state: %v", again)
 	}
 }

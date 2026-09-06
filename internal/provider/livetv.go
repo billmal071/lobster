@@ -254,19 +254,31 @@ type ChannelKey struct {
 	Source string
 }
 
+// cloneChannel returns a copy of ch that shares no backing array with it.
+// A plain struct copy duplicates Categories' slice header, not its backing
+// array, so callers could otherwise mutate provider state through it.
+func cloneChannel(ch Channel) Channel {
+	ch.Categories = append([]string(nil), ch.Categories...)
+	return ch
+}
+
 // AllChannels returns every loaded channel in merge order. It does not
 // trigger a load; callers load first (LoadContext for the bounded path).
-// The returned slice is a copy so a caller cannot mutate provider state.
+// Each returned Channel is a deep copy (including Categories), so a caller
+// cannot mutate provider state through it.
 func (p *LiveTV) AllChannels() []Channel {
 	out := make([]Channel, len(p.channels))
-	copy(out, p.channels)
+	for i, ch := range p.channels {
+		out[i] = cloneChannel(ch)
+	}
 	return out
 }
 
 // Lookup returns every channel matching k. It returns all matches rather
 // than one so the caller can detect ambiguity and refuse: picking the first
 // would reintroduce playlist iteration order as the tie-break. It does not
-// trigger a load; callers load first.
+// trigger a load; callers load first. Each returned Channel is a deep copy,
+// as with AllChannels.
 func (p *LiveTV) Lookup(k ChannelKey) []Channel {
 	name := strings.ToLower(strings.TrimSpace(k.Name))
 	var out []Channel
@@ -276,12 +288,12 @@ func (p *LiveTV) Lookup(k ChannelKey) []Channel {
 		}
 		if k.TVGID != "" {
 			if ch.TVGID == k.TVGID {
-				out = append(out, ch)
+				out = append(out, cloneChannel(ch))
 			}
 			continue
 		}
 		if name != "" && strings.ToLower(strings.TrimSpace(ch.Name)) == name {
-			out = append(out, ch)
+			out = append(out, cloneChannel(ch))
 		}
 	}
 	return out
