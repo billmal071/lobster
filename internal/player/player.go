@@ -28,6 +28,16 @@ type Player interface {
 	Available() bool
 }
 
+// Checkpointer is implemented by players that can report the playback
+// position periodically while playback is still running (currently only mpv,
+// the one player tracked over IPC). Callers type-assert for it and install a
+// callback so a hard shutdown mid-watch loses at most one checkpoint interval
+// of resume position instead of the whole watch. The callback is never
+// invoked after Play returns.
+type Checkpointer interface {
+	SetCheckpoint(fn func(position, duration float64))
+}
+
 // NotFoundError returns a helpful error message when a player binary is missing.
 func NotFoundError(name string) error {
 	if runtime.GOOS == "windows" {

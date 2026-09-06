@@ -19,9 +19,18 @@ import (
 // MPV implements the Player interface for mpv.
 // Uses exec.Command with explicit args (no shell interpretation)
 // and IPC via Unix socket at a randomized temp path.
-type MPV struct{ audioLang string }
+type MPV struct {
+	audioLang  string
+	checkpoint func(position, duration float64)
+}
 
 func (m *MPV) Name() string { return "mpv" }
+
+// SetCheckpoint installs a callback that receives the current playback
+// position and duration periodically (throttled to checkpointInterval) while
+// playback is running. Must be called before Play; the callback is never
+// invoked after Play returns.
+func (m *MPV) SetCheckpoint(fn func(position, duration float64)) { m.checkpoint = fn }
 
 func (m *MPV) Available() bool {
 	bin := mpvBinaryName()
@@ -137,6 +146,10 @@ var (
 	ipcDialInterval = 250 * time.Millisecond
 )
 
+// checkpointInterval throttles the periodic position checkpoints trackPlayback
+// hands to the SetCheckpoint callback. A package var so tests can shorten it.
+var checkpointInterval = 30 * time.Second
+
 // dialWithRetry dials the mpv IPC socket until it succeeds, the retry bound
 // elapses, or stop closes (mpv exited). mpv creates the socket only once it
 // is up, which on a slow network stream can take well over any fixed grace
@@ -162,8 +175,34 @@ func dialWithRetry(ipc *ipcSocket, stop <-chan struct{}) (io.ReadWriteCloser, er
 }
 
 // trackPlayback polls mpv's IPC for the current playback position and duration.
+// If a checkpoint callback is installed, it receives (position, duration)
+// periodically — throttled to checkpointInterval — so a hard shutdown that
+// kills mpv and this process at once loses at most one interval of position.
+// The callback runs on its own goroutine (a slow history write must not back
+// up the IPC event loop), but trackPlayback drains it before returning, so no
+// invocation can interleave with the caller's exit-time save.
 func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, float64) {
 	var lastPos, lastDur float64
+
+	var ckCh chan [2]float64
+	ckDone := make(chan struct{})
+	if m.checkpoint != nil {
+		ckCh = make(chan [2]float64, 1)
+		go func() {
+			defer close(ckDone)
+			for v := range ckCh {
+				m.checkpoint(v[0], v[1])
+			}
+		}()
+	} else {
+		close(ckDone)
+	}
+	defer func() {
+		if ckCh != nil {
+			close(ckCh)
+		}
+		<-ckDone
+	}()
 
 	conn, err := dialWithRetry(ipc, stop)
 	if err != nil {
@@ -192,6 +231,7 @@ func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, floa
 		}
 	}
 
+	lastCheckpoint := time.Now()
 	for scanner.Scan() {
 		line := scanner.Text()
 		var event struct {
@@ -204,6 +244,17 @@ func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, floa
 		}
 		if event.Name == "time-pos" && event.Data > 0 {
 			lastPos = event.Data
+			// Hand the position to the checkpoint writer, at most once per
+			// interval. The send never blocks: if the writer is still busy
+			// with the previous write, this position is simply skipped and a
+			// later event delivers a fresher one.
+			if ckCh != nil && time.Since(lastCheckpoint) >= checkpointInterval {
+				select {
+				case ckCh <- [2]float64{lastPos, lastDur}:
+					lastCheckpoint = time.Now()
+				default:
+				}
+			}
 		}
 		if event.Name == "duration" && event.Data > 0 {
 			lastDur = event.Data
