@@ -188,16 +188,30 @@ func emitChannelRows(p *provider.LiveTV, failed []string) error {
 // a user's own configured path appearing in their own tool's output is not a
 // credential disclosure. This is a deliberate decision, not an oversight:
 // do not redact local paths too.
+//
+// The scheme prefix check is case-insensitive (matched against a lower-cased
+// copy of s, while parsing is still done on the original s) because a
+// hand-pasted IPTV link or a user-supplied [live_tv].playlists entry can
+// carry an uppercase scheme like "HTTPS://"; a case-sensitive check would let
+// such a URL's credentials through unstripped. Parsing is deliberately not
+// restructured around inspecting u.Scheme after parsing: on Windows a local
+// path like "C:\playlists\live.m3u" parses with scheme "c", and any local
+// path must always come back unchanged. Fragment as well as query is
+// cleared, since a fragment can carry a token just as a query parameter can.
 func displaySource(s string) string {
-	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+	lower := strings.ToLower(s)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
 		return s
 	}
 	u, err := url.Parse(s)
 	if err != nil {
 		return "<url>"
 	}
-	u.RawQuery = ""
 	u.User = nil
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	u.RawFragment = ""
 	return u.String()
 }
 

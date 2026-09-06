@@ -376,6 +376,41 @@ func TestDisplaySourceStripsCredentialsFromURL(t *testing.T) {
 	}
 }
 
+// TestDisplaySourceStripsCredentialsFromUppercaseScheme covers a mixed-case
+// scheme, which a case-sensitive prefix check misses entirely: the source
+// fails both the "http://" and "https://" prefix tests, is returned
+// unchanged, and its credentials (in both userinfo and query) reach
+// failed_sources and every encoded live ref verbatim.
+func TestDisplaySourceStripsCredentialsFromUppercaseScheme(t *testing.T) {
+	const secret = "SUPERSECRET12345"
+	src := "HTTPS://alice:" + secret + "@iptv.example.invalid/get.php?username=alice&password=" + secret
+	got := displaySource(src)
+	if strings.Contains(got, secret) {
+		t.Fatalf("displaySource leaked the secret via an uppercase scheme: %q", got)
+	}
+	if strings.Contains(got, "alice") {
+		t.Fatalf("displaySource leaked the username via an uppercase scheme: %q", got)
+	}
+	if got != "https://iptv.example.invalid/get.php" {
+		t.Fatalf("displaySource(%q) = %q, want scheme://host/path with userinfo and query dropped", src, got)
+	}
+}
+
+// TestDisplaySourceStripsFragment covers a fragment surviving because only
+// RawQuery and User were cleared: "http://host/get.php?x=1#secrettoken" had
+// its query stripped but kept "#secrettoken" verbatim.
+func TestDisplaySourceStripsFragment(t *testing.T) {
+	const secret = "secrettoken"
+	src := "http://iptv.example.invalid/get.php?x=1#" + secret
+	got := displaySource(src)
+	if strings.Contains(got, secret) {
+		t.Fatalf("displaySource leaked the fragment: %q", got)
+	}
+	if got != "http://iptv.example.invalid/get.php" {
+		t.Fatalf("displaySource(%q) = %q, want scheme://host/path with query and fragment dropped", src, got)
+	}
+}
+
 // Local paths carry no query string and are the natural identifier for
 // "which playlist is down" — deliberately left unchanged, not an oversight.
 func TestDisplaySourceLeavesLocalPathsUnchanged(t *testing.T) {
