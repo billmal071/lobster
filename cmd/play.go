@@ -160,7 +160,10 @@ func playRun(cmd *cobra.Command, args []string) error {
 		return emitErr("bad_ref", 1, "%v", err)
 	}
 
-	sel := r.searchResult()
+	sel, err := r.searchResult()
+	if err != nil {
+		return emitErr("bad_ref", 1, "%v", err)
+	}
 	if sel.Type == media.TV && (flagSeason <= 0 || flagEpisode <= 0) {
 		return emitErr("season_episode_required", 1,
 			"%q is a series: pass --season and --episode (list them with 'lobster episodes --ref ...')", r.Title)
