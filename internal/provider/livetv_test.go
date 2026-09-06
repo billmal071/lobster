@@ -236,20 +236,21 @@ func TestLoadContextSkipsImmediatelyFailingSourceAndReportsIt(t *testing.T) {
 }
 
 // TestLoadContextAbortsOnDeadlineAndReportsFailedSource proves ctx actually
-// reaches and aborts an in-flight HTTP request: the handler sleeps far
-// longer than the context's timeout, so a regression that drops ctx from the
-// request (e.g. reverting to http.NewRequest) would hang until the handler
-// wakes rather than returning near the deadline. A stub/local-file seam
-// cannot demonstrate this — only a real in-flight request being cancelled
-// can. The loopback httptest server never leaves the machine and the sleep
-// is capped by the deadline, so this stays well under a second.
+// reaches and aborts an in-flight HTTP request: the handler waits on
+// whichever comes first, the request's own context finishing or a fixed 1s
+// timer. Correct code aborts at the ~50ms LoadContext deadline, so elapsed
+// stays well under 1s; a regression that drops ctx from the request (e.g.
+// reverting to http.NewRequest) leaves the handler to run out its full 1s
+// timer, which the elapsed-time assertion below then fails on with a
+// readable message — no reliance on go test's own -timeout, no goroutine
+// dump. A stub/local-file seam cannot demonstrate this — only a real
+// in-flight request being cancelled can. The loopback httptest server and
+// the 1s cap keep this well under the "probing something real" line.
 func TestLoadContextAbortsOnDeadlineAndReportsFailedSource(t *testing.T) {
-	unblock := make(chan struct{})
-	t.Cleanup(func() { close(unblock) })
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
-		case <-unblock:
+		case <-time.After(1 * time.Second):
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -272,10 +273,13 @@ func TestLoadContextAbortsOnDeadlineAndReportsFailedSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadContext with one good source must succeed, got %v", err)
 	}
-	// Generous upper bound: proves LoadContext returned near the deadline
-	// rather than after the handler's (effectively unbounded) sleep.
-	if elapsed > 2*time.Second {
-		t.Fatalf("LoadContext took %v, want it bounded near the %v deadline", elapsed, budget)
+	// Comfortably above the 50ms budget (so a slow CI box does not flake) and
+	// comfortably below the handler's 1s ceiling (so a regression that
+	// ignores ctx and lets the handler run its full course trips this
+	// assertion cleanly, instead of the suite hanging).
+	const maxElapsed = 500 * time.Millisecond
+	if elapsed > maxElapsed {
+		t.Fatalf("LoadContext took %v, want it bounded near the %v deadline (max %v)", elapsed, budget, maxElapsed)
 	}
 	failed := p.FailedSources()
 	if len(failed) != 1 || failed[0] != srv.URL {
