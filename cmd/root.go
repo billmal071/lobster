@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"lobster/internal/config"
+	"lobster/internal/history"
 )
 
 // Version is set at build time via ldflags.
@@ -138,6 +139,11 @@ func applyConfig() error {
 		log.SetOutput(os.Stderr)
 		log.SetFlags(0)
 	}
+
+	// The history package falls back to an unlocked write when its lock cannot
+	// be established. Route that notice through debugf so the downgrade is
+	// diagnosable instead of silent.
+	history.SetLogger(debugf)
 
 	return nil
 }
