@@ -23,12 +23,13 @@ func (v *VLC) Available() bool {
 	return err == nil
 }
 
-// Play launches VLC. VLC doesn't have IPC position tracking like mpv,
-// so we return zero position/duration.
+// Play launches VLC. VLC has no position tracking here, so every result it
+// returns carries a default position rather than a measurement and is marked
+// PositionUnknown and PositionUntracked.
 func (v *VLC) Play(stream *media.Stream, title string, startPos float64, subFiles []string) (PlayResult, error) {
 	stream, cleanup, err := wrapDeobfuscated(stream)
 	if err != nil {
-		return PlayResult{}, err
+		return untrackedPosition(), err
 	}
 	defer cleanup()
 
@@ -54,13 +55,13 @@ func (v *VLC) Play(stream *media.Stream, title string, startPos float64, subFile
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 
-	if err := cmd.Run(); err != nil {
+	if err := runPlayerCmd(cmd); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			_ = exitErr // VLC exits non-zero on user close
-			return PlayResult{}, nil
+			return untrackedPosition(), nil
 		}
-		return PlayResult{}, fmt.Errorf("running vlc: %w", err)
+		return untrackedPosition(), fmt.Errorf("running vlc: %w", err)
 	}
 
-	return PlayResult{}, nil
+	return untrackedPosition(), nil
 }

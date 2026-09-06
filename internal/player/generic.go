@@ -22,11 +22,13 @@ func (g *Generic) Available() bool {
 	return err == nil
 }
 
-// Play launches the generic player. Position tracking is not supported.
+// Play launches the generic player. Position tracking is not supported, so
+// every result carries a default position rather than a measurement and is
+// marked PositionUnknown and PositionUntracked.
 func (g *Generic) Play(stream *media.Stream, title string, startPos float64, subFiles []string) (PlayResult, error) {
 	stream, cleanup, err := wrapDeobfuscated(stream)
 	if err != nil {
-		return PlayResult{}, err
+		return untrackedPosition(), err
 	}
 	defer cleanup()
 
@@ -50,12 +52,12 @@ func (g *Generic) Play(stream *media.Stream, title string, startPos float64, sub
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 
-	if err := cmd.Run(); err != nil {
+	if err := runPlayerCmd(cmd); err != nil {
 		if _, ok := err.(*exec.ExitError); ok {
-			return PlayResult{}, nil
+			return untrackedPosition(), nil
 		}
-		return PlayResult{}, fmt.Errorf("running %s: %w", g.name, err)
+		return untrackedPosition(), fmt.Errorf("running %s: %w", g.name, err)
 	}
 
-	return PlayResult{}, nil
+	return untrackedPosition(), nil
 }

@@ -125,6 +125,34 @@ func Save(entry media.HistoryEntry) error {
 	return nil
 }
 
+// SaveKeepingPosition records a watch whose player could not report a playback
+// position. Any Position and Duration already stored for the same
+// (ID, Season, Episode) are carried into the entry before it is written, so
+// the watch is recorded without its default 0 replacing a real resume point;
+// a title with no stored entry is appended at position 0, there being no
+// resume point to lose.
+//
+// It lives here rather than in the callers because (ID, Season, Episode) is
+// history's own identity for a row — the key Save updates in place — and two
+// copies of that rule would be free to drift apart.
+func SaveKeepingPosition(entry media.HistoryEntry) error {
+	// A read failure here is not recoverable by writing anyway: Save would
+	// then rebuild the file from this single entry and drop the rest of the
+	// history, which is a far worse outcome than not recording one watch.
+	entries, err := Load()
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.ID == entry.ID && e.Season == entry.Season && e.Episode == entry.Episode {
+			entry.Position = e.Position
+			entry.Duration = e.Duration
+			break
+		}
+	}
+	return Save(entry)
+}
+
 // Remove deletes an entry from the history.
 func Remove(id string, season, episode int) error {
 	entries, err := Load()
