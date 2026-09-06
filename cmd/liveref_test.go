@@ -117,7 +117,11 @@ func TestPlayLiveRejectsSeasonAndEpisode(t *testing.T) {
 	// Must fire before the provider is built: assert the seam is never called.
 	called := false
 	old := agentLiveTV
-	agentLiveTV = func(sources []string) *provider.LiveTV { called = true; return nil }
+	agentLiveTV = func(sources []string) *provider.LiveTV {
+		called = true
+		t.Errorf("agentLiveTV was called: the usage guard did not fire before the provider was built")
+		return provider.NewLiveTV(nil)
+	}
 	t.Cleanup(func() { agentLiveTV = old })
 
 	err := runAgentCmdErr(t, playCmd, "--ref", liveRefFor(t, "bbc1.uk", "BBC One", "src.m3u"), "--season", "1")
@@ -134,7 +138,11 @@ func TestPlayLiveRejectsSeasonAndEpisode(t *testing.T) {
 func TestPlayLiveRejectsExplicitZeroSeason(t *testing.T) {
 	called := false
 	old := agentLiveTV
-	agentLiveTV = func(sources []string) *provider.LiveTV { called = true; return nil }
+	agentLiveTV = func(sources []string) *provider.LiveTV {
+		called = true
+		t.Errorf("agentLiveTV was called: the usage guard did not fire before the provider was built")
+		return provider.NewLiveTV(nil)
+	}
 	t.Cleanup(func() { agentLiveTV = old })
 
 	var played string
@@ -154,7 +162,11 @@ func TestPlayLiveRejectsExplicitZeroSeason(t *testing.T) {
 func TestPlayLiveRejectsExplicitZeroEpisode(t *testing.T) {
 	called := false
 	old := agentLiveTV
-	agentLiveTV = func(sources []string) *provider.LiveTV { called = true; return nil }
+	agentLiveTV = func(sources []string) *provider.LiveTV {
+		called = true
+		t.Errorf("agentLiveTV was called: the usage guard did not fire before the provider was built")
+		return provider.NewLiveTV(nil)
+	}
 	t.Cleanup(func() { agentLiveTV = old })
 
 	var played string
