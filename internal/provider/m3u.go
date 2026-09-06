@@ -15,7 +15,7 @@ type Channel struct {
 	Referer    string   // from #EXTVLCOPT:http-referrer
 	UserAgent  string   // from #EXTVLCOPT:http-user-agent
 	TVGID      string   // the tvg-id attribute verbatim; "" when absent
-	Source     string   // playlist this channel was loaded from; set by LiveTV.doLoad, not by the parser
+	Source     string   // playlist this channel was loaded from; set by LiveTV.doLoadContext, not by the parser
 }
 
 var (

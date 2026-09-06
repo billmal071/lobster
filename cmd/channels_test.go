@@ -475,3 +475,36 @@ func TestChannelsCategoriesEnvelopeOmitsCredentials(t *testing.T) {
 		t.Fatalf("failed_sources = %v, want [%q]", got["failed_sources"], "https://iptv.example.invalid/get.php")
 	}
 }
+
+// TestChannelsRefOmitsCredentialsInDecodedPayload asserts on the *decoded*
+// ref, not the envelope text: encodeRef base64-encodes, it does not redact,
+// so a strings.Contains(output, secret) check cannot see through it. A
+// channel loaded from a credentialed Xtream source must not carry the raw
+// source into its ref's Source field on the success path (every prior
+// credential test here only injects the credentialed string as a
+// FailedSources() entry, so none of them ever mint a ref from a credentialed
+// Channel.Source).
+func TestChannelsRefOmitsCredentialsInDecodedPayload(t *testing.T) {
+	ch := provider.Channel{
+		ID:     "chan1",
+		Name:   "Alpha",
+		Source: credentialSource,
+	}
+	ref, err := liveChannelRef(ch)
+	if err != nil {
+		t.Fatalf("liveChannelRef: %v", err)
+	}
+	decoded, err := decodeRef(ref)
+	if err != nil {
+		t.Fatalf("ref does not decode: %v", err)
+	}
+	if strings.Contains(decoded.Source, credentialSourceSecret) {
+		t.Fatalf("decoded ref Source leaked the password: %q", decoded.Source)
+	}
+	// Belt and braces: check the whole decoded struct, not only the field we
+	// expect to carry it, in case a future field starts copying ch.Source.
+	blob, _ := json.Marshal(decoded)
+	if strings.Contains(string(blob), credentialSourceSecret) {
+		t.Fatalf("decoded ref leaked the password somewhere: %s", blob)
+	}
+}

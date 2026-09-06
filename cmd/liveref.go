@@ -53,20 +53,31 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 			"%s is not installed or not on PATH", name)
 	}
 
-	// Fork before loading any playlist. supervisorArgs forwards only the ref
-	// (cmd/detach.go:86-96), so the child reloads regardless; resolving here
-	// would do the work twice and block the parent, breaking the "returns
-	// immediately" contract --detach promises. The !flagSupervised guard
-	// mirrors cmd/play.go:208 — without it the child forks a child of its own.
-	if flagDetach && !flagSupervised {
-		return playDetached(cmd, r)
-	}
-
+	// Checked before the --detach fork: it is a pure config read (no
+	// network, no playlist load), so it costs nothing to do early, and doing
+	// it late is wrong. With no live sources configured, forking first would
+	// have the child exit 1 with not_configured, the parent's liveness wait
+	// see it die immediately, and playDetached report exit 3
+	// (providers_failed) naming a log file — contradicting the documented
+	// contract (README.md, skills/lobster-play/SKILL.md) that not_configured
+	// at exit 1 means "tell the user to configure a source", not "retry
+	// later". Mirrors the same ordering in cmd/play.go for the non-live path
+	// (the base/season-episode checks before its own --detach dispatch).
 	sources := agentLiveSources()
 	if len(sources) == 0 {
 		return emitErr("not_configured", exitUsage,
 			"no live TV sources configured; add one under [live_tv] in the config, or enable the TBCPL feed")
 	}
+
+	// Fork before loading any playlist. supervisorArgs forwards only the ref
+	// (cmd/detach.go:86-96), so the child reloads regardless; resolving here
+	// would do the work twice and block the parent, breaking the "returns
+	// immediately" contract --detach promises. The !flagSupervised guard
+	// mirrors cmd/play.go:218 — without it the child forks a child of its own.
+	if flagDetach && !flagSupervised {
+		return playDetached(cmd, r)
+	}
+
 	p := agentLiveTV(sources)
 	ctx, cancel := context.WithTimeout(context.Background(), provider.LiveLoadBudget)
 	defer cancel()
@@ -93,9 +104,18 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 //
 // The matching rule: tvg-id when present; if that yields more than one
 // channel, narrow by exact folded Title; otherwise match by exact folded
-// Title directly. Source narrows throughout. It fails closed if the result is
+// Title directly. Source narrows throughout — but not via ChannelKey.Source:
+// r.Source is the ref's *sanitized* (displaySource'd) value, while
+// provider.Channel.Source is raw, so passing r.Source into Lookup's
+// ChannelKey would compare a sanitized string against a raw one and never
+// match, silently disabling Source narrowing for every ref (see
+// liveChannelRef, cmd/channels.go). Instead Lookup is asked by TVGID/Name
+// alone and the result is narrowed here by comparing displaySource(ch.Source)
+// against r.Source — both sides sanitized. Filtering can only shrink the
+// match set, so a source mismatch still yields either the right channel or
+// ambiguity/absence, never a wrong pick. It fails closed if the result is
 // zero or still more than one — an ID is never authoritative on its own:
-// uniqueID (internal/provider/livetv.go:161-172) disambiguates by playlist
+// uniqueID (internal/provider/livetv.go:221-232) disambiguates by playlist
 // order, so an ID means a position, not a channel, and picking the first
 // remaining match on ambiguity would reintroduce exactly the ordering
 // dependence this design exists to escape.
@@ -111,7 +131,8 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 // own identity rather than picking by position. Two channels sharing BOTH
 // tvg-id and title remain genuinely ambiguous and still refuse below.
 func resolveLiveRef(p *provider.LiveTV, r playRef) (provider.Channel, error) {
-	matches := p.Lookup(provider.ChannelKey{TVGID: r.TVGID, Name: r.Title, Source: r.Source})
+	matches := p.Lookup(provider.ChannelKey{TVGID: r.TVGID, Name: r.Title})
+	matches = filterBySource(matches, r.Source)
 
 	if r.TVGID != "" && len(matches) > 1 {
 		matches = filterByExactTitle(matches, r.Title)
@@ -134,15 +155,44 @@ func resolveLiveRef(p *provider.LiveTV, r playRef) (provider.Channel, error) {
 
 	// No match. Distinguish "the channel is gone" from "its playlist is down":
 	// they call for completely different advice.
+	//
+	// r.Source is already sanitized (liveChannelRef stores displaySource(ch.
+	// Source)), while FailedSources() returns raw source strings, so each
+	// failed source must be sanitized here before the comparison. Comparing
+	// f == r.Source directly would never match once r.Source stopped being
+	// raw, silently regressing every down-playlist ref to "no_results" (exit
+	// 2, "the channel does not exist") when "providers_failed" (exit 3,
+	// "retry") is correct.
 	for _, f := range p.FailedSources() {
-		if f == r.Source {
+		if displaySource(f) == r.Source {
 			return provider.Channel{}, emitErr("providers_failed", exitProvidersFailed,
 				"%q could not be matched: its playlist (%s) failed to load; the channel may still exist",
-				r.Title, displaySource(r.Source))
+				r.Title, r.Source)
 		}
 	}
 	return provider.Channel{}, emitErr("no_results", exitNoResults,
 		"%q is no longer in your playlists; re-run 'lobster channels' to get a current ref", r.Title)
+}
+
+// filterBySource narrows chs to those whose sanitized Source matches source.
+// source is empty for refs minted before Source was recorded at all, and
+// "" means "do not narrow" rather than "match channels with no source" —
+// consistent with ChannelKey.Source's own empty-means-unset convention.
+// Both sides of the comparison go through displaySource: chs carry the raw
+// provider.Channel.Source, while a ref's Source is already sanitized (see
+// liveChannelRef), so comparing them raw-to-raw or sanitized-to-raw would
+// never match.
+func filterBySource(chs []provider.Channel, source string) []provider.Channel {
+	if source == "" {
+		return chs
+	}
+	out := make([]provider.Channel, 0, len(chs))
+	for _, ch := range chs {
+		if displaySource(ch.Source) == source {
+			out = append(out, ch)
+		}
+	}
+	return out
 }
 
 // filterByExactTitle narrows chs to those whose Name case/whitespace-folds to

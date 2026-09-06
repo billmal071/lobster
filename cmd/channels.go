@@ -219,12 +219,23 @@ func sanitizeFailedSources(failed []string) []string {
 // liveChannelRef mints the ref for one channel. It carries TVGID and Source so
 // play can re-match the channel after a reload rather than trusting an ID that
 // depends on playlist order.
+//
+// Source is stored through displaySource, not raw: ch.Source for an Xtream
+// playlist is "<server>/get.php?username=...&password=...&..." (config.go's
+// LiveTVConfig.Sources), and encodeRef only base64-encodes — it does not
+// redact. Without this, every ref minted from a credentialed Xtream source
+// would carry the subscriber's username and password on stdout, in plain
+// sight of an agent transcript, on the success path of every "lobster
+// channels" call (not only the failure path displaySource was originally
+// added to guard, cf. sanitizeFailedSources). resolveLiveRef and
+// playLiveRef's FailedSources comparison are the two places that read this
+// field back and must compare like-for-like against a sanitized value too.
 func liveChannelRef(ch provider.Channel) (string, error) {
 	return encodeRef(playRef{
 		ID:     ch.ID,
 		Title:  ch.Name,
 		Type:   liveRefType,
 		TVGID:  ch.TVGID,
-		Source: ch.Source,
+		Source: displaySource(ch.Source),
 	})
 }
