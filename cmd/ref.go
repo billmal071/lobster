@@ -41,13 +41,14 @@ import (
 //
 // A live ref's identity story is different in kind, not degree. It is never
 // re-searched by title: play re-matches it against freshly loaded playlists
-// on every play, by TVGID when present (narrowed further by exact folded
-// Title if that tvg-id turns out to be shared by more than one channel — real
-// playlists are not always disciplined about tvg-id uniqueness) and otherwise
-// by exact folded Title, narrowed to Source when set, and it fails closed on
-// both absence and ambiguity rather than falling through to a search. Base is
-// meaningless here (there is no provider chain to start a search on) and is
-// left empty.
+// on every play, by TVGID when present; if that tvg-id is shared by more than
+// one channel (real playlists are not always disciplined about tvg-id
+// uniqueness), the result is narrowed further by exact folded Title; when no
+// tvg-id is present at all, matching falls back to exact folded Title
+// directly. Source narrows the match throughout. It fails closed if the
+// result is zero or still more than one channel, rather than falling through
+// to a search. Base is meaningless here (there is no provider chain to start
+// a search on) and is left empty.
 type playRef struct {
 	ID     string `json:"id"`
 	Title  string `json:"title"`

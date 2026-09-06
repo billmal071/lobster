@@ -245,9 +245,18 @@ func liveCatLess(a, b string) bool {
 	return strings.ToLower(a) < strings.ToLower(b)
 }
 
-// ChannelKey identifies a channel across reloads. TVGID is the stable
-// upstream identifier and wins when present; Name is the fallback for
-// playlists that omit tvg-id. Source narrows both to one playlist.
+// ChannelKey identifies a channel across reloads. TVGID is checked first when
+// present, and Lookup itself matches on TVGID alone in that case — it does
+// not also consult Name. Name is the fallback identifier for playlists that
+// omit tvg-id, and matched only when TVGID is empty. Source narrows either
+// case to one playlist.
+//
+// A TVGID match is not guaranteed unique: real playlists are not always
+// disciplined about tvg-id uniqueness, so more than one channel can share
+// one. Lookup returns every such match rather than choosing one — see its
+// own doc comment. A caller that needs a single channel out of a shared
+// tvg-id (cmd.resolveLiveRef) narrows the result further by exact folded
+// Title itself; that narrowing happens above Lookup, not inside it.
 type ChannelKey struct {
 	TVGID  string
 	Name   string

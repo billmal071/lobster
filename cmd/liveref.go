@@ -85,24 +85,28 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 
 // resolveLiveRef re-matches a live ref against the freshly loaded playlists.
 //
-// It fails closed at every branch. An ID is never authoritative: uniqueID
-// (internal/provider/livetv.go:161-172) disambiguates by playlist order, so an
-// ID means a position, not a channel. Ambiguity fails like absence — picking
-// the first match would reintroduce exactly the ordering dependence this
-// design exists to escape.
+// The matching rule: tvg-id when present; if that yields more than one
+// channel, narrow by exact folded Title; otherwise match by exact folded
+// Title directly. Source narrows throughout. It fails closed if the result is
+// zero or still more than one — an ID is never authoritative on its own:
+// uniqueID (internal/provider/livetv.go:161-172) disambiguates by playlist
+// order, so an ID means a position, not a channel, and picking the first
+// remaining match on ambiguity would reintroduce exactly the ordering
+// dependence this design exists to escape.
+//
+// The title-narrowing step exists because Lookup itself does not perform it:
+// once TVGID is non-empty, Lookup matches on TVGID alone and does not also
+// consult Name (ChannelKey doc comment, internal/provider/livetv.go). Real
+// playlists are not always disciplined about tvg-id uniqueness — the same
+// logical channel at several qualities, or plain provider sloppiness, can
+// share one tvg-id across genuinely different channels. Narrowing the
+// resulting set by the ref's own recorded Title still resolves the common
+// case (a stable tvg-id) correctly after a reorder, using more of the ref's
+// own identity rather than picking by position. Two channels sharing BOTH
+// tvg-id and title remain genuinely ambiguous and still refuse below.
 func resolveLiveRef(p *provider.LiveTV, r playRef) (provider.Channel, error) {
 	matches := p.Lookup(provider.ChannelKey{TVGID: r.TVGID, Name: r.Title, Source: r.Source})
 
-	// Lookup treats a non-empty TVGID as authoritative and does not consult
-	// Name at all once it is set (ChannelKey doc comment,
-	// internal/provider/livetv.go) — reasonably, since tvg-id is supposed to
-	// be the stable identifier. Real playlists are not always disciplined
-	// about that: two channels can share one. When they do, narrowing the
-	// TVGID matches further by the ref's own exact folded Title is what still
-	// lets the common case (a stable tvg-id) resolve correctly after a
-	// reorder, while two channels sharing BOTH tvg-id and name remain
-	// genuinely ambiguous and still refuse below — fail-closed is preserved,
-	// it is just applied after this narrowing rather than before it.
 	if r.TVGID != "" && len(matches) > 1 {
 		matches = filterByExactTitle(matches, r.Title)
 	}

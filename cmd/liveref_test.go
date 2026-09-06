@@ -100,6 +100,19 @@ func stubLivePlayer(t *testing.T, played *string) {
 	t.Cleanup(func() { agentPlayLive = old })
 }
 
+// useSources points agentLiveSources/agentLiveTV at exactly these paths (in
+// order), restoring both with t.Cleanup. Used where a test needs more than
+// one source — a single-source load either fully succeeds or fully fails
+// (LoadContext errors when every source fails), so it can never exercise the
+// "this channel's own playlist is down, but others loaded" branch.
+func useSources(t *testing.T, paths ...string) {
+	t.Helper()
+	oldSources, oldTV := agentLiveSources, agentLiveTV
+	agentLiveSources = func() []string { return paths }
+	agentLiveTV = func(sources []string) *provider.LiveTV { return provider.NewLiveTV(sources) }
+	t.Cleanup(func() { agentLiveSources, agentLiveTV = oldSources, oldTV })
+}
+
 func TestPlayLiveRejectsSeasonAndEpisode(t *testing.T) {
 	// Must fire before the provider is built: assert the seam is never called.
 	called := false
@@ -178,28 +191,84 @@ func TestPlayLiveAbsentChannelIsNoResultsAndNeverResolves(t *testing.T) {
 }
 
 // TestPlayLiveDistinguishesDownPlaylistFromMissingChannel mints a ref against
-// a real playlist file, then deletes that file before playing: the channel is
-// not gone, its playlist is down, and those need different exit codes.
+// one playlist file among two configured sources, then deletes only that
+// file before playing: the channel is not gone, its own playlist is down,
+// and that needs a different exit code than "no longer in your playlists".
+//
+// This needs at least two sources. With only one, LoadContext itself returns
+// an error the moment its only source fails (internal/provider/livetv.go:
+// "if !anyOK && len(p.sources) > 0"), which playLiveRef already turns into
+// exitProvidersFailed before resolveLiveRef ever runs — so a single-source
+// version of this test would pass without ever reaching the FailedSources
+// check resolveLiveRef makes, for a reason unrelated to what it claims to
+// test.
 func TestPlayLiveDistinguishesDownPlaylistFromMissingChannel(t *testing.T) {
-	body := "#EXTM3U\n#EXTINF:-1 tvg-id=\"x.uk\",X\nhttp://example.invalid/x.m3u8\n"
-	ref := refFromPlaylist(t, body, "X")
-	path := liveTestFile(t)
+	dir := t.TempDir()
+	goodPath := filepath.Join(dir, "good.m3u")
+	downPath := filepath.Join(dir, "down.m3u")
 
-	oldSources, oldTV := agentLiveSources, agentLiveTV
-	agentLiveSources = func() []string { return []string{path} }
-	agentLiveTV = func(sources []string) *provider.LiveTV { return provider.NewLiveTV(sources) }
-	t.Cleanup(func() { agentLiveSources, agentLiveTV = oldSources, oldTV })
+	if err := os.WriteFile(goodPath, []byte("#EXTM3U\n#EXTINF:-1 tvg-id=\"other.uk\",Other\nhttp://example.invalid/other.m3u8\n"), 0o600); err != nil {
+		t.Fatalf("writing good fixture: %v", err)
+	}
+	downBody := "#EXTM3U\n#EXTINF:-1 tvg-id=\"x.uk\",X\nhttp://example.invalid/x.m3u8\n"
+	if err := os.WriteFile(downPath, []byte(downBody), 0o600); err != nil {
+		t.Fatalf("writing down fixture: %v", err)
+	}
 
-	if err := os.Remove(path); err != nil {
+	p := provider.NewLiveTV([]string{downPath})
+	if err := p.LoadContext(context.Background()); err != nil {
+		t.Fatalf("loading down fixture: %v", err)
+	}
+	var ch provider.Channel
+	for _, c := range p.AllChannels() {
+		if c.Name == "X" {
+			ch = c
+		}
+	}
+	if ch.Name == "" {
+		t.Fatal("channel X not found in down fixture")
+	}
+	ref, err := liveChannelRef(ch)
+	if err != nil {
+		t.Fatalf("encoding ref: %v", err)
+	}
+
+	// Now take downPath offline while goodPath keeps loading: with two
+	// sources, LoadContext succeeds overall (one source is enough), and X's
+	// absence must be explained by its own playlist having failed.
+	if err := os.Remove(downPath); err != nil {
 		t.Fatalf("removing fixture: %v", err)
 	}
+	useSources(t, goodPath, downPath)
 
 	var played string
 	stubLivePlayer(t, &played)
 
-	err := runAgentCmdErr(t, playCmd, "--ref", ref)
+	err = runAgentCmdErr(t, playCmd, "--ref", ref)
 	assertExit(t, err, exitProvidersFailed)
 	if played != "" {
 		t.Fatal("must not play when the playlist is down")
+	}
+}
+
+// TestPlayLiveAmbiguousMatchRefusesEvenAfterTitleNarrowing covers the branch
+// unique to resolveLiveRef's tvg-id-collision narrowing: two channels that
+// share BOTH tvg-id and exact folded title. Narrowing by title cannot break
+// this tie, so it must still fail closed rather than silently picking one —
+// the one guarantee the narrowing step itself could quietly break.
+func TestPlayLiveAmbiguousMatchRefusesEvenAfterTitleNarrowing(t *testing.T) {
+	body := "#EXTM3U\n" +
+		"#EXTINF:-1 tvg-id=\"dup2\",Twin\nhttp://example.invalid/1.m3u8\n" +
+		"#EXTINF:-1 tvg-id=\"dup2\",Twin\nhttp://example.invalid/2.m3u8\n"
+	var played string
+	stubLivePlayer(t, &played)
+	ref := refFromPlaylist(t, body, "Twin")
+	usePlaylist(t, body)
+
+	err := runAgentCmdErr(t, playCmd, "--ref", ref)
+	assertExit(t, err, exitNoResults)
+	assertErrCode(t, "ambiguous_channel")
+	if played != "" {
+		t.Fatal("a tvg-id AND title collision must not play anything")
 	}
 }
