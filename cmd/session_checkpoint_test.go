@@ -3,6 +3,7 @@ package cmd
 import (
 	"testing"
 
+	"lobster/internal/history"
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/playlist"
@@ -81,6 +82,45 @@ func TestPlayCurrentEpisodeCheckpointsPositionMidPlayback(t *testing.T) {
 	if sess.LastPosition != 1234 || sess.LastDuration != 5400 {
 		t.Fatalf("session final state = pos %g dur %g, want 1234/5400", sess.LastPosition, sess.LastDuration)
 	}
+}
+
+// The session path has the same exposure as playStream: a blind tracker plus a
+// clean player exit used to hand saveHistory a position of 0, overwriting the
+// episode's real resume point. An episode whose position was never observed
+// must not be written at all.
+func TestSessionKeepsExistingPositionWhenTrackerNeverObserved(t *testing.T) {
+	playStreamHarness(t, &stubPlayerImpl{
+		result: player.PlayResult{PositionUnknown: true},
+	})
+
+	prior := media.HistoryEntry{
+		ID: "tv/s", Title: "S", Type: media.TV,
+		Season: 1, Episode: 3, Position: 1500, Duration: 2400,
+	}
+	if err := history.Save(prior); err != nil {
+		t.Fatalf("seeding history: %v", err)
+	}
+
+	prov := &stubStreamProvider{stream: &media.Stream{URL: "http://127.0.0.1:1/never-dialed.m3u8"}}
+	sess := sessionForTest(prov)
+	if err := playCurrentEpisode(sess); err != nil {
+		t.Fatalf("playCurrentEpisode: %v", err)
+	}
+	saveHistory(sess)
+
+	entries, loadErr := history.Load()
+	if loadErr != nil {
+		t.Fatalf("history.Load: %v", loadErr)
+	}
+	for _, e := range entries {
+		if e.ID == "tv/s" && e.Season == 1 && e.Episode == 3 {
+			if e.Position != 1500 {
+				t.Fatalf("history position = %g, want 1500 kept: an episode whose position was never observed must not overwrite the previous one", e.Position)
+			}
+			return
+		}
+	}
+	t.Fatalf("the pre-existing history entry for tv/s S01E03 is gone; entries: %+v", entries)
 }
 
 // With history disabled the session path must not install a checkpoint

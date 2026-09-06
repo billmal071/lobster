@@ -593,8 +593,10 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	// tracked position alongside the error, and an abnormal exit (killed,
 	// crash) is exactly the watch whose resume point must not be lost. With no
 	// tracked position there is nothing to keep, and writing 0 would clobber a
-	// real position from an earlier watch of the same title.
-	if cfg.History && (playErr == nil || result.Position > 0) {
+	// real position from an earlier watch of the same title — which is also
+	// why a session whose tracker never observed a position is skipped even
+	// though it exited cleanly: its result is a default, not a measurement.
+	if cfg.History && !result.PositionUnknown && (playErr == nil || result.Position > 0) {
 		entry := media.HistoryEntry{
 			ID:       selected.ID,
 			Title:    selected.Title,
