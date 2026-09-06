@@ -1087,13 +1087,19 @@ func emitChannelRows(p *provider.LiveTV) error {
 // liveChannelRef mints the ref for one channel. It carries TVGID and Source so
 // play can re-match the channel after a reload rather than trusting an ID that
 // depends on playlist order.
+//
+// Source is stored through displaySource, not raw ch.Source — Xtream source
+// strings carry the subscriber's username and password in the query string,
+// and without sanitizing here every ref would leak them on stdout. Failed-
+// source comparisons are sanitized separately (sanitizeFailedSources), so
+// both sides of any later comparison stay sanitized consistently.
 func liveChannelRef(ch provider.Channel) (string, error) {
 	return encodeRef(playRef{
 		ID:     ch.ID,
 		Title:  ch.Name,
 		Type:   liveRefType,
 		TVGID:  ch.TVGID,
-		Source: ch.Source,
+		Source: displaySource(ch.Source),
 	})
 }
 ```

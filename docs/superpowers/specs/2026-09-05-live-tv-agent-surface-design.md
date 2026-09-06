@@ -168,8 +168,11 @@ channel matching that key, and then:
 | 0, and `Source` is in `FailedSources()` | `providers_failed`, exit 3 — naming the playlist |
 | more than 1 | `ambiguous_channel`, exit 2 — listing the candidates |
 
-`ID` is tried first as a fast path but is never authoritative, which is what
-makes `uniqueID`'s instability harmless rather than a bug to fix.
+There is no `ID` fast path: `ChannelKey` has no `ID` field. The rule as
+implemented is tvg-id when present; when a tvg-id is shared by more than one
+channel, narrow further by exact folded Title; Source narrows the result
+throughout. `uniqueID`'s instability is harmless because resolution never
+consults it at all, not because it is tried first and then overridden.
 
 The ambiguous case is the first draft's worst omission. It assumed exact-name
 matching was unambiguous; it is not, and neither is `tvg-id` matching — the very
