@@ -44,7 +44,10 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 		return emitErr("usage", exitUsage,
 			"%q is a live channel: --season and --episode do not apply", r.Title)
 	}
-	if flagDownload != "" {
+	// cmd.Flags().Changed, not the value: "--download ''" is indistinguishable
+	// from unset under a value check, so it would slip through and let live
+	// playback proceed uncaught. Mirrors the season/episode guard above.
+	if cmd.Flags().Changed("download") {
 		return emitErr("unsupported", exitUsage,
 			"--download is not supported for live channels")
 	}

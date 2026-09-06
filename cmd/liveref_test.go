@@ -231,6 +231,35 @@ func TestPlayLiveRejectsExplicitZeroEpisode(t *testing.T) {
 	}
 }
 
+// TestPlayLiveRejectsExplicitEmptyDownload covers "--download ''": a value
+// check (flagDownload != "") lets this through silently indistinguishable
+// from --download never having been passed at all, so live playback would
+// proceed uncaught. Passing --download at all is the usage error for a live
+// ref, regardless of the value given — the same class of bug as the
+// season/episode zero-value cases above.
+func TestPlayLiveRejectsExplicitEmptyDownload(t *testing.T) {
+	called := false
+	old := agentLiveTV
+	agentLiveTV = func(sources []string) *provider.LiveTV {
+		called = true
+		t.Errorf("agentLiveTV was called: the usage guard did not fire before the provider was built")
+		return provider.NewLiveTV(nil)
+	}
+	t.Cleanup(func() { agentLiveTV = old })
+
+	var played string
+	stubLivePlayer(t, &played)
+
+	err := runAgentCmdErr(t, playCmd, "--ref", liveRefFor(t, "bbc1.uk", "BBC One", "src.m3u"), "--download", "")
+	assertExit(t, err, exitUsage)
+	if called {
+		t.Error("provider was constructed before the download rejection")
+	}
+	if played != "" {
+		t.Error("the player seam was invoked for an explicit --download ''")
+	}
+}
+
 func TestPlayLiveResolvesByTVGIDAfterPlaylistReorder(t *testing.T) {
 	// The ID-drift case. The ref is minted against playlist A; playlist B has
 	// the same two channels in the opposite order, so the ref's ID now names
