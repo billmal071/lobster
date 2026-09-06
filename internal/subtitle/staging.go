@@ -70,8 +70,20 @@ func newStagingDir() (string, error) {
 }
 
 // pruneStale removes staging directories left behind by runs that were killed
-// before they could clean up. Best effort: anything still in use by a
-// concurrent run is younger than staleAfter and is left alone.
+// before they could clean up.
+//
+// A staging directory's mtime is set when its subtitle files are written, at
+// the start of playback, and reading those files afterwards never advances it.
+// So a session that runs longer than staleAfter can have its own live staging
+// directory swept by a second lobster process starting in the meantime. That
+// window is left open deliberately rather than guarded with a lock: staged
+// files are handed to the player only as launch arguments, and nothing reopens
+// one mid-playback. mpv is given every track at launch and then holds no
+// descriptor on the files at all — selecting a track whose file has since been
+// deleted still renders it, because the file was read in full at load time —
+// and VLC is given a single file at launch. Losing the directory under a
+// running player is therefore not observable; the process's own Cleanup on a
+// pruned directory is a no-op.
 func pruneStale(parent string) {
 	entries, err := os.ReadDir(parent)
 	if err != nil {
