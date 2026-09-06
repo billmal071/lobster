@@ -1,0 +1,7 @@
+# CodeRabbit configuration.
+#
+# Automatic review on every push is disabled: reviews are requested explicitly
+# with `@coderabbitai review` on a pull request when they are wanted.
+reviews:
+  auto_review:
+    enabled: false
