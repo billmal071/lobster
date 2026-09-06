@@ -127,6 +127,49 @@ func TestPlayLiveRejectsSeasonAndEpisode(t *testing.T) {
 	}
 }
 
+// TestPlayLiveRejectsExplicitZeroSeason covers "--season 0": a value check
+// (flagSeason > 0) lets this through silently, discarding a flag the caller
+// explicitly supplied instead of rejecting it. Passing --season or --episode
+// at all is the usage error for a live ref, regardless of the value given.
+func TestPlayLiveRejectsExplicitZeroSeason(t *testing.T) {
+	called := false
+	old := agentLiveTV
+	agentLiveTV = func(sources []string) *provider.LiveTV { called = true; return nil }
+	t.Cleanup(func() { agentLiveTV = old })
+
+	var played string
+	stubLivePlayer(t, &played)
+
+	err := runAgentCmdErr(t, playCmd, "--ref", liveRefFor(t, "bbc1.uk", "BBC One", "src.m3u"), "--season", "0")
+	assertExit(t, err, exitUsage)
+	if called {
+		t.Error("provider was constructed before the season/episode rejection")
+	}
+	if played != "" {
+		t.Error("the player seam was invoked for an explicit --season 0")
+	}
+}
+
+// TestPlayLiveRejectsExplicitZeroEpisode is --episode's counterpart.
+func TestPlayLiveRejectsExplicitZeroEpisode(t *testing.T) {
+	called := false
+	old := agentLiveTV
+	agentLiveTV = func(sources []string) *provider.LiveTV { called = true; return nil }
+	t.Cleanup(func() { agentLiveTV = old })
+
+	var played string
+	stubLivePlayer(t, &played)
+
+	err := runAgentCmdErr(t, playCmd, "--ref", liveRefFor(t, "bbc1.uk", "BBC One", "src.m3u"), "--episode", "0")
+	assertExit(t, err, exitUsage)
+	if called {
+		t.Error("provider was constructed before the season/episode rejection")
+	}
+	if played != "" {
+		t.Error("the player seam was invoked for an explicit --episode 0")
+	}
+}
+
 func TestPlayLiveResolvesByTVGIDAfterPlaylistReorder(t *testing.T) {
 	// The ID-drift case. The ref is minted against playlist A; playlist B has
 	// the same two channels in the opposite order, so the ref's ID now names

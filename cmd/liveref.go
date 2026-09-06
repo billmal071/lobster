@@ -34,7 +34,13 @@ var agentPlayLive = func(stream *media.Stream, title string) error {
 // the unstable positional ones, so a resume would seek to a stranger's
 // position.
 func playLiveRef(cmd *cobra.Command, r playRef) error {
-	if flagSeason > 0 || flagEpisode > 0 {
+	// cmd.Flags().Changed, not the flag's value: passing --season or
+	// --episode at all is the usage error for a live ref, regardless of what
+	// value was given. A value check let "--season 0" through silently,
+	// discarding a flag the caller explicitly supplied instead of rejecting
+	// it — the same class of bug as a "--category ''" value check standing
+	// in for "was --category passed at all" (cmd/channels.go).
+	if cmd.Flags().Changed("season") || cmd.Flags().Changed("episode") {
 		return emitErr("usage", exitUsage,
 			"%q is a live channel: --season and --episode do not apply", r.Title)
 	}
