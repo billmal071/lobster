@@ -118,6 +118,9 @@ const liveFixtureBody = "#EXTM3U\n" +
 func TestChannelsListsCategoriesWithCounts(t *testing.T) {
 	withLiveFixture(t, liveFixtureBody)
 	out := runAgentCmd(t, channelsCmd)
+	if out["schema"] != float64(1) {
+		t.Fatalf("schema = %v, want 1", out["schema"])
+	}
 	cats := out["categories"].([]any)
 	if len(cats) != 2 {
 		t.Fatalf("categories = %v, want News and Sports", cats)
@@ -139,6 +142,9 @@ func TestChannelsCategoryIsCaseInsensitive(t *testing.T) {
 	// group-title is raw upstream text, so "news" and "News" are distinct
 	// buckets there. find already folds case on --type; these must agree.
 	out := runAgentCmd(t, channelsCmd, "--category", "news")
+	if out["schema"] != float64(1) {
+		t.Fatalf("schema = %v, want 1", out["schema"])
+	}
 	rows := out["channels"].([]any)
 	if len(rows) != 2 {
 		t.Fatalf("--category news returned %d rows, want 2", len(rows))
@@ -151,6 +157,9 @@ func TestChannelsCategoryIsCaseInsensitive(t *testing.T) {
 func TestChannelsSearchAndCategoryIntersect(t *testing.T) {
 	withLiveFixture(t, liveFixtureBody)
 	out := runAgentCmd(t, channelsCmd, "--category", "Sports", "--search", "euro")
+	if out["schema"] != float64(1) {
+		t.Fatalf("schema = %v, want 1", out["schema"])
+	}
 	rows := out["channels"].([]any)
 	if len(rows) != 1 || rows[0].(map[string]any)["name"].(string) != "Euronews" {
 		t.Fatalf("intersection = %v, want only Euronews", rows)
@@ -160,6 +169,9 @@ func TestChannelsSearchAndCategoryIntersect(t *testing.T) {
 func TestChannelsLimitCaps(t *testing.T) {
 	withLiveFixture(t, liveFixtureBody)
 	out := runAgentCmd(t, channelsCmd, "--search", "", "--limit", "1")
+	if out["schema"] != float64(1) {
+		t.Fatalf("schema = %v, want 1", out["schema"])
+	}
 	if rows := out["channels"].([]any); len(rows) != 1 {
 		t.Fatalf("--limit 1 returned %d rows", len(rows))
 	}
@@ -168,6 +180,9 @@ func TestChannelsLimitCaps(t *testing.T) {
 func TestChannelsEmitsRefNotID(t *testing.T) {
 	withLiveFixture(t, liveFixtureBody)
 	out := runAgentCmd(t, channelsCmd, "--category", "Sports")
+	if out["schema"] != float64(1) {
+		t.Fatalf("schema = %v, want 1", out["schema"])
+	}
 	row := out["channels"].([]any)[0].(map[string]any)
 	if _, hasID := row["id"]; hasID {
 		t.Error("channels must not print provider IDs; the ref is the only handle")
@@ -210,4 +225,117 @@ func TestChannelsRejectsPositionalArgs(t *testing.T) {
 	// its argument and list categories instead.
 	err := runAgentCmdErr(t, channelsCmd, "Sports")
 	assertExit(t, err, exitUsage)
+}
+
+// A category value of the empty string is a legitimate --category call
+// ("list channels with no group at all" is out of scope here, but the point
+// is the caller explicitly asked for the row-listing view), and must not be
+// mistaken for "the flag was never given". Checking flagChannelsCategory !=
+// "" instead of cmd.Flags().Changed("category") conflated the two: --search
+// already uses Changed, so this asserts --category is symmetric with it.
+func TestChannelsEmptyCategoryFlagStillLists(t *testing.T) {
+	withLiveFixture(t, liveFixtureBody)
+	out := runAgentCmd(t, channelsCmd, "--category", "")
+	if _, isCategories := out["categories"]; isCategories {
+		t.Fatalf("--category \"\" (explicitly given) produced the categories view: %v", out)
+	}
+	rows, ok := out["channels"].([]any)
+	if !ok || len(rows) != 3 {
+		t.Fatalf("channels = %v, want all 3 rows (an explicit but empty --category matches everything, like --search \"\")", out["channels"])
+	}
+}
+
+// withPartialLiveFixture returns one source that loads a fixed set of
+// channels and one that never loads (a path LiveTV.fetch's os.ReadFile
+// branch cannot open, since it names no file — this is a local-path failure,
+// not a network call). It returns the failing source's path so tests can
+// assert it by name.
+func withPartialLiveFixture(t *testing.T, body string) (badSource string) {
+	t.Helper()
+	dir := t.TempDir()
+	goodPath := filepath.Join(dir, "good.m3u")
+	if err := os.WriteFile(goodPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+	badPath := filepath.Join(dir, "missing.m3u") // deliberately never created
+	old := agentLiveSources
+	agentLiveSources = func() []string { return []string{goodPath, badPath} }
+	t.Cleanup(func() { agentLiveSources = old })
+	return badPath
+}
+
+// One playlist down must not make channels that live only in the surviving
+// playlist vanish, nor make the caller believe the catalog is simply smaller
+// than it is. A channel query that still turns up rows must say the listing
+// is incomplete, not stay silent about it.
+func TestChannelsPartialFailureSurfacesButStillLists(t *testing.T) {
+	badSource := withPartialLiveFixture(t, liveFixtureBody)
+
+	out := runAgentCmd(t, channelsCmd, "--category", "Sports")
+	if out["schema"] != float64(1) {
+		t.Fatalf("schema = %v, want 1", out["schema"])
+	}
+	rows, ok := out["channels"].([]any)
+	if !ok || len(rows) != 2 {
+		t.Fatalf("channels = %v, want the 2 Sports rows despite one failed source", out["channels"])
+	}
+	failed, ok := out["failed_sources"].([]any)
+	if !ok || len(failed) != 1 || failed[0].(string) != badSource {
+		t.Fatalf("failed_sources = %v, want [%q]", out["failed_sources"], badSource)
+	}
+}
+
+// The categories view (no --category/--search) must carry the same honesty:
+// a category that only existed on the dead playlist must not silently read
+// as "there is no such category".
+func TestChannelsPartialFailureSurfacesOnCategoriesView(t *testing.T) {
+	badSource := withPartialLiveFixture(t, liveFixtureBody)
+
+	out := runAgentCmd(t, channelsCmd)
+	cats, ok := out["categories"].([]any)
+	if !ok || len(cats) != 2 {
+		t.Fatalf("categories = %v, want News and Sports despite one failed source", out["categories"])
+	}
+	failed, ok := out["failed_sources"].([]any)
+	if !ok || len(failed) != 1 || failed[0].(string) != badSource {
+		t.Fatalf("failed_sources = %v, want [%q]", out["failed_sources"], badSource)
+	}
+}
+
+// The dangerous case: a query that matches nothing because the only channels
+// that would have matched lived on the failed playlist. Without consulting
+// FailedSources this reads as "no such channel" (exit 2, give up) when the
+// truth is "a playlist is down, try again" (exit 3). An empty good source
+// plus one failed source isolates this from "genuinely nothing configured
+// matches" (TestChannelsUnknownCategoryIsNoResults, no failed source there).
+func TestChannelsEmptyResultWithFailedSourceIsProvidersFailed(t *testing.T) {
+	dir := t.TempDir()
+	emptyPath := filepath.Join(dir, "empty.m3u")
+	if err := os.WriteFile(emptyPath, []byte("#EXTM3U\n"), 0o600); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+	badPath := filepath.Join(dir, "missing.m3u")
+	old := agentLiveSources
+	agentLiveSources = func() []string { return []string{emptyPath, badPath} }
+	t.Cleanup(func() { agentLiveSources = old })
+
+	err := runAgentCmdErr(t, channelsCmd)
+	assertExit(t, err, exitProvidersFailed)
+	assertErrCode(t, "providers_failed")
+}
+
+// Every source failing to load is the state LoadContext itself already
+// detects and errors on; pinned here as a regression test alongside the
+// partial-failure cases above so the two are not confused with each other.
+func TestChannelsAllSourcesFailedIsProvidersFailed(t *testing.T) {
+	dir := t.TempDir()
+	bad1 := filepath.Join(dir, "missing1.m3u")
+	bad2 := filepath.Join(dir, "missing2.m3u")
+	old := agentLiveSources
+	agentLiveSources = func() []string { return []string{bad1, bad2} }
+	t.Cleanup(func() { agentLiveSources = old })
+
+	err := runAgentCmdErr(t, channelsCmd)
+	assertExit(t, err, exitProvidersFailed)
+	assertErrCode(t, "providers_failed")
 }

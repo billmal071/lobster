@@ -62,14 +62,28 @@ func channelsRun(cmd *cobra.Command, args []string) error {
 		return emitErr("providers_failed", exitProvidersFailed, "%v", err)
 	}
 
-	listing := flagChannelsCategory != "" || cmd.Flags().Changed("search")
+	// cmd.Flags().Changed, not the value: an explicit `--category ""` is a
+	// request for the row-listing view (matching everything, exactly like
+	// `--search ""` already does below), not "the flag was never given".
+	// Comparing to the empty string here previously made --category and
+	// --search inconsistent with each other for no reason.
+	listing := cmd.Flags().Changed("category") || cmd.Flags().Changed("search")
+
+	// FailedSources must be consulted before treating an empty result as
+	// "nothing matched": LoadContext only errors when every source fails, so
+	// with several playlists configured and one down, a channel that lives
+	// only on the dead one would otherwise vanish silently and read as
+	// exit 2 ("give up, it isn't there") when the truth is exit 3 ("a
+	// playlist is down, try again"). This is the reason channels exists
+	// separately from find rather than as a flag on it.
+	failed := p.FailedSources()
 	if !listing {
-		return emitChannelCategories(p)
+		return emitChannelCategories(p, failed)
 	}
-	return emitChannelRows(p)
+	return emitChannelRows(p, failed)
 }
 
-func emitChannelCategories(p *provider.LiveTV) error {
+func emitChannelCategories(p *provider.LiveTV, failed []string) error {
 	counts := map[string]int{}
 	for _, ch := range p.AllChannels() {
 		for _, c := range ch.Categories {
@@ -82,14 +96,23 @@ func emitChannelCategories(p *provider.LiveTV) error {
 	}
 	sort.Strings(names)
 
+	if len(names) == 0 && len(failed) > 0 {
+		return emitErr("providers_failed", exitProvidersFailed,
+			"no channels loaded; failed source(s): %s", strings.Join(failed, ", "))
+	}
+
 	out := make([]map[string]any, 0, len(names))
 	for _, n := range names {
 		out = append(out, map[string]any{"name": n, "channels": counts[n]})
 	}
-	return emitJSON(map[string]any{"categories": out})
+	payload := map[string]any{"categories": out}
+	if len(failed) > 0 {
+		payload["failed_sources"] = failed
+	}
+	return emitJSON(payload)
 }
 
-func emitChannelRows(p *provider.LiveTV) error {
+func emitChannelRows(p *provider.LiveTV, failed []string) error {
 	wantCat := strings.ToLower(strings.TrimSpace(flagChannelsCategory))
 	wantName := strings.ToLower(strings.TrimSpace(flagChannelsSearch))
 
@@ -129,9 +152,17 @@ func emitChannelRows(p *provider.LiveTV) error {
 		}
 	}
 	if len(out) == 0 {
+		if len(failed) > 0 {
+			return emitErr("providers_failed", exitProvidersFailed,
+				"no channel matched; failed source(s): %s", strings.Join(failed, ", "))
+		}
 		return emitErr("no_results", exitNoResults, "no channel matched")
 	}
-	return emitJSON(map[string]any{"channels": out})
+	payload := map[string]any{"channels": out}
+	if len(failed) > 0 {
+		payload["failed_sources"] = failed
+	}
+	return emitJSON(payload)
 }
 
 // liveChannelRef mints the ref for one channel. It carries TVGID and Source so
