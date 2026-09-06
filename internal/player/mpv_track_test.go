@@ -88,7 +88,7 @@ func TestTrackPlaybackConnectsWhenSocketAppearsLate(t *testing.T) {
 	serverDone := serveMPVIPC(ipc.path, 1200*time.Millisecond, 987.5, 5400)
 
 	m := &MPV{}
-	pos, dur := m.trackPlayback(ipc, make(chan struct{}))
+	pos, dur, _ := m.trackPlayback(ipc, make(chan struct{}))
 	// Assert on the outcome first: if the tracker never connected, the server
 	// is still blocked in Accept and draining serverDone would deadlock.
 	if pos != 987.5 {
@@ -96,6 +96,30 @@ func TestTrackPlaybackConnectsWhenSocketAppearsLate(t *testing.T) {
 	}
 	if dur != 5400 {
 		t.Fatalf("trackPlayback duration = %g, want 5400", dur)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A session whose tracker connected and saw mpv report a position must say so,
+// so callers can tell "the position really is this" from "we never found out".
+func TestTrackPlaybackReportsObservedWhenMPVReportsPosition(t *testing.T) {
+	ipc, err := newIPCSocket()
+	if err != nil {
+		t.Fatalf("newIPCSocket: %v", err)
+	}
+	t.Cleanup(ipc.cleanup)
+
+	serverDone := serveMPVIPC(ipc.path, 0, 620, 5400)
+
+	m := &MPV{}
+	pos, _, observed := m.trackPlayback(ipc, make(chan struct{}))
+	if pos != 620 {
+		t.Fatalf("trackPlayback position = %g, want 620", pos)
+	}
+	if !observed {
+		t.Fatalf("trackPlayback observed = false after mpv reported time-pos %g; a tracked position must be reported as observed", pos)
 	}
 	if err := <-serverDone; err != nil {
 		t.Fatal(err)
@@ -115,12 +139,64 @@ func TestTrackPlaybackGivesUpAtDialBound(t *testing.T) {
 
 	start := time.Now()
 	m := &MPV{}
-	pos, dur := m.trackPlayback(ipc, make(chan struct{}))
+	pos, dur, observed := m.trackPlayback(ipc, make(chan struct{}))
 	if pos != 0 || dur != 0 {
 		t.Fatalf("trackPlayback = %g, %g; want 0, 0 when nothing ever listens", pos, dur)
 	}
+	if observed {
+		t.Fatalf("trackPlayback observed = true after never connecting; position 0 here means nothing was seen, not that playback sat at 0")
+	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("trackPlayback took %s to give up; the bound is %s", elapsed, 300*time.Millisecond)
+	}
+}
+
+// A tracker that connects but is told nothing — mpv reports time-pos as null
+// until playback actually starts, so a quit during buffering yields exactly
+// this — has still observed no position, and must not claim otherwise.
+func TestTrackPlaybackUnobservedWhenMPVReportsNoPosition(t *testing.T) {
+	ipc, err := newIPCSocket()
+	if err != nil {
+		t.Fatalf("newIPCSocket: %v", err)
+	}
+	t.Cleanup(ipc.cleanup)
+
+	serverDone := make(chan error, 1)
+	go func() {
+		ln, err := net.Listen("unix", ipc.path)
+		if err != nil {
+			serverDone <- fmt.Errorf("fake mpv: listen: %w", err)
+			return
+		}
+		defer ln.Close()
+		conn, err := ln.Accept()
+		if err != nil {
+			serverDone <- fmt.Errorf("fake mpv: accept: %w", err)
+			return
+		}
+		defer conn.Close()
+		r := bufio.NewReader(conn)
+		for i := 0; i < 2; i++ {
+			if _, err := r.ReadString('\n'); err != nil {
+				serverDone <- fmt.Errorf("fake mpv: reading observe_property %d: %w", i, err)
+				return
+			}
+		}
+		// mpv's answer for a property it has no value for yet.
+		if _, err := conn.Write([]byte(`{"event":"property-change","id":1,"name":"time-pos","data":null}` + "\n")); err != nil {
+			serverDone <- fmt.Errorf("fake mpv: writing event: %w", err)
+			return
+		}
+		serverDone <- nil
+	}()
+
+	m := &MPV{}
+	pos, _, observed := m.trackPlayback(ipc, make(chan struct{}))
+	if observed {
+		t.Fatalf("trackPlayback observed = true when mpv only ever reported a null time-pos (position %g)", pos)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -145,7 +221,7 @@ func TestTrackPlaybackStopsRetryingOnceProcessExits(t *testing.T) {
 
 	start := time.Now()
 	m := &MPV{}
-	pos, dur := m.trackPlayback(ipc, stop)
+	pos, dur, _ := m.trackPlayback(ipc, stop)
 	if pos != 0 || dur != 0 {
 		t.Fatalf("trackPlayback = %g, %g; want 0, 0", pos, dur)
 	}

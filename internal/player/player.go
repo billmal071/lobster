@@ -14,6 +14,18 @@ import (
 type PlayResult struct {
 	Position float64 // last playback position in seconds
 	Duration float64 // total media duration in seconds (0 if unknown)
+
+	// PositionUnknown reports that this session tracked the playback position
+	// and never observed one — mpv's IPC socket never came up within the dial
+	// bound, or mpv never reported a time-pos over it. Position is then a
+	// default rather than a measurement, and persisting it would overwrite a
+	// real resume point recorded by an earlier watch of the same title.
+	//
+	// It is deliberately false for a session that genuinely sat at position 0,
+	// so the two stay distinguishable, and false for players that do not
+	// report positions at all (vlc, generic): those make no claim either way
+	// and history goes on recording their watches exactly as before.
+	PositionUnknown bool
 }
 
 // Player is the interface for media player implementations.

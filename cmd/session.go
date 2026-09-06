@@ -279,6 +279,7 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		if playErr == nil {
 			sess.LastPosition = result.Position
 			sess.LastDuration = result.Duration
+			sess.LastPositionUnknown = result.PositionUnknown
 			return nil
 		}
 
@@ -365,6 +366,13 @@ func downloadEpisode(stream *media.Stream, sess *playlist.Session, title string)
 // saveHistory persists the current episode to watch history.
 func saveHistory(sess *playlist.Session) {
 	if !cfg.History {
+		return
+	}
+	// The position tracker never observed anything for this episode, so
+	// LastPosition is 0 by default rather than by measurement. Writing it
+	// would overwrite the resume point an earlier, tracked watch recorded.
+	if sess.LastPositionUnknown {
+		debugf("skipping history save: no position was observed for this episode")
 		return
 	}
 

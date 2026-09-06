@@ -98,14 +98,16 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 	// Track position and duration from IPC in a goroutine, using atomics to avoid data race.
 	// The ipcDone channel is used to synchronize the goroutine before reading final values.
 	var posBits, durBits atomic.Uint64
+	var observed atomic.Bool
 	ipcDone := make(chan struct{})
 	procDone := make(chan struct{})
 	startTime := time.Now()
 	go func() {
 		defer close(ipcDone)
-		pos, dur := m.trackPlayback(ipc, procDone)
+		pos, dur, ok := m.trackPlayback(ipc, procDone)
 		posBits.Store(math.Float64bits(pos))
 		durBits.Store(math.Float64bits(dur))
+		observed.Store(ok)
 	}()
 
 	waitErr := cmd.Wait()
@@ -119,6 +121,10 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 	result := PlayResult{
 		Position: math.Float64frombits(posBits.Load()),
 		Duration: math.Float64frombits(durBits.Load()),
+		// The tracker either observed a position for this session or it saw
+		// nothing at all; in the second case Position is a default, not a
+		// measurement, and callers must not persist it.
+		PositionUnknown: !observed.Load(),
 	}
 
 	if waitErr != nil {
@@ -175,14 +181,19 @@ func dialWithRetry(ipc *ipcSocket, stop <-chan struct{}) (io.ReadWriteCloser, er
 }
 
 // trackPlayback polls mpv's IPC for the current playback position and duration.
+// The third return says whether mpv ever reported a position at all: false
+// means the socket never came up, or came up and said nothing, so the returned
+// 0 carries no information about where the watch stopped. Callers need that
+// distinction to avoid writing 0 over a real resume point.
 // If a checkpoint callback is installed, it receives (position, duration)
 // periodically — throttled to checkpointInterval — so a hard shutdown that
 // kills mpv and this process at once loses at most one interval of position.
 // The callback runs on its own goroutine (a slow history write must not back
 // up the IPC event loop), but trackPlayback drains it before returning, so no
 // invocation can interleave with the caller's exit-time save.
-func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, float64) {
+func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, float64, bool) {
 	var lastPos, lastDur float64
+	var observed bool
 
 	var ckCh chan [2]float64
 	ckDone := make(chan struct{})
@@ -209,7 +220,7 @@ func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, floa
 		// Playback proceeds without tracking; say so instead of silently
 		// recording the watch as position 0.
 		fmt.Fprintf(os.Stderr, "mpv ipc: position tracking unavailable: %v\n", err)
-		return 0, 0
+		return 0, 0, false
 	}
 	defer conn.Close()
 
@@ -227,23 +238,34 @@ func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, floa
 			// IPC write failed — mpv may have exited early or the socket
 			// is broken. Return zero state so the caller can detect this.
 			fmt.Fprintf(os.Stderr, "mpv ipc: failed to observe %s: %v\n", prop, err)
-			return 0, 0
+			return 0, 0, false
 		}
 	}
 
 	lastCheckpoint := time.Now()
 	for scanner.Scan() {
 		line := scanner.Text()
+		// Data is a pointer because mpv sends "data":null for a property it
+		// has no value for yet — before playback starts, and again as it shuts
+		// down. A null must not count as an observation, and a plain float64
+		// would decode it as an indistinguishable 0.
 		var event struct {
-			Event string  `json:"event"`
-			Name  string  `json:"name"`
-			Data  float64 `json:"data"`
+			Event string   `json:"event"`
+			Name  string   `json:"name"`
+			Data  *float64 `json:"data"`
 		}
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			continue
 		}
-		if event.Name == "time-pos" && event.Data > 0 {
-			lastPos = event.Data
+		if event.Name == "time-pos" && event.Data != nil {
+			// mpv told us where playback is, so the position this call returns
+			// is a measurement — including when that measurement is 0, which
+			// is why this is set before the > 0 filter below rather than from
+			// lastPos.
+			observed = true
+		}
+		if event.Name == "time-pos" && event.Data != nil && *event.Data > 0 {
+			lastPos = *event.Data
 			// Hand the position to the checkpoint writer, at most once per
 			// interval. The send never blocks: if the writer is still busy
 			// with the previous write, this position is simply skipped and a
@@ -256,12 +278,12 @@ func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, floa
 				}
 			}
 		}
-		if event.Name == "duration" && event.Data > 0 {
-			lastDur = event.Data
+		if event.Name == "duration" && event.Data != nil && *event.Data > 0 {
+			lastDur = *event.Data
 		}
 	}
 
-	return lastPos, lastDur
+	return lastPos, lastDur, observed
 }
 
 // formatDuration formats seconds as HH:MM:SS.
