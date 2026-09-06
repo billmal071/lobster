@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -84,6 +85,7 @@ func channelsRun(cmd *cobra.Command, args []string) error {
 }
 
 func emitChannelCategories(p *provider.LiveTV, failed []string) error {
+	failed = sanitizeFailedSources(failed)
 	counts := map[string]int{}
 	for _, ch := range p.AllChannels() {
 		for _, c := range ch.Categories {
@@ -113,6 +115,7 @@ func emitChannelCategories(p *provider.LiveTV, failed []string) error {
 }
 
 func emitChannelRows(p *provider.LiveTV, failed []string) error {
+	failed = sanitizeFailedSources(failed)
 	wantCat := strings.ToLower(strings.TrimSpace(flagChannelsCategory))
 	wantName := strings.ToLower(strings.TrimSpace(flagChannelsSearch))
 
@@ -163,6 +166,54 @@ func emitChannelRows(p *provider.LiveTV, failed []string) error {
 		payload["failed_sources"] = failed
 	}
 	return emitJSON(payload)
+}
+
+// displaySource renders a live TV source for user- or agent-facing output
+// (error messages, JSON envelopes, and any future caller — e.g. a later
+// play --ref failure naming its playlist should route through this same
+// function rather than growing a second, divergent sanitizer).
+//
+// internal/config/config.go's Xtream URL builder embeds the subscriber's
+// username and password as query parameters
+// ("<server>/get.php?username=...&password=...&type=m3u_plus&output=m3u8"),
+// and FailedSources() returns that string verbatim. So an http(s) source is
+// reduced to scheme://host/path: userinfo and the *entire* query string are
+// dropped, not just named parameters — masking individual parameters would
+// miss a credential a future source scheme adds under a different name.
+// Host+path is still enough for a caller to tell "the iptv-org feed" from
+// "my Xtream server" apart.
+//
+// Local file paths are returned unchanged. They carry no query string and
+// the path itself is the natural identifier for "which playlist is down" —
+// a user's own configured path appearing in their own tool's output is not a
+// credential disclosure. This is a deliberate decision, not an oversight:
+// do not redact local paths too.
+func displaySource(s string) string {
+	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+		return s
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return "<url>"
+	}
+	u.RawQuery = ""
+	u.User = nil
+	return u.String()
+}
+
+// sanitizeFailedSources maps FailedSources() output through displaySource.
+// Called once, at the top of each emit function, so every path that reports
+// a failed source — the error message and the success envelope alike — goes
+// through it; nothing downstream ever sees the raw source strings.
+func sanitizeFailedSources(failed []string) []string {
+	if len(failed) == 0 {
+		return failed
+	}
+	out := make([]string, len(failed))
+	for i, s := range failed {
+		out[i] = displaySource(s)
+	}
+	return out
 }
 
 // liveChannelRef mints the ref for one channel. It carries TVGID and Source so

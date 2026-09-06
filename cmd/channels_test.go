@@ -2,13 +2,17 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"lobster/internal/provider"
 )
 
 // lastAgentBuf is the stdout of the most recent runAgentCmd / runAgentCmdErr
@@ -338,4 +342,136 @@ func TestChannelsAllSourcesFailedIsProvidersFailed(t *testing.T) {
 	err := runAgentCmdErr(t, channelsCmd)
 	assertExit(t, err, exitProvidersFailed)
 	assertErrCode(t, "providers_failed")
+}
+
+// --- Round 2: failed sources must not leak Xtream credentials ---
+//
+// internal/config/config.go builds an Xtream source URL as
+// "<server>/get.php?username=<u>&password=<p>&type=m3u_plus&output=m3u8", so
+// FailedSources() can return a string carrying the subscriber's live-TV
+// password verbatim. Round 1 made that string flow into both the error
+// message and the "failed_sources" envelope field; this section pins that it
+// never reaches either un-redacted.
+
+// credentialSource is shaped exactly like the Xtream URL config.go builds:
+// scheme, host, path, and a query string carrying username+password.
+const credentialSource = "https://iptv.example.invalid/get.php?username=alice&password=SUPERSECRET12345&type=m3u_plus"
+
+// credentialSourceSecret is the exact substring that must never appear
+// anywhere in emitted output. Checked as a literal string, not "looks
+// redacted" — a test that only asserted the host survived would still pass
+// with the password riding along in an adjacent field.
+const credentialSourceSecret = "SUPERSECRET12345"
+
+func TestDisplaySourceStripsCredentialsFromURL(t *testing.T) {
+	got := displaySource(credentialSource)
+	if strings.Contains(got, credentialSourceSecret) {
+		t.Fatalf("displaySource leaked the password: %q", got)
+	}
+	if strings.Contains(got, "alice") {
+		t.Fatalf("displaySource leaked the username: %q", got)
+	}
+	if got != "https://iptv.example.invalid/get.php" {
+		t.Fatalf("displaySource(%q) = %q, want scheme://host/path with userinfo and the whole query dropped", credentialSource, got)
+	}
+}
+
+// Local paths carry no query string and are the natural identifier for
+// "which playlist is down" — deliberately left unchanged, not an oversight.
+func TestDisplaySourceLeavesLocalPathsUnchanged(t *testing.T) {
+	path := "/home/user/.config/lobster/playlists/mine.m3u"
+	if got := displaySource(path); got != path {
+		t.Fatalf("displaySource(%q) = %q, want unchanged", path, got)
+	}
+}
+
+// loadedLiveTV loads sources through the real (non-network) fixture path and
+// returns the provider, for tests that call emitChannelRows/
+// emitChannelCategories directly with a fabricated failed-sources list —
+// this is what lets the credential case be exercised without any actual
+// network attempt: the failure is supplied by the test, not produced by a
+// real unreachable http(s) source.
+func loadedLiveTV(t *testing.T) *provider.LiveTV {
+	t.Helper()
+	p := agentLiveTV(agentLiveSources())
+	if err := p.LoadContext(context.Background()); err != nil {
+		t.Fatalf("LoadContext: %v", err)
+	}
+	return p
+}
+
+// The empty-result path: a category that matches nothing, so the credential
+// source drives the emitErr message itself.
+func TestChannelsRowsErrorMessageOmitsCredentials(t *testing.T) {
+	withLiveFixture(t, liveFixtureBody)
+	buf := captureAgentOut(t)
+	p := loadedLiveTV(t)
+
+	prevCat := flagChannelsCategory
+	flagChannelsCategory = "NoSuchCategory"
+	t.Cleanup(func() { flagChannelsCategory = prevCat })
+
+	err := emitChannelRows(p, []string{credentialSource})
+	if err == nil {
+		t.Fatal("emitChannelRows succeeded, want providers_failed (no channel matches NoSuchCategory)")
+	}
+	if strings.Contains(err.Error(), credentialSourceSecret) {
+		t.Fatalf("error message leaked the password: %q", err.Error())
+	}
+	if strings.Contains(buf.String(), credentialSourceSecret) {
+		t.Fatalf("emitted envelope leaked the password: %s", buf.String())
+	}
+}
+
+// The non-empty-result path: rows still print, and the envelope's
+// failed_sources entry must be the sanitized form, not the raw source.
+func TestChannelsRowsEnvelopeOmitsCredentials(t *testing.T) {
+	withLiveFixture(t, liveFixtureBody)
+	buf := captureAgentOut(t)
+	p := loadedLiveTV(t)
+
+	prevCat := flagChannelsCategory
+	flagChannelsCategory = "Sports"
+	t.Cleanup(func() { flagChannelsCategory = prevCat })
+
+	if err := emitChannelRows(p, []string{credentialSource}); err != nil {
+		t.Fatalf("emitChannelRows: %v", err)
+	}
+	if strings.Contains(buf.String(), credentialSourceSecret) {
+		t.Fatalf("emitted envelope leaked the password: %s", buf.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+	}
+	failed, ok := got["failed_sources"].([]any)
+	if !ok || len(failed) != 1 {
+		t.Fatalf("failed_sources = %v, want one sanitized entry", got["failed_sources"])
+	}
+	if failed[0].(string) != "https://iptv.example.invalid/get.php" {
+		t.Fatalf("failed_sources[0] = %q, want the sanitized scheme://host/path", failed[0])
+	}
+}
+
+// The categories view must apply the same sanitization; it shares
+// FailedSources with the rows view but is a separate code path.
+func TestChannelsCategoriesEnvelopeOmitsCredentials(t *testing.T) {
+	withLiveFixture(t, liveFixtureBody)
+	buf := captureAgentOut(t)
+	p := loadedLiveTV(t)
+
+	if err := emitChannelCategories(p, []string{credentialSource}); err != nil {
+		t.Fatalf("emitChannelCategories: %v", err)
+	}
+	if strings.Contains(buf.String(), credentialSourceSecret) {
+		t.Fatalf("emitted envelope leaked the password: %s", buf.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+	}
+	failed, ok := got["failed_sources"].([]any)
+	if !ok || len(failed) != 1 || failed[0].(string) != "https://iptv.example.invalid/get.php" {
+		t.Fatalf("failed_sources = %v, want [%q]", got["failed_sources"], "https://iptv.example.invalid/get.php")
+	}
 }
