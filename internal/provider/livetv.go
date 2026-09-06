@@ -245,6 +245,48 @@ func liveCatLess(a, b string) bool {
 	return strings.ToLower(a) < strings.ToLower(b)
 }
 
+// ChannelKey identifies a channel across reloads. TVGID is the stable
+// upstream identifier and wins when present; Name is the fallback for
+// playlists that omit tvg-id. Source narrows both to one playlist.
+type ChannelKey struct {
+	TVGID  string
+	Name   string
+	Source string
+}
+
+// AllChannels returns every loaded channel in merge order. It does not
+// trigger a load; callers load first (LoadContext for the bounded path).
+// The returned slice is a copy so a caller cannot mutate provider state.
+func (p *LiveTV) AllChannels() []Channel {
+	out := make([]Channel, len(p.channels))
+	copy(out, p.channels)
+	return out
+}
+
+// Lookup returns every channel matching k. It returns all matches rather
+// than one so the caller can detect ambiguity and refuse: picking the first
+// would reintroduce playlist iteration order as the tie-break. It does not
+// trigger a load; callers load first.
+func (p *LiveTV) Lookup(k ChannelKey) []Channel {
+	name := strings.ToLower(strings.TrimSpace(k.Name))
+	var out []Channel
+	for _, ch := range p.channels {
+		if k.Source != "" && ch.Source != k.Source {
+			continue
+		}
+		if k.TVGID != "" {
+			if ch.TVGID == k.TVGID {
+				out = append(out, ch)
+			}
+			continue
+		}
+		if name != "" && strings.ToLower(strings.TrimSpace(ch.Name)) == name {
+			out = append(out, ch)
+		}
+	}
+	return out
+}
+
 func channelResult(ch Channel) media.SearchResult {
 	return media.SearchResult{ID: ch.ID, Title: ch.Name, Type: media.Movie, Poster: ch.Logo}
 }

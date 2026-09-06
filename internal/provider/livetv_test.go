@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -325,5 +326,89 @@ func TestLoadContextCancelledContextDoesNotHang(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("LoadContext did not return on a cancelled context")
+	}
+}
+
+func liveTVFixture(t *testing.T, bodies map[string]string) (*LiveTV, map[string]string) {
+	t.Helper()
+	dir := t.TempDir()
+	paths := map[string]string{}
+	var sources []string
+	names := make([]string, 0, len(bodies))
+	for n := range bodies {
+		names = append(names, n)
+	}
+	sort.Strings(names) // deterministic source order
+	for _, n := range names {
+		p := filepath.Join(dir, n)
+		writeFile(t, p, bodies[n])
+		paths[n] = p
+		sources = append(sources, p)
+	}
+	lt := NewLiveTV(sources)
+	if err := lt.LoadContext(context.Background()); err != nil {
+		t.Fatalf("LoadContext: %v", err)
+	}
+	return lt, paths
+}
+
+func TestLookupByTVGID(t *testing.T) {
+	lt, paths := liveTVFixture(t, map[string]string{
+		"a.m3u": "#EXTM3U\n#EXTINF:-1 tvg-id=\"bbc1.uk\",BBC One\nhttp://example.invalid/1.m3u8\n",
+	})
+	got := lt.Lookup(ChannelKey{TVGID: "bbc1.uk", Source: paths["a.m3u"]})
+	if len(got) != 1 || got[0].Name != "BBC One" {
+		t.Fatalf("Lookup = %v, want one BBC One", got)
+	}
+}
+
+func TestLookupByNameIsCaseFoldedAndTrimmed(t *testing.T) {
+	lt, paths := liveTVFixture(t, map[string]string{
+		"a.m3u": "#EXTM3U\n#EXTINF:-1,Sky News\nhttp://example.invalid/1.m3u8\n",
+	})
+	got := lt.Lookup(ChannelKey{Name: "  sky news  ", Source: paths["a.m3u"]})
+	if len(got) != 1 {
+		t.Fatalf("Lookup = %v, want one match", got)
+	}
+}
+
+func TestLookupReturnsEveryMatchSoCallersCanDetectAmbiguity(t *testing.T) {
+	// Two channels, same name, no tvg-id, same playlist. The caller must be
+	// able to see both and refuse. A (Channel, bool) signature would have
+	// hidden this behind a first-wins pick — the playlist-order dependence
+	// this whole design exists to escape.
+	lt, paths := liveTVFixture(t, map[string]string{
+		"a.m3u": "#EXTM3U\n" +
+			"#EXTINF:-1,Sports HD\nhttp://example.invalid/1.m3u8\n" +
+			"#EXTINF:-1,Sports HD\nhttp://example.invalid/2.m3u8\n",
+	})
+	got := lt.Lookup(ChannelKey{Name: "Sports HD", Source: paths["a.m3u"]})
+	if len(got) != 2 {
+		t.Fatalf("Lookup returned %d matches, want 2", len(got))
+	}
+}
+
+func TestLookupSourceNarrowsTheMatch(t *testing.T) {
+	lt, paths := liveTVFixture(t, map[string]string{
+		"a.m3u": "#EXTM3U\n#EXTINF:-1,Sports HD\nhttp://example.invalid/1.m3u8\n",
+		"b.m3u": "#EXTM3U\n#EXTINF:-1,Sports HD\nhttp://example.invalid/2.m3u8\n",
+	})
+	if got := lt.Lookup(ChannelKey{Name: "Sports HD"}); len(got) != 2 {
+		t.Fatalf("unfiltered Lookup = %d matches, want 2", len(got))
+	}
+	got := lt.Lookup(ChannelKey{Name: "Sports HD", Source: paths["a.m3u"]})
+	if len(got) != 1 || got[0].URL != "http://example.invalid/1.m3u8" {
+		t.Fatalf("source-filtered Lookup = %v, want only the a.m3u entry", got)
+	}
+}
+
+func TestAllChannelsIsInMergeOrder(t *testing.T) {
+	lt, _ := liveTVFixture(t, map[string]string{
+		"a.m3u": "#EXTM3U\n#EXTINF:-1,Alpha\nhttp://example.invalid/1.m3u8\n",
+		"b.m3u": "#EXTM3U\n#EXTINF:-1,Beta\nhttp://example.invalid/2.m3u8\n",
+	})
+	got := lt.AllChannels()
+	if len(got) != 2 || got[0].Name != "Alpha" || got[1].Name != "Beta" {
+		t.Fatalf("AllChannels = %v, want Alpha then Beta", got)
 	}
 }
