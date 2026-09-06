@@ -239,7 +239,7 @@ cp -r skills/lobster-play ~/.claude/skills/
 Then just ask: *"find me The Matrix and play it"*. The agent will show you the
 matches and wait for you to pick one before starting playback.
 
-Under the hood it uses three non-interactive commands, which are useful for
+Under the hood it uses four non-interactive commands, which are useful for
 scripting on their own:
 
 ```bash
@@ -247,11 +247,24 @@ lobster find "the matrix" --limit 5      # JSON candidates, each with a ref
 lobster find "the bear" --type tv        # filter to movie | tv (case-insensitive)
 lobster episodes --ref <REF> --season 2  # JSON season/episode listing
 lobster play --ref <REF> --detach        # start playback, return immediately
+lobster channels                         # JSON categories + channel counts
+lobster channels --category news         # JSON channels in a category, each with a ref
 ```
 
-All three print JSON on stdout and never prompt — including on failure. `find`
-and `episodes` print nothing else, so their stdout is always parseable; `play`
-shares stdout with the player unless you pass `--detach` (see below).
+All four print JSON on stdout and never prompt — including on failure. `find`,
+`episodes` and `channels` print nothing else, so their stdout is always
+parseable; `play` shares stdout with the player unless you pass `--detach`
+(see below).
+
+`channels` and `play --ref` on a channel's ref are how an agent reaches live
+TV. A ref from `channels` also plays with `play --ref --detach` — for a live
+channel `--detach` matters even more than for a film, since the stream never
+ends and the command otherwise never returns. `--season`, `--episode` and
+`--download` are all rejected outright against a live ref. A live ref is
+re-matched against the current playlists on every play rather than trusted as
+a fixed position, so it survives a playlist reload or reorder and fails
+closed (rather than guessing) if the match becomes ambiguous or the channel
+is gone.
 
 `play --ref` and `episodes --ref` both resolve against the base the ref was
 found under, and `play` forwards any flags you pass explicitly (`--base`,
@@ -271,12 +284,15 @@ Failures use the same envelope — `{"schema": 1, "error": {"code": ..., "messag
 | Exit | Meaning | What it usually means |
 | ---- | ------- | --------------------- |
 | `0` | Success | — |
-| `1` | Bad invocation | Malformed `ref`, missing `--season`/`--episode`, unknown flag, unrecognised `--type`, `--download` (unsupported by `play`), or an invalid config value. Also internal failures such as an unwritable cache directory. Retrying unchanged will not help |
-| `2` | Nothing matched | A misspelling, or a season/episode number the show does not have |
-| `3` | Every provider failed | The title exists, the sources are down. Run `lobster doctor`; do not suggest a spelling fix. From `play --detach` it means something narrower — the background process started and then died within a second, and the error message names the log that says why |
+| `1` | Bad invocation | Malformed `ref`, missing `--season`/`--episode`, `--season`/`--episode`/`--download` given for a live ref, unknown flag, unrecognised `--type`, `--download` (unsupported by `play`), or an invalid config value. Also internal failures such as an unwritable cache directory. Retrying unchanged will not help — except `error.code: "not_configured"` from `channels` or a live `play --ref`, which means no live TV source is configured at all, not a bad command |
+| `2` | Nothing matched | A misspelling, or a season/episode number the show does not have. For a live ref, `error.code: "no_results"` means the channel is no longer in the playlist (re-run `channels`) and `error.code: "ambiguous_channel"` means the ref now matches more than one channel and lobster refused to guess (also re-run `channels`) |
+| `3` | Every provider failed | The title exists, the sources are down. Run `lobster doctor`; do not suggest a spelling fix. From `play --detach` it means something narrower — the background process started and then died within a second, and the error message names the log that says why. For a live ref it also covers the channel's own playlist failing to load on replay — the channel likely still exists, retry later |
 | `4` | Player unavailable | mpv (or whichever player is configured) is not installed or not on `PATH`. From `play --detach` it also covers a background process that could not be started at all — distinct from exit 3, which is one that started and then died |
 
-Check `schema` before trusting the shape of the rest.
+Always check `error.code`, not just the exit code — as the `not_configured`,
+`no_results` and `ambiguous_channel` cases above show, the same exit can mean
+"you called it wrong" for one command and something else entirely for
+another. Check `schema` before trusting the shape of the rest.
 
 ## Configuration
 

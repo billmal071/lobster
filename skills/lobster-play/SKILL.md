@@ -133,14 +133,16 @@ Errors are JSON on stdout too, so parse unconditionally:
 {"schema": 1, "error": {"code": "no_results", "message": "nothing matched \"the matirx\""}}
 ```
 
-Branch on the exit code:
+Branch on the exit code. **Always read `error.code` too** — it tells you
+*why* an exit happened, and the two commands below reuse exit 1 and exit 2 for
+cases that are not "you called it wrong":
 
 | Exit | Meaning | What to do |
 | ---- | ------- | ---------- |
 | 0 | success | — |
-| 1 | bad invocation | You called it wrong: a malformed `ref`, a missing `--season`/`--episode`, `episodes` on a movie ref, an unrecognised `--type` or other flag, `--download` (unsupported), or an invalid config value. Also internal failures such as an unwritable cache directory. Fix the command; do not retry it unchanged |
-| 2 | no results | Suggest a spelling correction, or a different title. Also returned when the season or episode number does not exist — re-run `lobster episodes` and check |
-| 3 | every provider failed | Run `lobster doctor` and report which sources are down. Do **not** suggest a spelling fix — the title was found, the sources are broken |
+| 1 | bad invocation | You called it wrong: a malformed `ref`, a missing `--season`/`--episode`, `episodes` on a movie ref, `--season`/`--episode`/`--download` given for a live ref, an unrecognised `--type` or other flag, or an invalid config value. Also internal failures such as an unwritable cache directory. Fix the command; do not retry it unchanged. **Exception: `error.code: "not_configured"`** from `channels` or `play --ref` on a live ref means the user has no live TV sources set up at all — nothing was malformed. Tell them to add one under `[live_tv]` in the config; do not edit the command |
+| 2 | no results | Suggest a spelling correction, or a different title. Also returned when the season or episode number does not exist — re-run `lobster episodes` and check. A live ref can hit exit 2 two ways: **`error.code: "no_results"`** means the channel is no longer in the playlist (playlists change upstream) — re-run `lobster channels` for a current ref. **`error.code: "ambiguous_channel"`** means the ref now matches more than one channel and lobster refused to guess — re-run `lobster channels` too; this is a playlist data problem (duplicate tvg-ids), not one a different ref value fixes by hand |
+| 3 | every provider failed | Run `lobster doctor` and report which sources are down. Do **not** suggest a spelling fix — the title was found, the sources are broken. For a live ref this also covers the playlist it lives in failing to load on replay — the channel likely still exists, retry later |
 | 4 | player unavailable | mpv (or the configured player) is not installed, or the background process could not be started |
 
 **A misspelling exits 2, not 3.** `find` distinguishes "every provider answered
@@ -152,7 +154,67 @@ Exit 3 from `play --detach` is a narrower case: the background process was
 started and then died within a second. The message names the log file. Read
 that log rather than running `doctor` — the cause is in it.
 
-## Out of scope
+## Live TV
 
-Live TV channel listing and channel surfing are not available in this mode.
-For those, tell the user to run `lobster` interactively themselves.
+`lobster channels` lists live TV channels as JSON. It never prompts.
+
+With no flags it lists categories and how many channels each holds:
+
+```
+lobster channels
+```
+
+```json
+{"schema": 1, "categories": [{"name": "News", "channels": 12}, {"name": "Sports", "channels": 40}]}
+```
+
+Categories come from the playlists' own group-title text. `Uncategorized` is
+synthesised for channels whose playlist gives no group. A channel listed under
+several groups is counted once per group, so the counts can sum to more than
+the number of distinct channels — do not treat the sum as a channel total.
+
+Pass `--category` (case-insensitive) or `--search` (substring match on name,
+case-insensitive) to list matching channels instead, each with an opaque
+`ref`:
+
+```
+lobster channels --category news --limit 10
+lobster channels --search "bbc"
+```
+
+```json
+{"schema": 1, "channels": [{"name": "BBC News", "category": "News", "logo": "https://...", "ref": "eyJpZCI6..."}]}
+```
+
+`--limit` caps how many channel rows come back (default: no limit) — it has
+no effect on the categories view.
+
+A partial listing can still be a success: if one playlist source fails to
+load but others answer, `channels` returns exit 0 with whatever loaded, plus
+a `failed_sources` array naming what didn't. Check for that key even on
+success — a channel missing from the list may be a symptom of a listed
+failure rather than genuinely absent.
+
+### Playing a channel
+
+Play a channel ref exactly like a film ref:
+
+```
+lobster play --ref "eyJpZCI6..." --detach
+```
+
+**`--detach` is more than recommended here — a live stream never ends**, so
+without it the command never returns at all (a film only blocks for its
+runtime; a channel blocks forever).
+
+`--season`, `--episode`, and `--download` are all rejected outright if passed
+with a live ref, regardless of value — a channel has no seasons and cannot be
+downloaded.
+
+A live ref is re-matched against the current playlists on every play, not
+trusted blindly — playlists reload and reorder, so this is what lets a ref
+stay valid across a reorder instead of silently playing whatever now sits at
+the old position. It refuses to guess: if the match is ambiguous or the
+channel is gone, `play` fails rather than picking one. See the exit-code
+table above for `not_configured`, `no_results`, and `ambiguous_channel` on a
+live ref.
