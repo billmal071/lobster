@@ -105,7 +105,7 @@ func TestTrackPlaybackInvokesCheckpointDuringPlayback(t *testing.T) {
 	rec := &checkpointRecorder{}
 	m := &MPV{}
 	m.SetCheckpoint(rec.record)
-	pos, dur := m.trackPlayback(ipc, make(chan struct{}))
+	pos, dur, _ := m.trackPlayback(ipc, make(chan struct{}))
 	if pos != 200 || dur != 5400 {
 		t.Fatalf("trackPlayback = %g, %g; want 200, 5400 (final state must be unaffected by checkpointing)", pos, dur)
 	}
@@ -145,7 +145,7 @@ func TestTrackPlaybackCheckpointHonoursInterval(t *testing.T) {
 	rec := &checkpointRecorder{}
 	m := &MPV{}
 	m.SetCheckpoint(rec.record)
-	if pos, _ := m.trackPlayback(ipc, make(chan struct{})); pos != 300 {
+	if pos, _, _ := m.trackPlayback(ipc, make(chan struct{})); pos != 300 {
 		t.Fatalf("trackPlayback position = %g, want 300", pos)
 	}
 	if calls := rec.snapshot(); len(calls) != 0 {
@@ -178,7 +178,7 @@ func TestTrackPlaybackNeverCheckpointsZeroPosition(t *testing.T) {
 	rec := &checkpointRecorder{}
 	m := &MPV{}
 	m.SetCheckpoint(rec.record)
-	if pos, _ := m.trackPlayback(ipc, make(chan struct{})); pos != 150 {
+	if pos, _, _ := m.trackPlayback(ipc, make(chan struct{})); pos != 150 {
 		t.Fatalf("trackPlayback position = %g, want 150", pos)
 	}
 
@@ -223,7 +223,7 @@ func TestTrackPlaybackCheckpointNeverOutlivesTracking(t *testing.T) {
 	}
 	m := &MPV{}
 	m.SetCheckpoint(slow)
-	if pos, _ := m.trackPlayback(ipc, make(chan struct{})); pos != 300 {
+	if pos, _, _ := m.trackPlayback(ipc, make(chan struct{})); pos != 300 {
 		t.Fatalf("trackPlayback position = %g, want 300", pos)
 	}
 
