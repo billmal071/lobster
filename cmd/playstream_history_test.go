@@ -26,7 +26,7 @@ func (s *stubPlayerImpl) Available() bool { return true }
 // playStreamHarness points history at a temp dir, installs a stub player and
 // a minimal cfg, and pins the playStream-relevant flags so no subtitle
 // search, JSON mode or download path runs.
-func playStreamHarness(t *testing.T, stub *stubPlayerImpl) {
+func playStreamHarness(t *testing.T, stub player.Player) {
 	t.Helper()
 	tmp := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmp) // history location on unix (config.dataDir)
