@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,9 +210,11 @@ func TestLoadContextMergesInDeclaredSourceOrder(t *testing.T) {
 	}
 }
 
-// blockingSource is a source string whose fetch blocks until ctx is done.
-// It exercises the deadline without a real 15s wait and without a network.
-func TestLoadContextRespectsDeadlineAndReportsFailedSources(t *testing.T) {
+// TestLoadContextSkipsImmediatelyFailingSourceAndReportsIt covers a source
+// that fails fast (a missing local file, via os.ReadFile) rather than a
+// context deadline — see TestLoadContextAbortsOnDeadlineAndReportsFailedSource
+// for the deadline guarantee itself.
+func TestLoadContextSkipsImmediatelyFailingSourceAndReportsIt(t *testing.T) {
 	dir := t.TempDir()
 	good := filepath.Join(dir, "good.m3u")
 	writeFile(t, good, "#EXTM3U\n#EXTINF:-1,Alpha\nhttp://example.invalid/1.m3u8\n")
@@ -229,6 +232,54 @@ func TestLoadContextRespectsDeadlineAndReportsFailedSources(t *testing.T) {
 	failed := p.FailedSources()
 	if len(failed) != 1 || failed[0] != bad {
 		t.Fatalf("FailedSources() = %v, want [%s]", failed, bad)
+	}
+}
+
+// TestLoadContextAbortsOnDeadlineAndReportsFailedSource proves ctx actually
+// reaches and aborts an in-flight HTTP request: the handler sleeps far
+// longer than the context's timeout, so a regression that drops ctx from the
+// request (e.g. reverting to http.NewRequest) would hang until the handler
+// wakes rather than returning near the deadline. A stub/local-file seam
+// cannot demonstrate this — only a real in-flight request being cancelled
+// can. The loopback httptest server never leaves the machine and the sleep
+// is capped by the deadline, so this stays well under a second.
+func TestLoadContextAbortsOnDeadlineAndReportsFailedSource(t *testing.T) {
+	unblock := make(chan struct{})
+	t.Cleanup(func() { close(unblock) })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-unblock:
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good.m3u")
+	writeFile(t, good, "#EXTM3U\n#EXTINF:-1,Alpha\nhttp://example.invalid/1.m3u8\n")
+
+	p := NewLiveTV([]string{good, srv.URL})
+	p.fallback = nil // isolate the deadline behaviour from the TLS-fallback retry path
+
+	const budget = 50 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+
+	start := time.Now()
+	err := p.LoadContext(ctx)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("LoadContext with one good source must succeed, got %v", err)
+	}
+	// Generous upper bound: proves LoadContext returned near the deadline
+	// rather than after the handler's (effectively unbounded) sleep.
+	if elapsed > 2*time.Second {
+		t.Fatalf("LoadContext took %v, want it bounded near the %v deadline", elapsed, budget)
+	}
+	failed := p.FailedSources()
+	if len(failed) != 1 || failed[0] != srv.URL {
+		t.Fatalf("FailedSources() = %v, want [%s]", failed, srv.URL)
 	}
 }
 

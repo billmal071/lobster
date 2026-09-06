@@ -76,6 +76,10 @@ func (p *LiveTV) fetch(ctx context.Context, src string) ([]byte, error) {
 		}
 		return data, err
 	}
+	// os.ReadFile ignores ctx: local-path sources are not cancelled on a
+	// deadline, only http(s) sources are. Local reads are expected to be
+	// fast, so this does not defeat LiveLoadBudget in practice, but it is
+	// not full ctx coverage.
 	return os.ReadFile(src)
 }
 
