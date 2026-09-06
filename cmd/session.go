@@ -233,9 +233,24 @@ func playCurrentEpisode(sess *playlist.Session) error {
 	}
 
 	// Normal playback with retry on failure
-	p := player.New(cfg.Player, cfg.AudioLanguage)
+	p := newPlayer(cfg.Player, cfg.AudioLanguage)
 	if !p.Available() {
 		return player.NotFoundError(cfg.Player)
+	}
+
+	// Periodic checkpoints while the episode plays: a hard shutdown kills the
+	// player and this process together, so the exit-time saveHistory in
+	// runPlaybackLoop alone would lose the whole watch position.
+	if cfg.History {
+		if cp, ok := p.(player.Checkpointer); ok {
+			cp.SetCheckpoint(historyCheckpoint(
+				sess.Content.ID,
+				sess.Content.Title,
+				sess.Content.Type,
+				sess.CurrentSeason().Number,
+				sess.Current().Number,
+			))
+		}
 	}
 
 	var startPos float64
