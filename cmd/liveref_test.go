@@ -113,6 +113,45 @@ func useSources(t *testing.T, paths ...string) {
 	t.Cleanup(func() { agentLiveSources, agentLiveTV = oldSources, oldTV })
 }
 
+// TestPlayLiveDetachWithNoSourcesIsNotConfigured covers the ordering bug
+// where --detach forked a supervisor child *before* the "any live sources
+// configured" check. With no sources, the child immediately exits 1 with
+// not_configured, the parent's liveness wait sees it die, and the parent
+// reports exit 3 (providers_failed) naming a log file instead — contradicting
+// the documented contract that not_configured at exit 1 means "configure a
+// source", not "retry". The fix moves the sources check above the --detach
+// fork so a misconfigured invocation never forks at all.
+//
+// agentPlayerCheck is stubbed because it runs before either check and this
+// test has nothing to do with player availability; without the stub this
+// test would depend on whether mpv happens to be on the host's PATH.
+func TestPlayLiveDetachWithNoSourcesIsNotConfigured(t *testing.T) {
+	prevCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return true, "" }
+	t.Cleanup(func() { agentPlayerCheck = prevCheck })
+
+	oldSources := agentLiveSources
+	agentLiveSources = func() []string { return nil }
+	t.Cleanup(func() { agentLiveSources = oldSources })
+
+	// If this ever reaches agentLiveTV, the sources check did not run first
+	// (it would have returned before any provider is needed either way, but
+	// this also catches a --detach fork: playDetached never calls
+	// agentLiveTV directly, so a call here would mean control reached past
+	// the point this test means to guard).
+	oldTV := agentLiveTV
+	agentLiveTV = func(sources []string) *provider.LiveTV {
+		t.Error("agentLiveTV was called: the not-configured check did not fire first")
+		return provider.NewLiveTV(sources)
+	}
+	t.Cleanup(func() { agentLiveTV = oldTV })
+
+	ref := liveRefFor(t, "bbc1.uk", "BBC One", "src.m3u")
+	err := runAgentCmdErr(t, playCmd, "--ref", ref, "--detach")
+	assertExit(t, err, exitUsage)
+	assertErrCode(t, "not_configured")
+}
+
 func TestPlayLiveRejectsSeasonAndEpisode(t *testing.T) {
 	// Must fire before the provider is built: assert the seam is never called.
 	called := false

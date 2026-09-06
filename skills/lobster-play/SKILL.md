@@ -218,3 +218,12 @@ the old position. It refuses to guess: if the match is ambiguous or the
 channel is gone, `play` fails rather than picking one. See the exit-code
 table above for `not_configured`, `no_results`, and `ambiguous_channel` on a
 live ref.
+
+**The detach log can contain the raw stream URL.** `channels` and `play`
+never print a channel's stream URL themselves (an Xtream URL embeds the
+subscriber's credentials in its *path*, which cannot be redacted the way a
+playlist source's query string can), but on `--detach` the player's own
+stdout/stderr — including whatever URL it prints when it opens the
+stream — goes into the `play-*.log` file named in the exit-3 response. Read
+that log to diagnose a failure, but do not paste its contents into shared
+output or a public issue without checking it first.
