@@ -224,6 +224,10 @@ never print a channel's stream URL themselves (an Xtream URL embeds the
 subscriber's credentials in its *path*, which cannot be redacted the way a
 playlist source's query string can), but on `--detach` the player's own
 stdout/stderr — including whatever URL it prints when it opens the
-stream — goes into the `play-*.log` file named in the exit-3 response. Read
-that log to diagnose a failure, but do not paste its contents into shared
-output or a public issue without checking it first.
+stream — goes into the `play-*.log` file named by the `log` field. That field
+is not exit-3-only: it is part of the success envelope too (`"status":
+"started"`, since a detached parent reports success the moment the player
+starts, well before playback or failure), so the path — and whatever
+credentials it can lead you to — is available on the happy path as well as
+the failure one. Read that log to diagnose a failure, but do not paste its
+contents into shared output or a public issue without checking it first.

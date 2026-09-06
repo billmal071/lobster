@@ -159,19 +159,36 @@ func resolveLiveRef(p *provider.LiveTV, r playRef) (provider.Channel, error) {
 	// r.Source is already sanitized (liveChannelRef stores displaySource(ch.
 	// Source)), while FailedSources() returns raw source strings, so each
 	// failed source must be sanitized here before the comparison. Comparing
-	// f == r.Source directly would never match once r.Source stopped being
-	// raw, silently regressing every down-playlist ref to "no_results" (exit
+	// f == r.Source directly is only wrong for http(s) sources — displaySource
+	// is the identity for a local file path, so that case is indistinguishable
+	// from the fix under test fixtures that only use temp-file playlists.
+	// For a real credentialed Xtream source (an http(s) URL), skipping the
+	// sanitization would regress every down-playlist ref to "no_results" (exit
 	// 2, "the channel does not exist") when "providers_failed" (exit 3,
 	// "retry") is correct.
-	for _, f := range p.FailedSources() {
-		if displaySource(f) == r.Source {
-			return provider.Channel{}, emitErr("providers_failed", exitProvidersFailed,
-				"%q could not be matched: its playlist (%s) failed to load; the channel may still exist",
-				r.Title, r.Source)
-		}
+	if refSourceInFailedSources(p.FailedSources(), r.Source) {
+		return provider.Channel{}, emitErr("providers_failed", exitProvidersFailed,
+			"%q could not be matched: its playlist (%s) failed to load; the channel may still exist",
+			r.Title, r.Source)
 	}
 	return provider.Channel{}, emitErr("no_results", exitNoResults,
 		"%q is no longer in your playlists; re-run 'lobster channels' to get a current ref", r.Title)
+}
+
+// refSourceInFailedSources reports whether refSource (a ref's already-
+// sanitized Source, per liveChannelRef) matches one of the raw source strings
+// FailedSources() returns. Pulled out of resolveLiveRef so the sanitized-vs-
+// raw comparison can be unit-tested directly with an http(s) source, without
+// needing a real failing provider to reach it — every live-TV test fixture
+// otherwise uses temp-file paths, for which displaySource is the identity and
+// so cannot distinguish this comparison from a raw-to-raw one.
+func refSourceInFailedSources(failed []string, refSource string) bool {
+	for _, f := range failed {
+		if displaySource(f) == refSource {
+			return true
+		}
+	}
+	return false
 }
 
 // filterBySource narrows chs to those whose sanitized Source matches source.
@@ -180,8 +197,10 @@ func resolveLiveRef(p *provider.LiveTV, r playRef) (provider.Channel, error) {
 // consistent with ChannelKey.Source's own empty-means-unset convention.
 // Both sides of the comparison go through displaySource: chs carry the raw
 // provider.Channel.Source, while a ref's Source is already sanitized (see
-// liveChannelRef), so comparing them raw-to-raw or sanitized-to-raw would
-// never match.
+// liveChannelRef), so comparing them raw-to-raw or sanitized-to-raw only
+// mismatches for http(s) sources — displaySource is the identity for a local
+// file path, which is exactly why a fixture built only from temp-file
+// playlists cannot detect this comparison regressing to raw.
 func filterBySource(chs []provider.Channel, source string) []provider.Channel {
 	if source == "" {
 		return chs

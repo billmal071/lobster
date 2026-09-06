@@ -89,7 +89,13 @@ func liveRefFor(t *testing.T, tvgID, title, source string) string {
 }
 
 // stubLivePlayer replaces agentPlayLive with one that records the stream URL
-// it would have played, restoring the original with t.Cleanup.
+// it would have played, restoring the original with t.Cleanup. It also stubs
+// agentPlayerCheck to report a player as always available: agentPlayerCheck
+// runs before source loading and ref resolution (cmd/liveref.go), so without
+// this stub every test using stubLivePlayer would silently depend on whether
+// mpv happens to be on the host's PATH — passing on a dev machine that has
+// it, and failing everywhere else (including CI, which never installs a
+// player). Restored with t.Cleanup like the player seam itself.
 func stubLivePlayer(t *testing.T, played *string) {
 	t.Helper()
 	old := agentPlayLive
@@ -98,6 +104,10 @@ func stubLivePlayer(t *testing.T, played *string) {
 		return nil
 	}
 	t.Cleanup(func() { agentPlayLive = old })
+
+	oldCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return true, "" }
+	t.Cleanup(func() { agentPlayerCheck = oldCheck })
 }
 
 // useSources points agentLiveSources/agentLiveTV at exactly these paths (in
@@ -266,6 +276,9 @@ func TestPlayLiveAmbiguousMatchRefuses(t *testing.T) {
 func TestPlayLiveAbsentChannelIsNoResultsAndNeverResolves(t *testing.T) {
 	// The second assertion is the one that matters: it proves a live ref
 	// cannot leak into the title-search path.
+	var played string
+	stubLivePlayer(t, &played)
+
 	resolved := false
 	oldResolve := agentResolveAndPlay
 	agentResolveAndPlay = func(p provider.Provider, sel media.SearchResult, s, e int) error {
@@ -350,6 +363,47 @@ func TestPlayLiveDistinguishesDownPlaylistFromMissingChannel(t *testing.T) {
 // share BOTH tvg-id and exact folded title. Narrowing by title cannot break
 // this tie, so it must still fail closed rather than silently picking one —
 // the one guarantee the narrowing step itself could quietly break.
+// TestFilterBySourceMatchesSanitizedHTTPSource exercises filterBySource with
+// a real http(s) credential-bearing source, the one configuration where a
+// sanitized-vs-raw comparison and a raw-to-raw comparison actually diverge.
+// Every live-TV test fixture elsewhere in this file uses a local temp-file
+// path, for which displaySource is the identity — so those fixtures cannot
+// tell a correct (sanitized-vs-sanitized) comparison from a regressed
+// (raw-vs-sanitized) one. This test can, and is the one that must fail if
+// filterBySource's `displaySource(ch.Source) == source` reverts to
+// `ch.Source == source`.
+func TestFilterBySourceMatchesSanitizedHTTPSource(t *testing.T) {
+	raw := "https://user:pass@host.example/get.php?username=alice&password=hunter2&type=m3u_plus"
+	sanitized := displaySource(raw)
+	if sanitized == raw {
+		t.Fatalf("fixture is broken: displaySource did not change %q", raw)
+	}
+
+	chs := []provider.Channel{{Name: "News HD", Source: raw}}
+
+	got := filterBySource(chs, sanitized)
+	if len(got) != 1 {
+		t.Fatalf("filterBySource(chs, sanitized) = %d channels, want 1 (raw source %q, sanitized ref source %q)", len(got), raw, sanitized)
+	}
+}
+
+// TestRefSourceInFailedSourcesMatchesSanitizedHTTPSource is
+// refSourceInFailedSources' counterpart to the filterBySource test above: it
+// exercises the FailedSources() comparison in resolveLiveRef with a real
+// http(s) credential-bearing source, which is the only configuration where
+// comparing sanitized-to-raw and raw-to-raw actually diverge.
+func TestRefSourceInFailedSourcesMatchesSanitizedHTTPSource(t *testing.T) {
+	raw := "https://user:pass@host.example/get.php?username=alice&password=hunter2&type=m3u_plus"
+	sanitized := displaySource(raw)
+	if sanitized == raw {
+		t.Fatalf("fixture is broken: displaySource did not change %q", raw)
+	}
+
+	if !refSourceInFailedSources([]string{raw}, sanitized) {
+		t.Fatalf("refSourceInFailedSources([%q], %q) = false, want true", raw, sanitized)
+	}
+}
+
 func TestPlayLiveAmbiguousMatchRefusesEvenAfterTitleNarrowing(t *testing.T) {
 	body := "#EXTM3U\n" +
 		"#EXTINF:-1 tvg-id=\"dup2\",Twin\nhttp://example.invalid/1.m3u8\n" +
