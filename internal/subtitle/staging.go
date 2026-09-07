@@ -33,20 +33,74 @@ const staleAfter = 24 * time.Hour
 // So the base has to be a non-hidden directory under $HOME. A media directory
 // is the least surprising home for subtitle files; the last resort is a plain
 // "lobster" directory, created only when no media directory exists.
+//
+// Being under $HOME lexically is not enough — see withinHome.
 func stagingBases() []string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
+		return nil
+	}
+	resolvedHome, ok := resolveHome()
+	if !ok {
 		return nil
 	}
 
 	var existing []string
 	for _, name := range []string{"Videos", "Movies", "Downloads"} {
 		dir := filepath.Join(home, name)
-		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
-			existing = append(existing, dir)
+		fi, err := os.Stat(dir)
+		if err != nil || !fi.IsDir() {
+			continue
 		}
+		if !withinHome(resolvedHome, dir) {
+			continue
+		}
+		existing = append(existing, dir)
 	}
+	// The last resort needs no check here: newStagingDir creates it directly
+	// under $HOME and verifies the directory it actually reached.
 	return append(existing, filepath.Join(home, "lobster"))
+}
+
+// resolveHome returns $HOME with symlinks resolved, and false when there is no
+// usable home directory.
+func resolveHome() (string, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", false
+	}
+	resolved, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		return "", false
+	}
+	return resolved, true
+}
+
+// withinHome reports whether path, once every symlink in it is resolved, is
+// still inside resolvedHome.
+//
+// A media directory symlinked to another drive is a common arrangement, and
+// os.Stat and os.MkdirAll both follow symlinks without complaint — so
+// "$HOME/Videos/.lobster/subs-x" can name a file on /mnt. snapd's home
+// interface is enforced by AppArmor, which decides on the resolved path, so
+// such a directory is denied to a confined player exactly as /tmp is: staging
+// there would look like a fix and silently be none. A path that cannot be
+// resolved is treated as outside, since the point is to hand out only paths
+// known to be reachable.
+//
+// This rejects escapes, not symlinks. One that resolves back inside $HOME is
+// perfectly readable, and refusing it would push those users onto the
+// broken-for-snaps temp-dir fallback for no reason.
+func withinHome(resolvedHome, path string) bool {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(resolvedHome, resolved)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 // newStagingDir creates a fresh staging directory a confined player can read,
@@ -54,9 +108,16 @@ func stagingBases() []string {
 // with no writable home, say) — an unreadable subtitle is better than no
 // playback at all.
 func newStagingDir() (string, error) {
+	resolvedHome, homeOK := resolveHome()
 	for _, base := range stagingBases() {
 		parent := filepath.Join(base, stagingParent)
 		if err := os.MkdirAll(parent, 0o700); err != nil {
+			continue
+		}
+		// The base passed stagingBases, but stagingParent itself can be a
+		// symlink out of $HOME, and the last-resort base was never checked.
+		// Verify the path actually reached, not the one asked for.
+		if !homeOK || !withinHome(resolvedHome, parent) {
 			continue
 		}
 		pruneStale(parent)

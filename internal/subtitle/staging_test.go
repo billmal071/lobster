@@ -143,3 +143,100 @@ func TestNewTempDirPrunesStaleSiblings(t *testing.T) {
 		t.Errorf("fresh staging dir %q was pruned: %v", second.Path(), err)
 	}
 }
+
+// resolvedRel relativises path against home with every symlink resolved, which
+// is what AppArmor does before applying snapd's home rule. A lexical check
+// passes happily on a path that resolves onto another filesystem.
+func resolvedRel(t *testing.T, home, path string) string {
+	t.Helper()
+	resolvedHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatalf("resolving home %q: %v", home, err)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("resolving %q: %v", path, err)
+	}
+	rel, err := filepath.Rel(resolvedHome, resolved)
+	if err != nil {
+		t.Fatalf("relativising %q against %q: %v", resolved, resolvedHome, err)
+	}
+	return rel
+}
+
+// A media directory symlinked to another drive is a common arrangement, and
+// os.Stat and os.MkdirAll both follow symlinks without complaint. Such a base
+// must be rejected: snapd's home rule is enforced on the resolved path, so a
+// staging directory that lands on /mnt is denied to the VLC snap exactly as
+// /tmp is, and staging there would look like a fix while silently being none.
+func TestNewTempDirRejectsABaseSymlinkedOutsideHome(t *testing.T) {
+	home := fakeHome(t)
+	outside := t.TempDir()
+	videos := filepath.Join(home, "Videos")
+	if err := os.Remove(videos); err != nil {
+		t.Fatalf("clearing Videos: %v", err)
+	}
+	if err := os.Symlink(outside, videos); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	td, err := NewTempDir()
+	if err != nil {
+		t.Fatalf("NewTempDir: %v", err)
+	}
+	t.Cleanup(td.Cleanup)
+
+	if rel := resolvedRel(t, home, td.Path()); strings.HasPrefix(rel, "..") {
+		t.Errorf("staging dir %q resolves outside the home directory (rel %q); a symlinked media directory is followed by os.MkdirAll but denied by snapd", td.Path(), rel)
+	}
+	if _, err := os.Stat(filepath.Join(outside, stagingParent)); err == nil {
+		t.Errorf("%s was created on the far side of the symlink before the base was rejected", stagingParent)
+	}
+}
+
+// The shared parent can be the symlink even when the base is sound.
+func TestNewTempDirRejectsAParentSymlinkedOutsideHome(t *testing.T) {
+	home := fakeHome(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(home, "Videos", stagingParent)); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	td, err := NewTempDir()
+	if err != nil {
+		t.Fatalf("NewTempDir: %v", err)
+	}
+	t.Cleanup(td.Cleanup)
+
+	if rel := resolvedRel(t, home, td.Path()); strings.HasPrefix(rel, "..") {
+		t.Errorf("staging dir %q resolves outside the home directory (rel %q)", td.Path(), rel)
+	}
+}
+
+// Rejecting escapes must not reject a symlink that stays inside $HOME — those
+// are readable, and over-rejecting would push users onto the broken-for-snaps
+// temp-dir fallback for no reason.
+func TestNewTempDirAcceptsASymlinkThatStaysInsideHome(t *testing.T) {
+	home := fakeHome(t)
+	real := filepath.Join(home, "media")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatalf("creating %s: %v", real, err)
+	}
+	videos := filepath.Join(home, "Videos")
+	if err := os.Remove(videos); err != nil {
+		t.Fatalf("clearing Videos: %v", err)
+	}
+	if err := os.Symlink(real, videos); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	td, err := NewTempDir()
+	if err != nil {
+		t.Fatalf("NewTempDir: %v", err)
+	}
+	t.Cleanup(td.Cleanup)
+
+	if rel := resolvedRel(t, home, td.Path()); !strings.HasPrefix(rel, "media"+string(filepath.Separator)) {
+		t.Errorf("staging dir %q resolved to rel %q; the symlinked base inside $HOME should have been used, not skipped", td.Path(), rel)
+	}
+}
