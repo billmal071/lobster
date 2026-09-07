@@ -503,7 +503,7 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 			if err == nil {
 				defer tmpDir.Cleanup()
 				for _, sub := range subs {
-					f, err := resolveAndDownloadSub(tmpDir, sub, season, episode)
+					f, err := subtitleDownload(tmpDir, sub, season, episode)
 					if err != nil {
 						debugf("subtitle download failed (%s): %v", sub.Label, err)
 						continue

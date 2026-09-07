@@ -1,5 +1,6 @@
-// Package subtitle handles subtitle filtering and secure temp file management.
-// Uses os.MkdirTemp with random suffixes instead of predictable /tmp/lobster/ paths.
+// Package subtitle handles subtitle filtering and staging-directory management.
+// Staging directories carry a random suffix rather than a predictable name, and
+// live where a sandboxed player can read them (see staging.go).
 package subtitle
 
 import (
@@ -105,25 +106,29 @@ func BestMatch(subtitles []media.Subtitle, language string) *media.Subtitle {
 	return &filtered[0]
 }
 
-// TempDir manages a secure temporary directory for subtitle files.
+// TempDir manages the throwaway directory downloaded subtitles are staged in.
 type TempDir struct {
 	path string
 }
 
-// NewTempDir creates a randomized temporary directory for subtitle files.
+// NewTempDir creates a randomized staging directory for subtitle files in a
+// location sandboxed players can actually read.
 func NewTempDir() (*TempDir, error) {
-	dir, err := os.MkdirTemp("", "lobster-subs-*")
+	dir, err := newStagingDir()
 	if err != nil {
-		return nil, fmt.Errorf("creating subtitle temp dir: %w", err)
+		return nil, fmt.Errorf("creating subtitle staging dir: %w", err)
 	}
 	return &TempDir{path: dir}, nil
 }
 
-// Cleanup removes the temporary directory and all contents.
+// Path returns the directory subtitle files are written into.
+func (t *TempDir) Path() string { return t.path }
+
+// Cleanup removes the staging directory and all contents. It must be called:
+// unlike /tmp, the staging directory lives under $HOME and nothing else
+// reclaims it.
 func (t *TempDir) Cleanup() {
-	if t.path != "" {
-		os.RemoveAll(t.path)
-	}
+	removeStagingDir(t.path)
 }
 
 // Download fetches a subtitle file to the temp directory and returns the local path.

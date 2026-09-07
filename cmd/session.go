@@ -273,9 +273,10 @@ func playCurrentEpisode(sess *playlist.Session) error {
 			return err
 		}
 
-		subFiles := resolveSubtitles(stream, sess.Content.Title, sess.CurrentSeason().Number, sess.Current().Number)
+		subFiles, cleanupSubs := resolveSubtitles(stream, sess.Content.Title, sess.CurrentSeason().Number, sess.Current().Number)
 
 		result, playErr := p.Play(stream, title, startPos, subFiles)
+		cleanupSubs()
 		if playErr == nil {
 			sess.LastPosition = result.Position
 			sess.LastDuration = result.Duration
@@ -303,11 +304,18 @@ func playCurrentEpisode(sess *playlist.Session) error {
 	}
 }
 
+// subtitleDownload is a seam so tests can exercise the staging-directory
+// lifecycle without reaching the network.
+var subtitleDownload = resolveAndDownloadSub
+
 // resolveSubtitles downloads multiple subtitle files.
 // User can cycle tracks with 'j' in mpv.
-func resolveSubtitles(stream *media.Stream, title string, season, episode int) []string {
+// The returned cleanup is never nil and must be called once the player has
+// exited: subtitles are staged under $HOME, which nothing else reclaims.
+func resolveSubtitles(stream *media.Stream, title string, season, episode int) ([]string, func()) {
+	noCleanup := func() {}
 	if flagNoSubs {
-		return nil
+		return nil, noCleanup
 	}
 
 	subs := subtitle.FilterByEpisode(
@@ -318,7 +326,7 @@ func resolveSubtitles(stream *media.Stream, title string, season, episode int) [
 		season, episode,
 	)
 	if len(subs) == 0 {
-		return nil
+		return nil, noCleanup
 	}
 	// Limit to 3 subtitle downloads to avoid stream URL expiry.
 	if len(subs) > 3 {
@@ -327,13 +335,12 @@ func resolveSubtitles(stream *media.Stream, title string, season, episode int) [
 
 	tmpDir, err := subtitle.NewTempDir()
 	if err != nil {
-		return nil
+		return nil, noCleanup
 	}
-	// Note: tmpDir cleanup happens when process exits; acceptable for a session
 
 	var subFiles []string
 	for _, sub := range subs {
-		f, err := resolveAndDownloadSub(tmpDir, sub, season, episode)
+		f, err := subtitleDownload(tmpDir, sub, season, episode)
 		if err != nil {
 			debugf("subtitle download failed (%s): %v", sub.Label, err)
 			continue
@@ -341,12 +348,13 @@ func resolveSubtitles(stream *media.Stream, title string, season, episode int) [
 		debugf("subtitle file: %s (%s)", f, sub.Label)
 		subFiles = append(subFiles, f)
 	}
-	return subFiles
+	return subFiles, tmpDir.Cleanup
 }
 
 // downloadEpisode handles the download path.
 func downloadEpisode(stream *media.Stream, sess *playlist.Session, title string) error {
-	subFiles := resolveSubtitles(stream, sess.Content.Title, sess.CurrentSeason().Number, sess.Current().Number)
+	subFiles, cleanupSubs := resolveSubtitles(stream, sess.Content.Title, sess.CurrentSeason().Number, sess.Current().Number)
+	defer cleanupSubs()
 	dlSub := ""
 	if len(subFiles) > 0 {
 		dlSub = subFiles[0]
