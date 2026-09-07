@@ -52,6 +52,18 @@ func TestMain(m *testing.M) {
 		os.Exit(n)
 	}
 
+	// Keep the per-installation ref key (config.RefKeyPath, under dataDir)
+	// out of the developer's real ~/.local/share. sourceKey creates it on
+	// first use, and the live-TV tests mint refs, so without this a plain
+	// `go test ./cmd/` would leave state behind on the machine it ran on.
+	// Set here rather than per-test because any test that mints a ref
+	// reaches it, including ones that have no other reason to isolate HOME.
+	if dir, err := os.MkdirTemp("", "lobster-test-data-"); err == nil {
+		os.Setenv("XDG_DATA_HOME", dir) // unix (config.dataDir)
+		os.Setenv("LOCALAPPDATA", dir)  // windows
+		defer os.RemoveAll(dir)
+	}
+
 	// Stub flixhqDomain to prevent live network probes in tests.
 	// Tests that need a healthy or dead result override this with t.Cleanup restore.
 	prev := flixhqDomain

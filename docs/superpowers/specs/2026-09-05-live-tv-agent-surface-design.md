@@ -1,7 +1,7 @@
 # Live TV on the agent surface: `channels` + live refs
 
 Date: 2026-09-05
-Status: approved design, not yet implemented
+Status: approved design; implemented 2026-09-06
 Revision: 2 — first draft was reviewed by two verification agents; their
 findings are folded in and noted at the end.
 

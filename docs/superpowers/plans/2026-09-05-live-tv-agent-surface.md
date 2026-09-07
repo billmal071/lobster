@@ -1493,3 +1493,54 @@ git commit -m "docs(agent): document the live TV surface in the lobster-play ski
 **Known limitation carried from the spec, not implemented here:** `playDetached` sets `c.Stdout = c.Stderr = lf` (`cmd/detach.go:194-195`) and nothing rotates `~/.cache/lobster/play-*.log`. A live channel left running for days grows that log without bound. Capping it affects movies equally and belongs in its own commit — do not fold it into this branch.
 
 **Type consistency check performed:** `ChannelKey` is spelled the same in Tasks 3 and 6; `LiveLoadBudget` is exported and used in Tasks 5 and 6; `liveRefType` is defined in Task 4 and consumed in Tasks 5 and 6; `agentLiveTV`/`agentLiveSources` are defined in Task 5 and reused in Task 6's tests; `agentPlayLive` is defined in Task 6 only.
+
+---
+
+## Post-implementation amendments
+
+The plan above is the record of the work as planned; the code snippets in it
+are the shape each task was written against, not the shape that shipped.
+Review of the finished branch changed five things. Read the code, not the
+snippet, wherever the two disagree:
+
+- **A ref carries `src_key`, not just `source`.** `displaySource` drops the
+  whole query string, which is where an Xtream source keeps its credentials,
+  so two subscriptions to one server reduce to the same display source. Every
+  snippet that narrows or compares by `displaySource(ch.Source)` narrows by
+  `sourceKey(ch.Source)` in the shipped code, which separates them without
+  carrying the credential. `Source` remains the display value and is what
+  error messages print. See `sourceKey` (`cmd/srckey.go`), `filterBySource`
+  and `refSourceInFailedSources` (`cmd/liveref.go`).
+  - The digest is an **HMAC under a per-installation secret**
+    (`config.RefKeyPath`, mode 0600), not a plain hash. A ref already carries
+    the scheme, host and path in the clear as its display `Source`, so a
+    plain digest of the raw source would leave only the username and password
+    unknown — a straight offline dictionary attack against the subscription,
+    against a value printed to an agent's stdout. With no writable state
+    directory `sourceKey` returns `""`, the ref omits `src_key`, and matching
+    falls back to display `Source`: the degraded path loses the
+    same-endpoint distinction, never the safety property.
+- **Non-regular local sources are refused before they are opened.**
+  `readFileContext` stats the path and rejects anything that is not a regular
+  file. `ctx` frees the caller but cannot interrupt a read already blocked in
+  the kernel, so a FIFO would strand a goroutine for as long as the process
+  lives — invisible under `channels`, but the length of the broadcast under
+  `play --ref`. The `ctx` race is still there for what stat cannot see: a
+  regular file on a stalled mount.
+- **`doLoadContext` uses a fixed worker pool.** The plan's goroutine-per-source
+  with a semaphore bounded how many sources fetch at once but not how many
+  goroutines exist, and the source list is partly remote input (the TBCPL
+  catalog's playlists). The pool bounds both, before any work starts.
+- **Local sources are read under `ctx`.** The plan's `os.ReadFile` cannot be
+  cancelled, so one blocked path (a stalled mount, a FIFO) held the whole load
+  past `LiveLoadBudget`. `readFileContext` (`internal/provider/livetv.go`)
+  races the read against `ctx` and applies the same `maxPlaylistBytes` cap as
+  the http path.
+- **Source discovery is inside the budget.** Both commands create the
+  `LiveLoadBudget` context *before* calling `agentLiveSources`, because
+  discovering the sources can itself fetch the TBCPL catalog over the network.
+  The spec's "known gap" about `channels` overshooting 15s is closed;
+  `agentLiveSources` and `liveTVSourcesContext` take a `context.Context`.
+- **`FailedSources()` returns a copy**, as `AllChannels()` and `Lookup()`
+  already did — it is read again by `resolveLiveRef` after a caller has
+  already been handed it.

@@ -76,11 +76,91 @@ func (p *LiveTV) fetch(ctx context.Context, src string) ([]byte, error) {
 		}
 		return data, err
 	}
-	// os.ReadFile ignores ctx: local-path sources are not cancelled on a
-	// deadline, only http(s) sources are. Local reads are expected to be
-	// fast, so this does not defeat LiveLoadBudget in practice, but it is
-	// not full ctx coverage.
-	return os.ReadFile(src)
+	return readFileContext(ctx, src)
+}
+
+// readFileContext reads a local playlist under ctx.
+//
+// os.ReadFile alone cannot be cancelled, and a local source is not always
+// fast: a path on a stalled network mount, or a FIFO nothing ever writes to,
+// blocks the read forever. LoadContext waits on every source, so one such
+// path would keep the whole agent-facing command blocked long past
+// LiveLoadBudget — the deadline the command advertises. The read therefore
+// runs on its own goroutine and ctx wins the race.
+//
+// The path is stat'd first and anything that is not a regular file is
+// refused before os.Open is called. This is not redundant with the ctx race
+// below: ctx frees the *caller*, but nothing can interrupt a read syscall
+// already blocked in the kernel, so an abandoned goroutine on a FIFO lives
+// as long as the process does. A `channels` run exits moments later and the
+// leak is invisible; a `play --ref` that resolves through another source
+// keeps running for the length of the broadcast, holding that goroutine and
+// its open descriptor the whole time. os.Stat does not block on a FIFO the
+// way os.Open does, so refusing here costs nothing and removes the only case
+// that can strand a goroutine indefinitely. Directories and device files are
+// refused by the same check; none of them is a playlist.
+//
+// The ctx race still earns its place for what stat cannot see: a regular
+// file on a stalled network mount blocks in the read itself, after a stat
+// that looked perfectly ordinary. The goroutine is not cancelled by
+// returning, so it must not be allowed to block on delivery either: the
+// channel is buffered, so the abandoned read's result is discarded when it
+// eventually completes and the goroutine exits rather than leaking for the
+// life of the process.
+//
+// The same maxPlaylistBytes cap as httpGet applies. A local playlist is
+// bounded by an io.LimitReader rather than trusted for its stat size: a
+// FIFO or /dev/zero reports no meaningful size, and os.ReadFile on either
+// would grow its buffer until the process died.
+func readFileContext(ctx context.Context, path string) ([]byte, error) {
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	// An already-expired ctx returns before any filesystem work. doLoadContext
+	// checks this too, so this is belt-and-braces there — but it makes the
+	// cancellation contract hold for any caller and, unlike the select below
+	// (where two ready cases are chosen between at random), it is
+	// deterministic enough to test.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("livetv: reading %s: %w", path, err)
+	}
+
+	// Before the goroutine, not inside it: the point is that nothing ever
+	// opens a FIFO, not that the caller stops waiting for one.
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("livetv: playlist %s is not a regular file", path)
+	}
+
+	ch := make(chan readResult, 1)
+	go func() {
+		f, err := os.Open(path)
+		if err != nil {
+			ch <- readResult{err: err}
+			return
+		}
+		defer f.Close()
+		data, err := io.ReadAll(io.LimitReader(f, maxPlaylistBytes+1))
+		if err != nil {
+			ch <- readResult{err: err}
+			return
+		}
+		if len(data) > maxPlaylistBytes {
+			ch <- readResult{err: fmt.Errorf("livetv: playlist %s exceeds %d MiB limit", path, maxPlaylistBytes>>20)}
+			return
+		}
+		ch <- readResult{data: data}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("livetv: reading %s: %w", path, ctx.Err())
+	case r := <-ch:
+		return r.data, r.err
+	}
 }
 
 // maxPlaylistBytes caps a single playlist download.
@@ -163,22 +243,37 @@ func (p *LiveTV) doLoadContext(ctx context.Context) {
 	}
 	results := make([]result, len(p.sources))
 
-	sem := make(chan struct{}, liveLoadConcurrency)
-	var wg sync.WaitGroup
-	for i, src := range p.sources {
-		wg.Add(1)
-		go func(i int, src string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			if ctx.Err() != nil {
-				results[i] = result{err: ctx.Err()}
-				return
-			}
-			data, err := p.fetch(ctx, src)
-			results[i] = result{data: data, err: err}
-		}(i, src)
+	// A fixed worker pool, not a goroutine per source with a semaphore.
+	// The source list is not bounded by anything the user typed: liveTVSources
+	// merges the configured playlists with every live playlist the remote
+	// TBCPL catalog names, so its length is remote input. Launching one
+	// goroutine per source would allocate stacks for all of them up front,
+	// and the semaphore inside would bound only how many are *fetching* — not
+	// how many exist. The pool caps both, and does so before any work starts.
+	workers := liveLoadConcurrency
+	if len(p.sources) < workers {
+		workers = len(p.sources)
 	}
+	idx := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range idx {
+				if ctx.Err() != nil {
+					results[i] = result{err: ctx.Err()}
+					continue
+				}
+				data, err := p.fetch(ctx, p.sources[i])
+				results[i] = result{data: data, err: err}
+			}
+		}()
+	}
+	for i := range p.sources {
+		idx <- i
+	}
+	close(idx)
 	wg.Wait()
 
 	var anyOK bool
@@ -216,7 +311,10 @@ func (p *LiveTV) doLoadContext(ctx context.Context) {
 // FailedSources returns the sources that did not load, in declared order.
 // It is what lets a caller tell "this channel is gone" from "the playlist it
 // lives in did not load" — two conditions that need different exit codes.
-func (p *LiveTV) FailedSources() []string { return p.failed }
+// The returned slice is a copy: a caller that sorted or rewrote it in place
+// would otherwise be editing provider state, and this one is read again by
+// resolveLiveRef after the caller has already reported it.
+func (p *LiveTV) FailedSources() []string { return append([]string(nil), p.failed...) }
 
 func (p *LiveTV) uniqueID(base string) string {
 	if base == "" {

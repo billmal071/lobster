@@ -110,7 +110,7 @@ func withLiveFixture(t *testing.T, body string) {
 		t.Fatalf("writing fixture: %v", err)
 	}
 	oldSources, oldTV := agentLiveSources, agentLiveTV
-	agentLiveSources = func() []string { return []string{path} }
+	agentLiveSources = func(context.Context) []string { return []string{path} }
 	t.Cleanup(func() { agentLiveSources, agentLiveTV = oldSources, oldTV })
 }
 
@@ -212,7 +212,7 @@ func TestChannelsUnknownCategoryIsNoResults(t *testing.T) {
 
 func TestChannelsNoSourcesIsNotConfigured(t *testing.T) {
 	old := agentLiveSources
-	agentLiveSources = func() []string { return nil }
+	agentLiveSources = func(context.Context) []string { return nil }
 	t.Cleanup(func() { agentLiveSources = old })
 
 	err := runAgentCmdErr(t, channelsCmd)
@@ -263,7 +263,7 @@ func withPartialLiveFixture(t *testing.T, body string) (badSource string) {
 	}
 	badPath := filepath.Join(dir, "missing.m3u") // deliberately never created
 	old := agentLiveSources
-	agentLiveSources = func() []string { return []string{goodPath, badPath} }
+	agentLiveSources = func(context.Context) []string { return []string{goodPath, badPath} }
 	t.Cleanup(func() { agentLiveSources = old })
 	return badPath
 }
@@ -320,7 +320,7 @@ func TestChannelsEmptyResultWithFailedSourceIsProvidersFailed(t *testing.T) {
 	}
 	badPath := filepath.Join(dir, "missing.m3u")
 	old := agentLiveSources
-	agentLiveSources = func() []string { return []string{emptyPath, badPath} }
+	agentLiveSources = func(context.Context) []string { return []string{emptyPath, badPath} }
 	t.Cleanup(func() { agentLiveSources = old })
 
 	err := runAgentCmdErr(t, channelsCmd)
@@ -336,7 +336,7 @@ func TestChannelsAllSourcesFailedIsProvidersFailed(t *testing.T) {
 	bad1 := filepath.Join(dir, "missing1.m3u")
 	bad2 := filepath.Join(dir, "missing2.m3u")
 	old := agentLiveSources
-	agentLiveSources = func() []string { return []string{bad1, bad2} }
+	agentLiveSources = func(context.Context) []string { return []string{bad1, bad2} }
 	t.Cleanup(func() { agentLiveSources = old })
 
 	err := runAgentCmdErr(t, channelsCmd)
@@ -428,7 +428,7 @@ func TestDisplaySourceLeavesLocalPathsUnchanged(t *testing.T) {
 // real unreachable http(s) source.
 func loadedLiveTV(t *testing.T) *provider.LiveTV {
 	t.Helper()
-	p := agentLiveTV(agentLiveSources())
+	p := agentLiveTV(agentLiveSources(context.Background()))
 	if err := p.LoadContext(context.Background()); err != nil {
 		t.Fatalf("LoadContext: %v", err)
 	}

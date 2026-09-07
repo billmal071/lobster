@@ -22,7 +22,10 @@ var (
 var agentLiveTV = func(sources []string) *provider.LiveTV { return provider.NewLiveTV(sources) }
 
 // agentLiveSources is the configured source list, seamed for the same reason.
-var agentLiveSources = liveTVSources
+// It takes the load's context because discovering the sources can itself
+// reach the network (the TBCPL catalog fetch), and that fetch belongs inside
+// the budget the command advertises — see liveTVSourcesContext.
+var agentLiveSources = liveTVSourcesContext
 
 var channelsCmd = &cobra.Command{
 	Use:   "channels",
@@ -50,15 +53,21 @@ func init() {
 }
 
 func channelsRun(cmd *cobra.Command, args []string) error {
-	sources := agentLiveSources()
+	// The context is created before source discovery, not after:
+	// agentLiveSources can fetch the TBCPL catalog over the network, so
+	// starting the clock afterwards would leave that fetch outside
+	// LiveLoadBudget and let the command run well past the deadline it
+	// documents.
+	ctx, cancel := context.WithTimeout(context.Background(), provider.LiveLoadBudget)
+	defer cancel()
+
+	sources := agentLiveSources(ctx)
 	if len(sources) == 0 {
 		return emitErr("not_configured", exitUsage,
 			"no live TV sources configured; add one under [live_tv] in the config, or enable the TBCPL feed")
 	}
 
 	p := agentLiveTV(sources)
-	ctx, cancel := context.WithTimeout(context.Background(), provider.LiveLoadBudget)
-	defer cancel()
 	if err := p.LoadContext(ctx); err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "%v", err)
 	}
@@ -251,5 +260,6 @@ func liveChannelRef(ch provider.Channel) (string, error) {
 		Type:   liveRefType,
 		TVGID:  ch.TVGID,
 		Source: displaySource(ch.Source),
+		SrcKey: sourceKey(ch.Source),
 	})
 }

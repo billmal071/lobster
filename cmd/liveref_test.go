@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -37,7 +40,7 @@ func usePlaylist(t *testing.T, body string) {
 		t.Fatalf("writing playlist: %v", err)
 	}
 	oldSources, oldTV := agentLiveSources, agentLiveTV
-	agentLiveSources = func() []string { return []string{path} }
+	agentLiveSources = func(context.Context) []string { return []string{path} }
 	agentLiveTV = func(sources []string) *provider.LiveTV { return provider.NewLiveTV(sources) }
 	t.Cleanup(func() { agentLiveSources, agentLiveTV = oldSources, oldTV })
 }
@@ -118,7 +121,7 @@ func stubLivePlayer(t *testing.T, played *string) {
 func useSources(t *testing.T, paths ...string) {
 	t.Helper()
 	oldSources, oldTV := agentLiveSources, agentLiveTV
-	agentLiveSources = func() []string { return paths }
+	agentLiveSources = func(context.Context) []string { return paths }
 	agentLiveTV = func(sources []string) *provider.LiveTV { return provider.NewLiveTV(sources) }
 	t.Cleanup(func() { agentLiveSources, agentLiveTV = oldSources, oldTV })
 }
@@ -141,7 +144,7 @@ func TestPlayLiveDetachWithNoSourcesIsNotConfigured(t *testing.T) {
 	t.Cleanup(func() { agentPlayerCheck = prevCheck })
 
 	oldSources := agentLiveSources
-	agentLiveSources = func() []string { return nil }
+	agentLiveSources = func(context.Context) []string { return nil }
 	t.Cleanup(func() { agentLiveSources = oldSources })
 
 	// If this ever reaches agentLiveTV, the sources check did not run first
@@ -231,7 +234,7 @@ func TestPlayLiveRejectsExplicitZeroEpisode(t *testing.T) {
 	}
 }
 
-// TestPlayLiveRejectsExplicitEmptyDownload covers "--download ''": a value
+// TestPlayLiveRejectsExplicitEmptyDownload covers "--download ”": a value
 // check (flagDownload != "") lets this through silently indistinguishable
 // from --download never having been passed at all, so live playback would
 // proceed uncaught. Passing --download at all is the usage error for a live
@@ -393,26 +396,63 @@ func TestPlayLiveDistinguishesDownPlaylistFromMissingChannel(t *testing.T) {
 // this tie, so it must still fail closed rather than silently picking one —
 // the one guarantee the narrowing step itself could quietly break.
 // TestFilterBySourceMatchesSanitizedHTTPSource exercises filterBySource with
-// a real http(s) credential-bearing source, the one configuration where a
-// sanitized-vs-raw comparison and a raw-to-raw comparison actually diverge.
-// Every live-TV test fixture elsewhere in this file uses a local temp-file
-// path, for which displaySource is the identity — so those fixtures cannot
-// tell a correct (sanitized-vs-sanitized) comparison from a regressed
-// (raw-vs-sanitized) one. This test can, and is the one that must fail if
-// filterBySource's `displaySource(ch.Source) == source` reverts to
-// `ch.Source == source`.
+// a real http(s) credential-bearing source, the one configuration where the
+// ref's stored source and the channel's raw one actually diverge. Every
+// live-TV test fixture elsewhere in this file uses a local temp-file path,
+// for which displaySource is the identity — so those fixtures cannot tell a
+// correct comparison from one that regressed to comparing raw strings. This
+// test can.
 func TestFilterBySourceMatchesSanitizedHTTPSource(t *testing.T) {
 	raw := "https://user:pass@host.example/get.php?username=alice&password=hunter2&type=m3u_plus"
-	sanitized := displaySource(raw)
-	if sanitized == raw {
+	if displaySource(raw) == raw {
 		t.Fatalf("fixture is broken: displaySource did not change %q", raw)
 	}
 
 	chs := []provider.Channel{{Name: "News HD", Source: raw}}
+	r := playRef{Source: displaySource(raw), SrcKey: sourceKey(raw)}
 
-	got := filterBySource(chs, sanitized)
+	got := filterBySource(chs, r)
 	if len(got) != 1 {
-		t.Fatalf("filterBySource(chs, sanitized) = %d channels, want 1 (raw source %q, sanitized ref source %q)", len(got), raw, sanitized)
+		t.Fatalf("filterBySource(chs, r) = %d channels, want 1 (raw source %q)", len(got), raw)
+	}
+}
+
+// TestFilterBySourceSeparatesSameEndpointCredentials is the reason a ref
+// carries src_key at all. Two Xtream subscriptions to one server differ only
+// in the query string, which displaySource strips wholesale — so both reduce
+// to the same display source. A ref minted from the first must not match a
+// channel loaded from the second: if the channel has since vanished from the
+// first playlist, matching on the shared display source would leave exactly
+// one match and resolveLiveRef would play another subscriber's stream as a
+// confident, unambiguous hit.
+func TestFilterBySourceSeparatesSameEndpointCredentials(t *testing.T) {
+	alice := "https://host.example/get.php?username=alice&password=a1&type=m3u_plus"
+	bob := "https://host.example/get.php?username=bob&password=b2&type=m3u_plus"
+	if displaySource(alice) != displaySource(bob) {
+		t.Fatalf("fixture is broken: %q and %q must share a display source", alice, bob)
+	}
+
+	chs := []provider.Channel{{Name: "News HD", TVGID: "news.hd", Source: bob}}
+	r := playRef{Title: "News HD", TVGID: "news.hd", Source: displaySource(alice), SrcKey: sourceKey(alice)}
+
+	if got := filterBySource(chs, r); len(got) != 0 {
+		t.Fatalf("filterBySource kept %d channel(s) from another subscription on the same endpoint, want 0", len(got))
+	}
+}
+
+// A ref minted before src_key existed carries only the sanitized Source.
+// It must still narrow by that, rather than silently matching every playlist.
+func TestFilterBySourceHonoursPreSrcKeyRefs(t *testing.T) {
+	raw := "https://host.example/get.php?username=alice&password=a1"
+	other := "https://elsewhere.example/playlist.m3u"
+
+	chs := []provider.Channel{
+		{Name: "News HD", Source: raw},
+		{Name: "News HD", Source: other},
+	}
+	got := filterBySource(chs, playRef{Source: displaySource(raw)})
+	if len(got) != 1 || got[0].Source != raw {
+		t.Fatalf("filterBySource(chs, legacy ref) = %+v, want the one channel from %q", got, raw)
 	}
 }
 
@@ -420,16 +460,29 @@ func TestFilterBySourceMatchesSanitizedHTTPSource(t *testing.T) {
 // refSourceInFailedSources' counterpart to the filterBySource test above: it
 // exercises the FailedSources() comparison in resolveLiveRef with a real
 // http(s) credential-bearing source, which is the only configuration where
-// comparing sanitized-to-raw and raw-to-raw actually diverge.
+// the ref's stored source and the raw one diverge.
 func TestRefSourceInFailedSourcesMatchesSanitizedHTTPSource(t *testing.T) {
 	raw := "https://user:pass@host.example/get.php?username=alice&password=hunter2&type=m3u_plus"
-	sanitized := displaySource(raw)
-	if sanitized == raw {
+	if displaySource(raw) == raw {
 		t.Fatalf("fixture is broken: displaySource did not change %q", raw)
 	}
 
-	if !refSourceInFailedSources([]string{raw}, sanitized) {
-		t.Fatalf("refSourceInFailedSources([%q], %q) = false, want true", raw, sanitized)
+	r := playRef{Source: displaySource(raw), SrcKey: sourceKey(raw)}
+	if !refSourceInFailedSources([]string{raw}, r) {
+		t.Fatalf("refSourceInFailedSources([%q], r) = false, want true", raw)
+	}
+
+	// The other subscription on the same endpoint being down says nothing
+	// about this ref's playlist: reporting it as down would send the caller
+	// to retry a playlist that never failed.
+	bob := "https://host.example/get.php?username=bob&password=b2&type=m3u_plus"
+	if refSourceInFailedSources([]string{bob}, r) {
+		t.Fatalf("refSourceInFailedSources([%q], r) = true for a different subscription on the same endpoint", bob)
+	}
+
+	// A pre-src_key ref still matches on the sanitized source alone.
+	if !refSourceInFailedSources([]string{raw}, playRef{Source: displaySource(raw)}) {
+		t.Fatal("a ref minted before src_key existed must still match its failed source")
 	}
 }
 
@@ -447,5 +500,64 @@ func TestPlayLiveAmbiguousMatchRefusesEvenAfterTitleNarrowing(t *testing.T) {
 	assertErrCode(t, "ambiguous_channel")
 	if played != "" {
 		t.Fatal("a tvg-id AND title collision must not play anything")
+	}
+}
+
+// TestPlayLiveRefRefusesChannelFromAnotherSubscriptionOnTheSameEndpoint is
+// the end-to-end replay of the collision src_key exists to close, over real
+// (loopback) http sources rather than the temp-file paths every other fixture
+// here uses — a file path has no query string, so it cannot express two
+// sources that differ only in their credentials.
+//
+// Both sources are the same Xtream endpoint with different subscriber
+// credentials, so they share a display source. The ref is minted from
+// alice's playlist; by the time it is replayed the channel is gone from
+// alice's playlist and only bob's copy remains. Matching on the display
+// source would leave exactly one candidate and play bob's stream as a
+// confident hit. It must instead report the channel as gone.
+func TestPlayLiveRefRefusesChannelFromAnotherSubscriptionOnTheSameEndpoint(t *testing.T) {
+	const withChannel = "#EXTM3U\n#EXTINF:-1 tvg-id=\"news.hd\",News HD\nhttp://example.invalid/news.m3u8\n"
+	const withoutChannel = "#EXTM3U\n#EXTINF:-1 tvg-id=\"other.hd\",Other HD\nhttp://example.invalid/other.m3u8\n"
+
+	// aliceHasChannel flips after the ref is minted: the channel leaves
+	// alice's playlist, which is what makes bob's copy the only candidate.
+	aliceHasChannel := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("username") == "alice" && !aliceHasChannel {
+			_, _ = io.WriteString(w, withoutChannel)
+			return
+		}
+		_, _ = io.WriteString(w, withChannel)
+	}))
+	t.Cleanup(srv.Close)
+
+	alice := srv.URL + "/get.php?username=alice&password=a1&type=m3u_plus"
+	bob := srv.URL + "/get.php?username=bob&password=b2&type=m3u_plus"
+	if displaySource(alice) != displaySource(bob) {
+		t.Fatalf("fixture is broken: %q and %q must share a display source", alice, bob)
+	}
+
+	p := provider.NewLiveTV([]string{alice})
+	if err := p.LoadContext(context.Background()); err != nil {
+		t.Fatalf("loading alice's playlist: %v", err)
+	}
+	chs := p.AllChannels()
+	if len(chs) != 1 {
+		t.Fatalf("fixture is broken: alice's playlist has %d channels, want 1", len(chs))
+	}
+	ref, err := liveChannelRef(chs[0])
+	if err != nil {
+		t.Fatalf("encoding ref: %v", err)
+	}
+
+	aliceHasChannel = false
+	useSources(t, alice, bob)
+	var played string
+	stubLivePlayer(t, &played)
+
+	err = runAgentCmdErr(t, playCmd, "--ref", ref)
+	assertExit(t, err, exitNoResults)
+	if played != "" {
+		t.Fatalf("played %q from another subscription on the same endpoint; the channel is gone from the ref's own playlist", played)
 	}
 }

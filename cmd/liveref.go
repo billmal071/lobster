@@ -56,17 +56,26 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 			"%s is not installed or not on PATH", name)
 	}
 
-	// Checked before the --detach fork: it is a pure config read (no
-	// network, no playlist load), so it costs nothing to do early, and doing
-	// it late is wrong. With no live sources configured, forking first would
-	// have the child exit 1 with not_configured, the parent's liveness wait
-	// see it die immediately, and playDetached report exit 3
-	// (providers_failed) naming a log file — contradicting the documented
-	// contract (README.md, skills/lobster-play/SKILL.md) that not_configured
-	// at exit 1 means "tell the user to configure a source", not "retry
-	// later". Mirrors the same ordering in cmd/play.go for the non-live path
-	// (the base/season-episode checks before its own --detach dispatch).
-	sources := agentLiveSources()
+	// The sources are discovered before the --detach fork. Discovering them
+	// is cheap beside loading them (config, plus a TBCPL catalog fetch that
+	// is usually a warm cache read), and doing it late is wrong: with no live
+	// sources configured, forking first would have the child exit 1 with
+	// not_configured, the parent's liveness wait see it die immediately, and
+	// playDetached report exit 3 (providers_failed) naming a log file —
+	// contradicting the documented contract (README.md,
+	// skills/lobster-play/SKILL.md) that not_configured at exit 1 means "tell
+	// the user to configure a source", not "retry later". Mirrors the same
+	// ordering in cmd/play.go for the non-live path (the base/season-episode
+	// checks before its own --detach dispatch).
+	//
+	// The context is created first so that catalog fetch is bounded by the
+	// same budget as the playlist load below, rather than running unmeasured
+	// ahead of it. cmd/channels.go makes the same ordering choice, for the
+	// same reason.
+	ctx, cancel := context.WithTimeout(context.Background(), provider.LiveLoadBudget)
+	defer cancel()
+
+	sources := agentLiveSources(ctx)
 	if len(sources) == 0 {
 		return emitErr("not_configured", exitUsage,
 			"no live TV sources configured; add one under [live_tv] in the config, or enable the TBCPL feed")
@@ -82,8 +91,6 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 	}
 
 	p := agentLiveTV(sources)
-	ctx, cancel := context.WithTimeout(context.Background(), provider.LiveLoadBudget)
-	defer cancel()
 	if err := p.LoadContext(ctx); err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "%v", err)
 	}
@@ -108,14 +115,13 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 // The matching rule: tvg-id when present; if that yields more than one
 // channel, narrow by exact folded Title; otherwise match by exact folded
 // Title directly. Source narrows throughout — but not via ChannelKey.Source:
-// r.Source is the ref's *sanitized* (displaySource'd) value, while
-// provider.Channel.Source is raw, so passing r.Source into Lookup's
-// ChannelKey would compare a sanitized string against a raw one and never
-// match, silently disabling Source narrowing for every ref (see
-// liveChannelRef, cmd/channels.go). Instead Lookup is asked by TVGID/Name
-// alone and the result is narrowed here by comparing displaySource(ch.Source)
-// against r.Source — both sides sanitized. Filtering can only shrink the
-// match set, so a source mismatch still yields either the right channel or
+// a ref does not carry the raw source string at all (it would carry the
+// subscriber's Xtream credentials on stdout), so there is nothing to pass
+// into Lookup's ChannelKey that could match provider.Channel.Source. Instead
+// Lookup is asked by TVGID/Name alone and the result is narrowed here by
+// sourceKey, the digest both sides can be reduced to (see liveChannelRef,
+// cmd/channels.go). Filtering can only shrink the match set, so a source
+// mismatch still yields either the right channel or
 // ambiguity/absence, never a wrong pick. It fails closed if the result is
 // zero or still more than one — an ID is never authoritative on its own:
 // uniqueID (internal/provider/livetv.go:221-232) disambiguates by playlist
@@ -135,7 +141,7 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 // tvg-id and title remain genuinely ambiguous and still refuse below.
 func resolveLiveRef(p *provider.LiveTV, r playRef) (provider.Channel, error) {
 	matches := p.Lookup(provider.ChannelKey{TVGID: r.TVGID, Name: r.Title})
-	matches = filterBySource(matches, r.Source)
+	matches = filterBySource(matches, r)
 
 	if r.TVGID != "" && len(matches) > 1 {
 		matches = filterByExactTitle(matches, r.Title)
@@ -159,17 +165,16 @@ func resolveLiveRef(p *provider.LiveTV, r playRef) (provider.Channel, error) {
 	// No match. Distinguish "the channel is gone" from "its playlist is down":
 	// they call for completely different advice.
 	//
-	// r.Source is already sanitized (liveChannelRef stores displaySource(ch.
-	// Source)), while FailedSources() returns raw source strings, so each
-	// failed source must be sanitized here before the comparison. Comparing
-	// f == r.Source directly is only wrong for http(s) sources — displaySource
-	// is the identity for a local file path, so that case is indistinguishable
-	// from the fix under test fixtures that only use temp-file playlists.
-	// For a real credentialed Xtream source (an http(s) URL), skipping the
-	// sanitization would regress every down-playlist ref to "no_results" (exit
-	// 2, "the channel does not exist") when "providers_failed" (exit 3,
-	// "retry") is correct.
-	if refSourceInFailedSources(p.FailedSources(), r.Source) {
+	// FailedSources() returns raw source strings while the ref carries only
+	// their digest, so each failed source is reduced through sourceKey before
+	// the comparison rather than compared as a string. Comparing f == r.Source
+	// directly is only wrong for http(s) sources — displaySource is the
+	// identity for a local file path, so that case is indistinguishable from
+	// the fix under test fixtures that only use temp-file playlists. For a real
+	// credentialed Xtream source (an http(s) URL), skipping this would regress
+	// every down-playlist ref to "no_results" (exit 2, "the channel does not
+	// exist") when "providers_failed" (exit 3, "retry") is correct.
+	if refSourceInFailedSources(p.FailedSources(), r) {
 		return provider.Channel{}, emitErr("providers_failed", exitProvidersFailed,
 			"%q could not be matched: its playlist (%s) failed to load; the channel may still exist",
 			r.Title, r.Source)
@@ -178,39 +183,64 @@ func resolveLiveRef(p *provider.LiveTV, r playRef) (provider.Channel, error) {
 		"%q is no longer in your playlists; re-run 'lobster channels' to get a current ref", r.Title)
 }
 
-// refSourceInFailedSources reports whether refSource (a ref's already-
-// sanitized Source, per liveChannelRef) matches one of the raw source strings
-// FailedSources() returns. Pulled out of resolveLiveRef so the sanitized-vs-
-// raw comparison can be unit-tested directly with an http(s) source, without
-// needing a real failing provider to reach it — every live-TV test fixture
-// otherwise uses temp-file paths, for which displaySource is the identity and
-// so cannot distinguish this comparison from a raw-to-raw one.
-func refSourceInFailedSources(failed []string, refSource string) bool {
+// refSourceInFailedSources reports whether r's playlist is one of the raw
+// source strings FailedSources() returns. Pulled out of resolveLiveRef so the
+// digest-vs-raw comparison can be unit-tested directly with an http(s)
+// source, without needing a real failing provider to reach it — every live-TV
+// test fixture otherwise uses temp-file paths, for which the raw string and
+// its display form coincide, and so cannot distinguish this comparison from a
+// raw-to-raw one.
+//
+// A ref minted before src_key existed carries only the sanitized Source, so
+// that older form is still honoured: it cannot tell two subscriptions on one
+// server apart, but the alternative is telling the user their channel no
+// longer exists when their playlist is merely down. Same-server collisions
+// were the pre-src_key behaviour throughout; refusing to read old refs at all
+// would be a larger regression than the one this narrows.
+func refSourceInFailedSources(failed []string, r playRef) bool {
 	for _, f := range failed {
-		if displaySource(f) == refSource {
+		if r.SrcKey != "" {
+			if sourceKey(f) == r.SrcKey {
+				return true
+			}
+			continue
+		}
+		if r.Source != "" && displaySource(f) == r.Source {
 			return true
 		}
 	}
 	return false
 }
 
-// filterBySource narrows chs to those whose sanitized Source matches source.
-// source is empty for refs minted before Source was recorded at all, and
-// "" means "do not narrow" rather than "match channels with no source" —
-// consistent with ChannelKey.Source's own empty-means-unset convention.
-// Both sides of the comparison go through displaySource: chs carry the raw
-// provider.Channel.Source, while a ref's Source is already sanitized (see
-// liveChannelRef), so comparing them raw-to-raw or sanitized-to-raw only
-// mismatches for http(s) sources — displaySource is the identity for a local
-// file path, which is exactly why a fixture built only from temp-file
-// playlists cannot detect this comparison regressing to raw.
-func filterBySource(chs []provider.Channel, source string) []provider.Channel {
-	if source == "" {
+// filterBySource narrows chs to those from the playlist r was minted from.
+//
+// The comparison is on sourceKey, not on the ref's display Source: two Xtream
+// subscriptions to one server share a display Source (displaySource drops the
+// query string carrying their credentials), so narrowing by it would let a
+// ref from one subscription match a channel from the other — see sourceKey
+// (cmd/channels.go) for why that is the bug this narrowing exists to prevent.
+// The channel's raw Source is reduced through the same function, so both
+// sides are digests.
+//
+// A ref carrying neither key nor source is not narrowed at all, rather than
+// narrowed to channels with no source — consistent with ChannelKey.Source's
+// own empty-means-unset convention. A ref minted before src_key existed still
+// narrows by display Source: weaker (it cannot separate two subscriptions on
+// one server) but strictly better than not narrowing, and it is the exact
+// behaviour those refs were minted under.
+func filterBySource(chs []provider.Channel, r playRef) []provider.Channel {
+	if r.SrcKey == "" && r.Source == "" {
 		return chs
 	}
 	out := make([]provider.Channel, 0, len(chs))
 	for _, ch := range chs {
-		if displaySource(ch.Source) == source {
+		if r.SrcKey != "" {
+			if sourceKey(ch.Source) == r.SrcKey {
+				out = append(out, ch)
+			}
+			continue
+		}
+		if displaySource(ch.Source) == r.Source {
 			out = append(out, ch)
 		}
 	}

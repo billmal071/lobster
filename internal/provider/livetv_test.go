@@ -288,6 +288,33 @@ func TestLoadContextAbortsOnDeadlineAndReportsFailedSource(t *testing.T) {
 	}
 }
 
+// FailedSources hands out provider state, so it must hand out a copy: a
+// caller that sorts or rewrites the slice it gets — reasonable enough for a
+// list it is about to print — would otherwise be editing the provider's own
+// record, which cmd/liveref.go reads again afterwards to tell "the channel is
+// gone" from "its playlist is down".
+func TestFailedSourcesReturnsACopy(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good.m3u")
+	writeFile(t, good, "#EXTM3U\n#EXTINF:-1,Alpha\nhttp://example.invalid/1.m3u8\n")
+	bad := filepath.Join(dir, "nope.m3u")
+
+	p := NewLiveTV([]string{good, bad})
+	if err := p.LoadContext(context.Background()); err != nil {
+		t.Fatalf("LoadContext: %v", err)
+	}
+
+	got := p.FailedSources()
+	if len(got) != 1 {
+		t.Fatalf("FailedSources() = %v, want one entry", got)
+	}
+	got[0] = "clobbered"
+
+	if again := p.FailedSources(); len(again) != 1 || again[0] != bad {
+		t.Fatalf("FailedSources() = %v after a caller wrote to its result, want [%s]", again, bad)
+	}
+}
+
 func TestLoadContextAllSourcesFailingIsAnError(t *testing.T) {
 	dir := t.TempDir()
 	p := NewLiveTV([]string{filepath.Join(dir, "nope1.m3u"), filepath.Join(dir, "nope2.m3u")})

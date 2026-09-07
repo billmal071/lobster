@@ -49,14 +49,23 @@ import (
 // result is zero or still more than one channel, rather than falling through
 // to a search. Base is meaningless here (there is no provider chain to start
 // a search on) and is left empty.
+//
+// Source and SrcKey are two views of one playlist and are not
+// interchangeable. Source is sanitized for a human to read and is what error
+// messages print; it deliberately discards the whole query string, which is
+// where an Xtream source keeps its credentials — so two subscriptions on the
+// same server collapse to one Source. SrcKey is the value matching compares:
+// a digest of the raw source, so those two subscriptions stay distinct, while
+// the digest itself discloses nothing. See sourceKey (cmd/channels.go).
 type playRef struct {
 	ID     string `json:"id"`
 	Title  string `json:"title"`
 	Year   string `json:"year,omitempty"`
 	Type   string `json:"type"`
 	Base   string `json:"base,omitempty"`
-	TVGID  string `json:"tvg_id,omitempty"` // live only: stable upstream id, "" when the playlist omits it
-	Source string `json:"source,omitempty"` // live only: the playlist the channel was loaded from
+	TVGID  string `json:"tvg_id,omitempty"`  // live only: stable upstream id, "" when the playlist omits it
+	Source string `json:"source,omitempty"`  // live only: the playlist the channel was loaded from, sanitized for display
+	SrcKey string `json:"src_key,omitempty"` // live only: collision-safe digest of the raw playlist source; the value matching compares
 }
 
 // liveRefType is the playRef.Type of a live channel. Lowercase and exact:

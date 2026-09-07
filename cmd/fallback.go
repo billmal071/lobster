@@ -26,8 +26,27 @@ var (
 	tbcplCatVal  *tbcpl.Catalog
 )
 
-// tbcplCatalog loads the TBCPL catalog once per process, or nil if disabled.
-func tbcplCatalog() *tbcpl.Catalog {
+// tbcplCatalog loads the TBCPL catalog once per process, or nil if disabled,
+// under no deadline of its own. The interactive paths (newProvider,
+// fallbackProviders) have no budget to honour and keep using it.
+func tbcplCatalog() *tbcpl.Catalog { return tbcplCatalogContext(context.Background()) }
+
+// tbcplCatalogContext is tbcplCatalog bounded by ctx.
+//
+// The catalog load can reach the network (Client.LoadMerged fetches when the
+// cache is cold or a region is configured), so on an agent-facing path it has
+// to sit inside the same budget as the playlist load it feeds. Otherwise
+// "channels" can block for the catalog fetch's own timeout and then a further
+// LiveLoadBudget, overshooting the deadline the command advertises — with no
+// output and no error to explain the wait.
+//
+// The sync.Once is shared with tbcplCatalog: whichever call arrives first
+// decides the deadline for the process, and a cancelled load caches nil (a
+// catalog that could not be fetched), which is the same outcome as the feed
+// being disabled. That is the intended behaviour rather than a compromise:
+// re-fetching per call would put an unbounded network fetch behind every
+// command that consults the catalog.
+func tbcplCatalogContext(ctx context.Context) *tbcpl.Catalog {
 	tbcplCatOnce.Do(func() {
 		if cfg == nil || !cfg.TBCPLFeed {
 			return
@@ -41,18 +60,25 @@ func tbcplCatalog() *tbcpl.Catalog {
 		if cfg != nil {
 			region = cfg.TBCPLRegion
 		}
-		tbcplCatVal = cl.LoadMerged(context.Background(), region)
+		tbcplCatVal = cl.LoadMerged(ctx, region)
 	})
 	return tbcplCatVal
 }
 
-// liveTVSources returns configured IPTV sources plus TBCPL live-tv playlists.
-func liveTVSources() []string {
+// liveTVSources returns configured IPTV sources plus TBCPL live-tv playlists,
+// with the catalog fetch unbounded. The TUI is its only caller.
+func liveTVSources() []string { return liveTVSourcesContext(context.Background()) }
+
+// liveTVSourcesContext is liveTVSources with the catalog fetch bounded by
+// ctx. The agent-facing commands call this one, with the same context that
+// bounds the playlist load, so the deadline they advertise covers discovering
+// the sources as well as loading them.
+func liveTVSourcesContext(ctx context.Context) []string {
 	var sources []string
 	if cfg != nil {
 		sources = cfg.LiveTV.Sources()
 	}
-	cat := tbcplCatalog()
+	cat := tbcplCatalogContext(ctx)
 	if cat == nil {
 		return sources
 	}

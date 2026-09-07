@@ -27,7 +27,7 @@ never wait for input.
 
 ### 1. Find candidates
 
-```
+```sh
 lobster find "the matrix" --limit 10
 ```
 
@@ -50,7 +50,7 @@ result looks obviously right. List the titles and years and wait for an answer.
 
 ### 3. Play the one they chose
 
-```
+```sh
 lobster play --ref "eyJpZCI6..." --detach
 ```
 
@@ -95,7 +95,7 @@ automatically, so you normally don't need to pass `--base` yourself. Pass
 
 A TV ref needs both `--season` and `--episode`. Get the numbers first:
 
-```
+```sh
 lobster episodes --ref "eyJpZCI6..." --season 2
 ```
 
@@ -106,7 +106,7 @@ lobster episodes --ref "eyJpZCI6..." --season 2
 
 Then:
 
-```
+```sh
 lobster play --ref "eyJpZCI6..." --season 2 --episode 3 --detach
 ```
 
@@ -160,7 +160,7 @@ that log rather than running `doctor` — the cause is in it.
 
 With no flags it lists categories and how many channels each holds:
 
-```
+```sh
 lobster channels
 ```
 
@@ -177,7 +177,7 @@ Pass `--category` (case-insensitive) or `--search` (substring match on name,
 case-insensitive) to list matching channels instead, each with an opaque
 `ref`:
 
-```
+```sh
 lobster channels --category news --limit 10
 lobster channels --search "bbc"
 ```
@@ -199,7 +199,7 @@ failure rather than genuinely absent.
 
 Play a channel ref exactly like a film ref:
 
-```
+```sh
 lobster play --ref "eyJpZCI6..." --detach
 ```
 
