@@ -29,7 +29,11 @@ func TestCarriesCredentials(t *testing.T) {
 		want bool
 	}{
 		{"http://host.example/get.php?username=alice&password=a1", true},
-		{"http://user:pass@host.example/list.m3u", true},
+		// Userinfo without a password: carriesCredentials keys on
+		// u.User != nil, so this covers the same branch as a
+		// username-and-password userinfo would, without planting a
+		// password-shaped string in the tree for secret scanners to flag.
+		{"http://alice@host.example/list.m3u", true},
 		{"http://host.example/list.m3u?token=abc", true},
 		{"http://host.example/get.php?USERNAME=alice", true}, // key match is case-insensitive
 		{"http://host.example/get.php?type=m3u_plus&output=m3u8", false},
