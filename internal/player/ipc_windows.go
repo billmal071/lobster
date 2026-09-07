@@ -13,6 +13,10 @@ import (
 type ipcSocket struct {
 	path    string
 	cleanup func()
+	// sandboxVisible mirrors the Unix field so tracking code is portable.
+	// Named pipes live in a machine-global namespace, so there is no
+	// confinement to lose here.
+	sandboxVisible bool
 }
 
 // newIPCSocket creates a randomized named pipe path for mpv IPC on Windows.
@@ -23,8 +27,9 @@ func newIPCSocket() (*ipcSocket, error) {
 	}
 	name := fmt.Sprintf(`\\.\pipe\lobster-mpv-%x`, buf)
 	return &ipcSocket{
-		path:    name,
-		cleanup: func() {}, // Named pipes are cleaned up automatically
+		path:           name,
+		cleanup:        func() {}, // Named pipes are cleaned up automatically
+		sandboxVisible: true,
 	}, nil
 }
 
@@ -42,3 +47,7 @@ func (s *ipcSocket) dial() (io.ReadWriteCloser, error) {
 	}
 	return f, nil
 }
+
+// ipcSandboxHint has nothing to add on Windows: a named pipe is reachable from
+// anywhere on the machine.
+func ipcSandboxHint(*ipcSocket) string { return "" }

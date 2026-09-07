@@ -218,8 +218,10 @@ func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, floa
 	conn, err := dialWithRetry(ipc, stop)
 	if err != nil {
 		// Playback proceeds without tracking; say so instead of silently
-		// recording the watch as position 0.
-		fmt.Fprintf(os.Stderr, "mpv ipc: position tracking unavailable: %v\n", err)
+		// recording the watch as position 0. Name the sandbox case when it
+		// applies: "no connection within 30s" on its own sends the reader
+		// looking for a network problem that is not there.
+		fmt.Fprintf(os.Stderr, "mpv ipc: position tracking unavailable: %v%s\n", err, ipcSandboxHint(ipc))
 		return 0, 0, false
 	}
 	defer conn.Close()
