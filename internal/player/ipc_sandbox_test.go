@@ -156,3 +156,54 @@ func TestIPCCleanupRemovesTheSocketDirectory(t *testing.T) {
 		t.Errorf("cleanup left the socket directory %q behind (err=%v); unlike /tmp, nothing under $HOME is reclaimed by the system", dir, err)
 	}
 }
+
+// $TMPDIR can be arbitrarily deep, and on macOS it already starts at
+// /var/folders/xx/yy. If every candidate including it overflows sun_path,
+// newIPCSocket must still produce a socket: an error here propagates out of
+// Play and costs the user their playback, where before this code chose
+// directories at all a too-long path only cost position tracking.
+func TestNewIPCSocketStillSucceedsWhenHomeAndTmpdirAreBothTooLong(t *testing.T) {
+	home := shortHome(t)
+
+	deep := home
+	for len(deep) < maxSocketPath {
+		deep = filepath.Join(deep, "aaaaaaaaaaaaaaaaaaaa")
+	}
+	if err := os.MkdirAll(filepath.Join(deep, "Videos"), 0o755); err != nil {
+		t.Fatalf("creating deep fake home: %v", err)
+	}
+	t.Setenv("HOME", deep)
+	t.Setenv("TMPDIR", deep)
+
+	ipc, err := newIPCSocket()
+	if err != nil {
+		t.Fatalf("newIPCSocket refused to produce a socket: %v — MPV.Play returns this, so playback is refused entirely", err)
+	}
+	t.Cleanup(ipc.cleanup)
+
+	if len(ipc.path) > maxSocketPath {
+		t.Fatalf("socket path %q is %d bytes, over the %d-byte sun_path limit", ipc.path, len(ipc.path), maxSocketPath)
+	}
+	// And it must be a path mpv can actually bind, not merely short.
+	ln, err := net.Listen("unix", ipc.path)
+	if err != nil {
+		t.Fatalf("binding the fallback socket at %q: %v", ipc.path, err)
+	}
+	_ = ln.Close()
+	if ipc.sandboxVisible {
+		t.Errorf("newIPCSocket claimed %q is sandbox-visible, but it had to leave $HOME entirely", ipc.path)
+	}
+}
+
+// The hint has to name the length problem rather than blame confinement, which
+// would send the reader looking in the wrong place.
+func TestIPCSandboxHintNamesTheLengthProblem(t *testing.T) {
+	long := filepath.Join("/tmp", strings.Repeat("a", maxSocketPath), socketName)
+	hint := ipcSandboxHint(&ipcSocket{path: long})
+	if !strings.Contains(hint, "path limit") {
+		t.Errorf("the hint does not name the socket path limit: %q", hint)
+	}
+	if strings.Contains(hint, "snap") {
+		t.Errorf("the hint blames confinement for what is a path-length failure: %q", hint)
+	}
+}

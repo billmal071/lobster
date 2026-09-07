@@ -310,3 +310,67 @@ func TestMakeAcceptsASymlinkThatStaysInsideHome(t *testing.T) {
 		t.Errorf("Make resolved to %q (rel %q); the symlinked base inside $HOME should have been used", dir, rel)
 	}
 }
+
+// The pathname check that proposes a base can be stale the moment it returns:
+// another process can swap a validated component for an outward symlink before
+// the directory is created. Creation is therefore root-relative, which turns
+// that race into a failed candidate rather than an escape.
+//
+// The window is a few syscalls wide in production, far too narrow to hit by
+// running the two concurrently and hoping — a version built on os.MkdirAll
+// survives that test comfortably, which would make it worthless. So the test
+// widens the window deterministically: the swap happens inside the window, via
+// the hook Make calls between resolving a base and creating anything in it.
+func TestMakeNeverCreatesOutsideHomeWhenTheBaseIsSwappedAfterValidation(t *testing.T) {
+	home := fakeHome(t)
+	outside := t.TempDir()
+	videos := filepath.Join(home, "Videos")
+
+	prev := afterBaseResolved
+	t.Cleanup(func() { afterBaseResolved = prev })
+	swapped := false
+	afterBaseResolved = func(base string) {
+		if base != "Videos" || swapped {
+			return
+		}
+		// Videos has just been validated as a real directory inside $HOME.
+		// Replace it with a link out before anything is created in it.
+		if err := os.RemoveAll(videos); err != nil {
+			t.Errorf("removing %q: %v", videos, err)
+			return
+		}
+		if err := os.Symlink(outside, videos); err != nil {
+			t.Skipf("symlinks unavailable on this platform: %v", err)
+		}
+		swapped = true
+	}
+
+	dir, visible, err := Make("probe", time.Hour, nil)
+	if err != nil {
+		t.Fatalf("Make: %v", err)
+	}
+	t.Cleanup(func() { Remove(dir) })
+
+	if !swapped {
+		t.Fatal("the hook never fired, so the window was never opened and this test proves nothing")
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatalf("reading %q: %v", outside, err)
+	}
+	if len(entries) != 0 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("Make created %v outside the home directory by following a symlink swapped in after the base was validated", names)
+	}
+	// Having refused the swapped base, it must still have produced something
+	// usable from a later one rather than giving up.
+	if rel := resolvedRel(t, home, dir); strings.HasPrefix(rel, "..") {
+		t.Errorf("Make returned %q, which resolves outside the home directory (rel %q)", dir, rel)
+	}
+	if !visible {
+		t.Errorf("Make fell back to the temp dir; another base under $HOME was still usable")
+	}
+}
