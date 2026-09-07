@@ -24,6 +24,11 @@ type Session struct {
 	// LastPosition is a default rather than a measurement and must not be
 	// persisted over the episode's existing resume point.
 	LastPositionUnknown bool
+	// LastPositionUntracked carries player.PlayResult.PositionUntracked from
+	// the most recent play: the player has no position tracking at all, so the
+	// watch is real but LastPosition is meaningless. The episode is recorded,
+	// keeping whatever position history already holds for it.
+	LastPositionUntracked bool
 }
 
 // New creates a Session positioned at the given season and episode.
