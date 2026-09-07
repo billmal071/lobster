@@ -50,7 +50,8 @@ func NewLiveTV(sources []string) *LiveTV {
 // Pages, so we retry capped at TLS 1.2.
 func liveTVHTTPClient(maxVer uint16) *http.Client {
 	return &http.Client{
-		Timeout: 60 * time.Second, // a slow CDN serving a ~3 MB playlist
+		Timeout:       60 * time.Second, // a slow CDN serving a ~3 MB playlist
+		CheckRedirect: liveTVCheckRedirect,
 		Transport: &http.Transport{
 			Proxy:               http.ProxyFromEnvironment,
 			TLSHandshakeTimeout: 12 * time.Second,
@@ -65,6 +66,10 @@ func liveTVHTTPClient(maxVer uint16) *http.Client {
 // On an http error it retries once with the TLS 1.2-capped fallback client.
 func (p *LiveTV) fetch(ctx context.Context, src string) ([]byte, error) {
 	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
+		// Once per source, before either attempt: httpGet runs twice for the
+		// same URL when the TLS-1.2 fallback fires.
+		warnIfCleartextCredentials(src)
+
 		data, err := p.httpGet(ctx, p.client, src)
 		// The TLS 1.2 retry re-runs the whole GET, so it is attempted only
 		// when the budget still allows it. Without this check a single
