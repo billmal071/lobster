@@ -1,0 +1,37 @@
+# GitGuardian configuration (ggshield).
+#
+# The live TV tests build synthetic Xtream playlist URLs of the shape the real
+# provider uses — "<server>/get.php?username=...&password=..." — because that
+# shape is the subject under test, not incidental decoration:
+#
+#   - displaySource strips the entire query string, and the assertion that it
+#     did so is only meaningful against a URL that carries credentials there.
+#   - sourceKey exists precisely because two subscriptions to one server
+#     differ *only* in those query parameters. A fixture without them cannot
+#     express the collision the function was written to break.
+#
+# The values below are invented and point at reserved or loopback hosts
+# (host.example, RFC 2606) that resolve to nothing. Nothing here is a
+# credential to any real service, and there is nothing to rotate.
+#
+# Listed as individual matches rather than as ignored_paths for those test
+# files: a path ignore would also hide a *real* credential pasted into them
+# later, which is exactly the accident secret scanning exists to catch. Only
+# these known-synthetic values are excused; every other match in those files
+# is still reported.
+#
+# Note: this file configures ggshield (the CLI). The GitGuardian GitHub App
+# reads its own dashboard settings instead, so the corresponding dashboard
+# incidents must be dismissed there once as well.
+version: 2
+
+secret:
+  ignored_matches:
+    - name: live TV test fixture — alice/a1 (cmd/liveref_test.go, cmd/srckey_test.go)
+      match: a1
+    - name: live TV test fixture — bob/b2 (cmd/liveref_test.go)
+      match: b2
+    - name: live TV test fixture — alice/hunter2 (cmd/liveref_test.go, cmd/srckey_test.go)
+      match: hunter2
+    - name: live TV test fixture — user:pass userinfo (cmd/liveref_test.go)
+      match: pass

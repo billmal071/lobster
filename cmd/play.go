@@ -160,7 +160,17 @@ func playRun(cmd *cobra.Command, args []string) error {
 		return emitErr("bad_ref", 1, "%v", err)
 	}
 
-	sel := r.searchResult()
+	// Live refs take a completely separate path: they resolve against the
+	// playlists, never through resolveAndPlay's title search. This must
+	// precede searchResult, which now refuses a live ref outright.
+	if r.Type == liveRefType {
+		return playLiveRef(cmd, r)
+	}
+
+	sel, err := r.searchResult()
+	if err != nil {
+		return emitErr("bad_ref", 1, "%v", err)
+	}
 	if sel.Type == media.TV && (flagSeason <= 0 || flagEpisode <= 0) {
 		return emitErr("season_episode_required", 1,
 			"%q is a series: pass --season and --episode (list them with 'lobster episodes --ref ...')", r.Title)

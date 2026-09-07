@@ -38,13 +38,39 @@ import (
 // (resolveAndPlay, cmd/search.go) and episodes does the same via seasonSource
 // (cmd/episodes.go) when the base's provider cannot enumerate the ID. The base
 // only decides where that search starts.
+//
+// A live ref's identity story is different in kind, not degree. It is never
+// re-searched by title: play re-matches it against freshly loaded playlists
+// on every play, by TVGID when present; if that tvg-id is shared by more than
+// one channel (real playlists are not always disciplined about tvg-id
+// uniqueness), the result is narrowed further by exact folded Title; when no
+// tvg-id is present at all, matching falls back to exact folded Title
+// directly. Source narrows the match throughout. It fails closed if the
+// result is zero or still more than one channel, rather than falling through
+// to a search. Base is meaningless here (there is no provider chain to start
+// a search on) and is left empty.
+//
+// Source and SrcKey are two views of one playlist and are not
+// interchangeable. Source is sanitized for a human to read and is what error
+// messages print; it deliberately discards the whole query string, which is
+// where an Xtream source keeps its credentials — so two subscriptions on the
+// same server collapse to one Source. SrcKey is the value matching compares:
+// a digest of the raw source, so those two subscriptions stay distinct, while
+// the digest itself discloses nothing. See sourceKey (cmd/channels.go).
 type playRef struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-	Year  string `json:"year,omitempty"`
-	Type  string `json:"type"`
-	Base  string `json:"base,omitempty"`
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Year   string `json:"year,omitempty"`
+	Type   string `json:"type"`
+	Base   string `json:"base,omitempty"`
+	TVGID  string `json:"tvg_id,omitempty"`  // live only: stable upstream id, "" when the playlist omits it
+	Source string `json:"source,omitempty"`  // live only: the playlist the channel was loaded from, sanitized for display
+	SrcKey string `json:"src_key,omitempty"` // live only: collision-safe digest of the raw playlist source; the value matching compares
 }
+
+// liveRefType is the playRef.Type of a live channel. Lowercase and exact:
+// a ref is machine-produced and opaque, so any other spelling is corruption.
+const liveRefType = "live"
 
 // encodeRef renders a ref as a base64url token. Opaque by contract, but plain
 // base64 so it can be decoded by hand during support.
@@ -73,30 +99,36 @@ func decodeRef(s string) (playRef, error) {
 		return playRef{}, fmt.Errorf("ref is missing id or title")
 	}
 	// Type decides whether play requires --season/--episode, and searchResult
-	// maps everything that is not "tv" onto media.Movie. So an empty or
-	// misspelled type does not fail: a series reads as a film, the
+	// maps everything that is not "tv" or "live" onto media.Movie. So an empty
+	// or misspelled type does not fail: a series reads as a film, the
 	// season/episode gate in playRun does not fire, and resolveAndPlay is
 	// entered with season 0 — the interactive-picker path these commands exist
-	// to avoid. Only the two canonical MediaType.String() values are accepted,
-	// and exactly as encodeRef writes them: a ref is machine-produced and
-	// opaque, so "TV" is a corrupted token, not a human typing.
-	if r.Type != media.Movie.String() && r.Type != media.TV.String() {
-		return playRef{}, fmt.Errorf("ref has unknown type %q (want %q or %q)",
-			r.Type, media.Movie.String(), media.TV.String())
+	// to avoid. Only the two canonical MediaType.String() values and
+	// liveRefType are accepted, and exactly as encodeRef writes them: a ref is
+	// machine-produced and opaque, so "TV" is a corrupted token, not a human
+	// typing.
+	if r.Type != media.Movie.String() && r.Type != media.TV.String() && r.Type != liveRefType {
+		return playRef{}, fmt.Errorf("ref has unknown type %q (want %q, %q or %q)",
+			r.Type, media.Movie.String(), media.TV.String(), liveRefType)
 	}
 	return r, nil
 }
 
 // searchResult converts a ref back into the value the playback path expects.
-func (r playRef) searchResult() media.SearchResult {
+//
+// It refuses a live ref. media.MediaType has no Live, so a live channel could
+// only be converted by mislabelling it Movie — and resolveAndPlay re-searches
+// by title on every fallback provider, so "BBC One" would be handed to FlixHQ
+// as a title query and could play a documentary instead. play's live branch
+// runs before this function, but the refusal is what makes that property
+// independent of branch ordering.
+func (r playRef) searchResult() (media.SearchResult, error) {
+	if r.Type == liveRefType {
+		return media.SearchResult{}, fmt.Errorf("live ref %q cannot be converted to a search result", r.Title)
+	}
 	t := media.Movie
 	if r.Type == media.TV.String() {
 		t = media.TV
 	}
-	return media.SearchResult{
-		ID:    r.ID,
-		Title: r.Title,
-		Year:  r.Year,
-		Type:  t,
-	}
+	return media.SearchResult{ID: r.ID, Title: r.Title, Year: r.Year, Type: t}, nil
 }

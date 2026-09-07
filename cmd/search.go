@@ -593,10 +593,17 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	// tracked position alongside the error, and an abnormal exit (killed,
 	// crash) is exactly the watch whose resume point must not be lost. With no
 	// tracked position there is nothing to keep, and writing 0 would clobber a
-	// real position from an earlier watch of the same title — which is also
-	// why a session whose tracker never observed a position is skipped even
-	// though it exited cleanly: its result is a default, not a measurement.
-	if cfg.History && !result.PositionUnknown && (playErr == nil || result.Position > 0) {
+	// real position from an earlier watch of the same title.
+	//
+	// A result marked PositionUnknown carries a default rather than a
+	// measurement, and the two reasons for that are not the same thing. A
+	// player with no position tracking (vlc, iina, celluloid) also marks the
+	// result PositionUntracked: the watch definitely happened, so it is
+	// recorded, keeping whatever position history already holds. A tracked
+	// player that was never heard from says nothing about whether playback
+	// happened at all, so it writes nothing — even on a clean exit.
+	if cfg.History && (playErr == nil || result.Position > 0) &&
+		(!result.PositionUnknown || result.PositionUntracked) {
 		entry := media.HistoryEntry{
 			ID:       selected.ID,
 			Title:    selected.Title,
@@ -606,7 +613,11 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 			Position: result.Position,
 			Duration: result.Duration,
 		}
-		if err := history.Save(entry); err != nil {
+		save := history.Save
+		if result.PositionUntracked {
+			save = history.SaveKeepingPosition
+		}
+		if err := save(entry); err != nil {
 			debugf("saving history failed: %v", err)
 		}
 	}

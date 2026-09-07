@@ -281,6 +281,7 @@ func playCurrentEpisode(sess *playlist.Session) error {
 			sess.LastPosition = result.Position
 			sess.LastDuration = result.Duration
 			sess.LastPositionUnknown = result.PositionUnknown
+			sess.LastPositionUntracked = result.PositionUntracked
 			return nil
 		}
 
@@ -376,10 +377,12 @@ func saveHistory(sess *playlist.Session) {
 	if !cfg.History {
 		return
 	}
-	// The position tracker never observed anything for this episode, so
-	// LastPosition is 0 by default rather than by measurement. Writing it
-	// would overwrite the resume point an earlier, tracked watch recorded.
-	if sess.LastPositionUnknown {
+	// When LastPositionUnknown is set, LastPosition is 0 by default rather
+	// than by measurement, so it must never reach the episode's stored resume
+	// point. The two ways that happens are handled differently.
+	if sess.LastPositionUnknown && !sess.LastPositionUntracked {
+		// A tracked player that was never heard from: nothing here says the
+		// episode actually played, so record nothing at all.
 		debugf("skipping history save: no position was observed for this episode")
 		return
 	}
@@ -393,7 +396,13 @@ func saveHistory(sess *playlist.Session) {
 		Position: sess.LastPosition,
 		Duration: sess.LastDuration,
 	}
-	if err := history.Save(entry); err != nil {
+	save := history.Save
+	if sess.LastPositionUntracked {
+		// The player cannot report a position at all, but the watch is real:
+		// record it while keeping any position history already holds.
+		save = history.SaveKeepingPosition
+	}
+	if err := save(entry); err != nil {
 		debugf("saving history failed: %v", err)
 	}
 }
