@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -415,9 +414,4 @@ func renderHalfBlock(img image.Image, cols, rows int) string {
 	sb.WriteString("\x1b[0m")
 
 	return sb.String()
-}
-
-// TempDir returns the poster cache directory path.
-func TempDir() string {
-	return filepath.Join(os.TempDir(), "lobster-posters")
 }
