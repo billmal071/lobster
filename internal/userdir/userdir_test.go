@@ -10,15 +10,51 @@ import (
 
 // fakeHome points os.UserHomeDir at a throwaway directory containing the
 // standard Videos folder, so these tests never touch the real home directory.
+//
+// The home it hands back is reached through a symlink, mirroring macOS, where
+// $TMPDIR is /var/folders/... and resolves to /private/var/folders/... . Make
+// returns paths under the *resolved* home, so an assertion that compares them
+// against the unresolved one passes on a plain Linux home and fails on a Mac.
+// Building the difference in here means every platform exercises it.
 func fakeHome(t *testing.T) string {
 	t.Helper()
-	home := t.TempDir()
-	if err := os.Mkdir(filepath.Join(home, "Videos"), 0o755); err != nil {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(filepath.Join(real, "Videos"), 0o755); err != nil {
 		t.Fatalf("creating fake Videos dir: %v", err)
+	}
+	home := filepath.Join(base, "home")
+	if err := os.Symlink(real, home); err != nil {
+		// Windows without developer mode, say: fall back to the plain
+		// directory rather than skipping the whole suite.
+		home = real
 	}
 	t.Setenv("HOME", home)        // unix
 	t.Setenv("USERPROFILE", home) // windows
 	return home
+}
+
+// underHome reports whether path, resolved, is inside home, resolved. Comparing
+// unresolved paths is the bug this helper exists to avoid.
+func underHome(t *testing.T, home, path string) bool {
+	t.Helper()
+	return !strings.HasPrefix(resolvedRel(t, home, path), "..")
+}
+
+// inSystemTempDir reports whether path sits directly in the system temp dir.
+// os.TempDir carries a trailing separator on macOS and none on Linux, so the
+// comparison has to be cleaned as well as resolved.
+func inSystemTempDir(t *testing.T, path string) bool {
+	t.Helper()
+	tmp, err := filepath.EvalSymlinks(filepath.Clean(os.TempDir()))
+	if err != nil {
+		t.Fatalf("resolving the system temp dir: %v", err)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("resolving %q: %v", path, err)
+	}
+	return filepath.Dir(resolved) == tmp
 }
 
 // The whole point of the package: a directory a confined helper can see is
@@ -38,10 +74,10 @@ func TestMakeIsUnderHomeAndNotDirectlyInTempDir(t *testing.T) {
 	// The fake home is itself under t.TempDir(), so "under os.TempDir()" cannot
 	// be the assertion; what must not happen is the directory being created
 	// *directly in* the system temp dir, which is what os.MkdirTemp("") does.
-	if got := filepath.Dir(dir); got == os.TempDir() {
+	if inSystemTempDir(t, dir) {
 		t.Errorf("Make created %q directly in the system temp dir; a confined helper has its own private /tmp and cannot reach it", dir)
 	}
-	if rel, err := filepath.Rel(home, dir); err != nil || strings.HasPrefix(rel, "..") {
+	if !underHome(t, home, dir) {
 		t.Errorf("Make created %q outside the home directory %q", dir, home)
 	}
 }
@@ -58,10 +94,7 @@ func TestMakeTopLevelHomeComponentIsNotHidden(t *testing.T) {
 	}
 	t.Cleanup(func() { Remove(dir) })
 
-	rel, err := filepath.Rel(home, dir)
-	if err != nil {
-		t.Fatalf("relativising %q against %q: %v", dir, home, err)
-	}
+	rel := resolvedRel(t, home, dir)
 	top := strings.Split(filepath.ToSlash(rel), "/")[0]
 	if strings.HasPrefix(top, ".") {
 		t.Errorf("top-level component %q of %q is hidden; snapd denies a confined helper any path below $HOME whose first component is dot-prefixed", top, rel)
@@ -73,9 +106,11 @@ func TestMakeTopLevelHomeComponentIsNotHidden(t *testing.T) {
 func TestMakeFallsBackWhenEveryHomeCandidateIsVetoed(t *testing.T) {
 	home := fakeHome(t)
 
+	// Veto anything under $HOME, leaving only the temp-dir fallback. The
+	// comparison resolves both sides: a lexical one calls a resolved-home
+	// candidate "outside" and accepts it, which is the opposite of the intent.
 	dir, visible, err := Make("probe", time.Hour, func(candidate string) bool {
-		rel, relErr := filepath.Rel(home, candidate)
-		return relErr != nil || strings.HasPrefix(rel, "..")
+		return !underHome(t, home, candidate)
 	})
 	if err != nil {
 		t.Fatalf("Make: %v", err)
@@ -85,7 +120,7 @@ func TestMakeFallsBackWhenEveryHomeCandidateIsVetoed(t *testing.T) {
 	if visible {
 		t.Errorf("Make claimed %q is visible to a confined helper, but every home candidate was vetoed", dir)
 	}
-	if filepath.Dir(dir) != os.TempDir() {
+	if !inSystemTempDir(t, dir) {
 		t.Errorf("fallback directory %q is not in the system temp dir %q", dir, os.TempDir())
 	}
 	// A vetoed candidate must not be left lying around under $HOME.
@@ -109,7 +144,7 @@ func TestMakeFallsBackWhenHomeUnusable(t *testing.T) {
 	if visible {
 		t.Errorf("Make claimed %q is sandbox-visible with no home directory available", dir)
 	}
-	if filepath.Dir(dir) != os.TempDir() {
+	if !inSystemTempDir(t, dir) {
 		t.Errorf("fallback directory %q is not in the system temp dir %q", dir, os.TempDir())
 	}
 }

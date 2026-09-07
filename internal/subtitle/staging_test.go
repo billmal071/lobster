@@ -13,11 +13,21 @@ import (
 // fakeHome points os.UserHomeDir at a throwaway directory containing the
 // standard Videos folder, so the staging-location tests never touch the real
 // home directory.
+// The home is reached through a symlink, mirroring macOS, where $TMPDIR is
+// /var/folders/... and resolves to /private/var/folders/... . Staging paths come
+// back under the *resolved* home, so an assertion comparing them against the
+// unresolved one passes on a plain Linux home and fails on a Mac; building the
+// difference in here means every platform exercises it.
 func fakeHome(t *testing.T) string {
 	t.Helper()
-	home := t.TempDir()
-	if err := os.Mkdir(filepath.Join(home, "Videos"), 0o755); err != nil {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(filepath.Join(real, "Videos"), 0o755); err != nil {
 		t.Fatalf("creating fake Videos dir: %v", err)
+	}
+	home := filepath.Join(base, "home")
+	if err := os.Symlink(real, home); err != nil {
+		home = real // Windows without developer mode, say.
 	}
 	t.Setenv("HOME", home)        // unix
 	t.Setenv("USERPROFILE", home) // windows
@@ -40,10 +50,18 @@ func TestNewTempDirIsNotUnderTempDir(t *testing.T) {
 	// be the assertion here; what must not happen is the staging dir being
 	// created *directly in* the system temp dir, which is what os.MkdirTemp("")
 	// does and what a confined player cannot see.
-	if got := filepath.Dir(td.Path()); got == os.TempDir() {
+	tmp, err := filepath.EvalSymlinks(filepath.Clean(os.TempDir()))
+	if err != nil {
+		t.Fatalf("resolving the system temp dir: %v", err)
+	}
+	staged, err := filepath.EvalSymlinks(td.Path())
+	if err != nil {
+		t.Fatalf("resolving %q: %v", td.Path(), err)
+	}
+	if filepath.Dir(staged) == tmp {
 		t.Errorf("staging dir %q was created directly in the system temp dir; a snap-confined player has its own private /tmp and cannot read it", td.Path())
 	}
-	if rel, err := filepath.Rel(home, td.Path()); err != nil || strings.HasPrefix(rel, "..") {
+	if strings.HasPrefix(resolvedRel(t, home, td.Path()), "..") {
 		t.Errorf("staging dir %q is not under the home directory %q", td.Path(), home)
 	}
 }
@@ -61,8 +79,8 @@ func TestNewTempDirTopLevelHomeComponentIsNotHidden(t *testing.T) {
 	}
 	t.Cleanup(td.Cleanup)
 
-	rel, err := filepath.Rel(home, td.Path())
-	if err != nil || strings.HasPrefix(rel, "..") {
+	rel := resolvedRel(t, home, td.Path())
+	if strings.HasPrefix(rel, "..") {
 		t.Fatalf("staging dir %q is not under home %q", td.Path(), home)
 	}
 	first := strings.Split(filepath.ToSlash(rel), "/")[0]

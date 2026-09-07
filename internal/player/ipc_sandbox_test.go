@@ -24,11 +24,42 @@ func shortHome(t *testing.T) string {
 		t.Skipf("no short temp directory to build a fake home in: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
-	if err := os.Mkdir(filepath.Join(home, "Videos"), 0o755); err != nil {
+	// Reached through a symlink, mirroring macOS where /tmp itself resolves to
+	// /private/tmp. newIPCSocket returns paths under the resolved home, so an
+	// assertion comparing them against the unresolved one passes on Linux and
+	// fails on a Mac; building the difference in here exercises it everywhere.
+	// The extra component costs two characters of sun_path headroom.
+	real := filepath.Join(home, "r")
+	if err := os.MkdirAll(filepath.Join(real, "Videos"), 0o755); err != nil {
 		t.Fatalf("creating fake Videos dir: %v", err)
 	}
-	t.Setenv("HOME", home)
-	return home
+	link := filepath.Join(home, "h")
+	if err := os.Symlink(real, link); err != nil {
+		link = real
+	}
+	t.Setenv("HOME", link)
+	return link
+}
+
+// resolvedRel relativises path against home with every symlink resolved. On
+// macOS /tmp is itself a symlink to /private/tmp, and newIPCSocket returns
+// paths under the resolved home, so comparing unresolved paths reports a socket
+// that is under $HOME as being outside it.
+func resolvedRel(t *testing.T, home, path string) string {
+	t.Helper()
+	resolvedHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatalf("resolving home %q: %v", home, err)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("resolving %q: %v", path, err)
+	}
+	rel, err := filepath.Rel(resolvedHome, resolved)
+	if err != nil {
+		t.Fatalf("relativising %q against %q: %v", resolved, resolvedHome, err)
+	}
+	return rel
 }
 
 // The bug: an mpv packaged as a snap runs with a private /tmp, so the socket it
@@ -47,17 +78,24 @@ func TestNewIPCSocketIsNotInTheSystemTempDir(t *testing.T) {
 	if !ipc.sandboxVisible {
 		t.Errorf("newIPCSocket reported the socket invisible to a confined mpv, but a usable home was available")
 	}
-	if got := filepath.Dir(filepath.Dir(ipc.path)); got == os.TempDir() {
+	tmp, err := filepath.EvalSymlinks(filepath.Clean(os.TempDir()))
+	if err != nil {
+		t.Fatalf("resolving the system temp dir: %v", err)
+	}
+	socketDir, err := filepath.EvalSymlinks(filepath.Dir(ipc.path))
+	if err != nil {
+		t.Fatalf("resolving %q: %v", ipc.path, err)
+	}
+	if filepath.Dir(socketDir) == tmp {
 		t.Errorf("mpv socket %q was placed in the system temp dir; an mpv packaged as a snap has its own private /tmp and would create its socket somewhere lobster never dials", ipc.path)
 	}
-	if rel, err := filepath.Rel(home, ipc.path); err != nil || strings.HasPrefix(rel, "..") {
+	// The socket itself does not exist until mpv binds it, so the directory is
+	// what can be resolved; the name is appended lexically.
+	rel := filepath.Join(resolvedRel(t, home, filepath.Dir(ipc.path)), socketName)
+	if strings.HasPrefix(rel, "..") {
 		t.Errorf("mpv socket %q is not under the home directory %q, so a confined mpv cannot reach it", ipc.path, home)
 	}
 	// snapd denies any path whose first component below $HOME is dot-prefixed.
-	rel, err := filepath.Rel(home, ipc.path)
-	if err != nil {
-		t.Fatalf("relativising %q against %q: %v", ipc.path, home, err)
-	}
 	if top := strings.Split(filepath.ToSlash(rel), "/")[0]; strings.HasPrefix(top, ".") {
 		t.Errorf("top-level component %q of %q is hidden; snapd denies a confined mpv any such path", top, rel)
 	}
