@@ -48,6 +48,7 @@ func runCLI(t *testing.T, args ...string) cliRun {
 	snapshotFlags(t, findCmd, "type", "limit")
 	snapshotFlags(t, episodesCmd, "ref", "season")
 	snapshotFlags(t, playCmd, "ref", "season", "episode", "detach", "supervised")
+	snapshotFlags(t, channelsCmd, "category", "search", "limit")
 
 	prevCfg := cfg
 	t.Cleanup(func() { cfg = prevCfg })

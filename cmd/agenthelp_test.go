@@ -4,10 +4,33 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"lobster/internal/media"
 )
+
+// TestSkillDocumentsChannels guards against shipping the live TV surface
+// (channels + play --ref on a live ref) without updating the skill an agent
+// actually reads. SKILL.md previously told the agent live TV was unavailable
+// at all; leaving that in place would ship a command the agent is instructed
+// never to call, and its exit-code table did not mention error.code, so an
+// agent that got not_configured would think it had malformed the command.
+func TestSkillDocumentsChannels(t *testing.T) {
+	body, err := os.ReadFile("../skills/lobster-play/SKILL.md")
+	if err != nil {
+		t.Fatalf("reading SKILL.md: %v", err)
+	}
+	s := string(body)
+	if strings.Contains(s, "Live TV channel listing and channel surfing are not available") {
+		t.Error("SKILL.md still declares live TV out of scope")
+	}
+	for _, want := range []string{"lobster channels", "not_configured", "error.code"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("SKILL.md does not mention %q", want)
+		}
+	}
+}
 
 // hostileEnv makes any attempt to prompt the user fail the test rather than
 // hang it. Injecting ui.Select alone is not enough: ui.Input execs fzf

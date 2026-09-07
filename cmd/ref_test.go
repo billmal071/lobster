@@ -56,11 +56,75 @@ func TestRefPreservesEmptyYear(t *testing.T) {
 }
 
 func TestRefSearchResultMapsType(t *testing.T) {
-	if got := (playRef{Type: "tv"}).searchResult().Type; got != media.TV {
-		t.Fatalf("tv mapped to %v, want media.TV", got)
+	got, err := (playRef{Type: "tv"}).searchResult()
+	if err != nil {
+		t.Fatalf("tv: %v", err)
 	}
-	if got := (playRef{Type: "movie"}).searchResult().Type; got != media.Movie {
-		t.Fatalf("movie mapped to %v, want media.Movie", got)
+	if got.Type != media.TV {
+		t.Fatalf("tv mapped to %v, want media.TV", got.Type)
+	}
+	got, err = (playRef{Type: "movie"}).searchResult()
+	if err != nil {
+		t.Fatalf("movie: %v", err)
+	}
+	if got.Type != media.Movie {
+		t.Fatalf("movie mapped to %v, want media.Movie", got.Type)
+	}
+}
+
+func TestDecodeRefAcceptsLive(t *testing.T) {
+	tok, err := encodeRef(playRef{
+		ID: "bbc1.uk", Title: "BBC One", Type: liveRefType,
+		TVGID: "bbc1.uk", Source: "https://example.invalid/uk.m3u",
+	})
+	if err != nil {
+		t.Fatalf("encodeRef: %v", err)
+	}
+	got, err := decodeRef(tok)
+	if err != nil {
+		t.Fatalf("decodeRef rejected a live ref: %v", err)
+	}
+	if got.Type != liveRefType || got.TVGID != "bbc1.uk" ||
+		got.Source != "https://example.invalid/uk.m3u" {
+		t.Fatalf("round trip lost fields: %+v", got)
+	}
+}
+
+func TestSearchResultRefusesLive(t *testing.T) {
+	// The structural guard. play's live branch runs before this converter,
+	// but the safety property must not depend on branch ordering: a future
+	// edit that reorders playRun would otherwise silently hand a live ref to
+	// the title-search path, where "BBC One" can resolve to a documentary.
+	_, err := playRef{ID: "bbc1.uk", Title: "BBC One", Type: liveRefType}.searchResult()
+	if err == nil {
+		t.Fatal("searchResult must refuse a live ref")
+	}
+}
+
+func TestSearchResultStillConvertsMovieAndTV(t *testing.T) {
+	got, err := playRef{ID: "x", Title: "Parasite", Year: "2019", Type: media.Movie.String()}.searchResult()
+	if err != nil {
+		t.Fatalf("movie ref: %v", err)
+	}
+	if got.Type != media.Movie || got.Title != "Parasite" || got.Year != "2019" {
+		t.Fatalf("movie conversion = %+v", got)
+	}
+	got, err = playRef{ID: "y", Title: "Severance", Type: media.TV.String()}.searchResult()
+	if err != nil {
+		t.Fatalf("tv ref: %v", err)
+	}
+	if got.Type != media.TV {
+		t.Fatalf("tv conversion = %+v", got)
+	}
+}
+
+func TestDecodeRefStillRejectsUnknownTypes(t *testing.T) {
+	tok, err := encodeRef(playRef{ID: "x", Title: "T", Type: "Live"}) // wrong case
+	if err != nil {
+		t.Fatalf("encodeRef: %v", err)
+	}
+	if _, err := decodeRef(tok); err == nil {
+		t.Fatal("decodeRef must reject \"Live\": a ref is machine-produced, so case is corruption")
 	}
 }
 

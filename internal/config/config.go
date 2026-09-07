@@ -263,6 +263,19 @@ func TBCPLCachePath() (string, error) {
 	return filepath.Join(dir, "tbcpl-cache.json"), nil
 }
 
+// RefKeyPath returns the path to the per-installation secret that keys live
+// ref source digests. It lives in the data directory alongside health.json
+// rather than in the config directory: it is machine-local state a user never
+// edits, and unlike the config it must not be copied between machines or
+// checked into dotfiles.
+func RefKeyPath() (string, error) {
+	dir, err := dataDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "refkey"), nil
+}
+
 // DownloadsDBPath returns the path to the downloads SQLite database.
 func DownloadsDBPath() (string, error) {
 	dir, err := dataDir()
