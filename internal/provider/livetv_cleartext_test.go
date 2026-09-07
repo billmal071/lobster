@@ -35,6 +35,11 @@ func TestCarriesCredentials(t *testing.T) {
 		// password-shaped string in the tree for secret scanners to flag.
 		{"http://alice@host.example/list.m3u", true},
 		{"http://host.example/list.m3u?token=abc", true},
+		// The OAuth-shaped pair. "token" alone does not match these: the
+		// lookup is on the whole key, not a substring, so access_token and
+		// refresh_token each have to be listed.
+		{"http://host.example/list.m3u?access_token=abc", true},
+		{"http://host.example/list.m3u?refresh_token=abc", true},
 		{"http://host.example/get.php?USERNAME=alice", true}, // key match is case-insensitive
 		{"http://host.example/get.php?type=m3u_plus&output=m3u8", false},
 		{"http://host.example/list.m3u", false},

@@ -29,6 +29,7 @@ var credentialParams = map[string]bool{
 	"username": true, "user": true, "login": true,
 	"password": true, "pass": true, "pwd": true,
 	"token": true, "auth": true, "secret": true,
+	"access_token": true, "refresh_token": true,
 	"api_key": true, "apikey": true, "key": true,
 }
 
