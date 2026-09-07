@@ -29,23 +29,70 @@ import (
 // dot-prefixed, not nested ones.
 const Parent = ".lobster"
 
+// resolveHome returns $HOME with symlinks resolved, and false when there is no
+// usable home directory.
+func resolveHome() (string, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", false
+	}
+	resolved, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		return "", false
+	}
+	return resolved, true
+}
+
+// withinHome reports whether path, once every symlink in it is resolved, is
+// still inside resolvedHome.
+//
+// Being under $HOME lexically is not enough. A media directory symlinked to
+// another drive is a common arrangement, and os.Stat and os.MkdirAll both
+// follow symlinks without complaint — so "$HOME/Videos/.lobster/..." can name
+// a file on /mnt. snapd's home interface is enforced by AppArmor, which
+// decides on the resolved path, so such a directory is denied to a confined
+// player exactly as /tmp is. A path we cannot resolve is treated as outside:
+// the whole point is to hand out only paths known to be reachable.
+func withinHome(resolvedHome, path string) bool {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(resolvedHome, resolved)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
 // Bases returns candidate base directories, most preferred first.
 //
 // A media directory is the least surprising place for lobster's scratch files.
 // The last entry is a plain "lobster" directory, offered only when no media
-// directory exists, and created rather than required to exist.
+// directory exists, and created rather than required to exist — it needs no
+// resolution check here because Make creates it directly under $HOME and
+// verifies the result.
 func Bases() []string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
+		return nil
+	}
+	resolvedHome, ok := resolveHome()
+	if !ok {
 		return nil
 	}
 
 	var existing []string
 	for _, name := range []string{"Videos", "Movies", "Downloads"} {
 		dir := filepath.Join(home, name)
-		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
-			existing = append(existing, dir)
+		fi, err := os.Stat(dir)
+		if err != nil || !fi.IsDir() {
+			continue
 		}
+		if !withinHome(resolvedHome, dir) {
+			continue
+		}
+		existing = append(existing, dir)
 	}
 	return append(existing, filepath.Join(home, "lobster"))
 }
@@ -64,9 +111,16 @@ func Bases() []string {
 // at all is worse. Callers that can degrade gracefully should say so when
 // visible is false rather than fail.
 func Make(prefix string, staleAfter time.Duration, usable func(dir string) bool) (dir string, visible bool, err error) {
+	resolvedHome, homeOK := resolveHome()
 	for _, base := range Bases() {
 		parent := filepath.Join(base, Parent)
 		if err := os.MkdirAll(parent, 0o700); err != nil {
+			continue
+		}
+		// The base passed Bases, but Parent itself can be a symlink out of
+		// $HOME, and the last-resort base was never checked at all. Verify
+		// the path actually reached rather than the one asked for.
+		if !homeOK || !withinHome(resolvedHome, parent) {
 			continue
 		}
 		PruneStale(parent, prefix, staleAfter)

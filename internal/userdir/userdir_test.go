@@ -204,3 +204,109 @@ func TestMakeSweepsStaleSiblings(t *testing.T) {
 		t.Errorf("a stale directory survived a later Make (err=%v); nothing under $HOME is reclaimed by the system, so these accumulate", err)
 	}
 }
+
+// resolvedRel relativises path against home with every symlink resolved, which
+// is what AppArmor does before applying snapd's home rule. A lexical check
+// passes happily on a path that resolves onto another filesystem.
+func resolvedRel(t *testing.T, home, path string) string {
+	t.Helper()
+	resolvedHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatalf("resolving home %q: %v", home, err)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("resolving %q: %v", path, err)
+	}
+	rel, err := filepath.Rel(resolvedHome, resolved)
+	if err != nil {
+		t.Fatalf("relativising %q against %q: %v", resolved, resolvedHome, err)
+	}
+	return rel
+}
+
+// A media directory symlinked to another drive is a common arrangement, and
+// os.Stat and os.MkdirAll both follow symlinks without complaint. Such a base
+// must be rejected: snapd's home rule is enforced on the resolved path, so a
+// staging directory that lands on /mnt is denied to a confined player exactly
+// as /tmp is — and reporting it as visible would be a lie.
+func TestMakeRejectsABaseSymlinkedOutsideHome(t *testing.T) {
+	home := fakeHome(t)
+	outside := t.TempDir()
+	videos := filepath.Join(home, "Videos")
+	if err := os.Remove(videos); err != nil {
+		t.Fatalf("clearing Videos: %v", err)
+	}
+	if err := os.Symlink(outside, videos); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	dir, visible, err := Make("probe", time.Hour, nil)
+	if err != nil {
+		t.Fatalf("Make: %v", err)
+	}
+	t.Cleanup(func() { Remove(dir) })
+
+	if rel := resolvedRel(t, home, dir); strings.HasPrefix(rel, "..") {
+		t.Errorf("Make returned %q, which resolves outside the home directory (rel %q); a symlinked media directory is followed by os.MkdirAll but denied by snapd", dir, rel)
+	}
+	if !visible {
+		t.Errorf("Make fell back to the temp dir; the last-resort base under $HOME was still usable")
+	}
+	if _, err := os.Stat(filepath.Join(outside, Parent)); err == nil {
+		t.Errorf("Make created %s on the far side of the symlink before rejecting it", Parent)
+	}
+}
+
+// The shared parent can be the symlink even when the base is sound.
+func TestMakeRejectsAParentSymlinkedOutsideHome(t *testing.T) {
+	home := fakeHome(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(home, "Videos", Parent)); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	dir, visible, err := Make("probe", time.Hour, nil)
+	if err != nil {
+		t.Fatalf("Make: %v", err)
+	}
+	t.Cleanup(func() { Remove(dir) })
+
+	if rel := resolvedRel(t, home, dir); strings.HasPrefix(rel, "..") {
+		t.Errorf("Make returned %q, which resolves outside the home directory (rel %q)", dir, rel)
+	}
+	if !visible {
+		t.Errorf("Make fell back to the temp dir instead of the next usable base under $HOME")
+	}
+}
+
+// Rejecting escapes must not reject a symlink that stays inside $HOME — those
+// are reachable, and over-rejecting would push users to the broken temp-dir
+// fallback for no reason.
+func TestMakeAcceptsASymlinkThatStaysInsideHome(t *testing.T) {
+	home := fakeHome(t)
+	real := filepath.Join(home, "media")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatalf("creating %s: %v", real, err)
+	}
+	videos := filepath.Join(home, "Videos")
+	if err := os.Remove(videos); err != nil {
+		t.Fatalf("clearing Videos: %v", err)
+	}
+	if err := os.Symlink(real, videos); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	dir, visible, err := Make("probe", time.Hour, nil)
+	if err != nil {
+		t.Fatalf("Make: %v", err)
+	}
+	t.Cleanup(func() { Remove(dir) })
+
+	if !visible {
+		t.Fatalf("Make rejected %q, but it resolves inside the home directory and a confined player can read it", dir)
+	}
+	if rel := resolvedRel(t, home, dir); !strings.HasPrefix(rel, "media"+string(filepath.Separator)) {
+		t.Errorf("Make resolved to %q (rel %q); the symlinked base inside $HOME should have been used", dir, rel)
+	}
+}
