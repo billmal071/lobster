@@ -57,10 +57,8 @@ func loadOrCreateRefKey() []byte {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil
 	}
-	// 0600, and written through a temp file + rename so a concurrent reader
-	// never sees a partial key. Losing the race is harmless: both writers
-	// produce a valid key, and the loser's refs are re-minted on the next
-	// `lobster channels` call.
+	// 0600, and written through a temp file so a concurrent reader never sees
+	// a partial key.
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".refkey-*")
 	if err != nil {
 		return nil
@@ -77,8 +75,27 @@ func loadOrCreateRefKey() []byte {
 	if err := tmp.Close(); err != nil {
 		return nil
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return nil
+	// Published with os.Link, not os.Rename: rename *replaces* the
+	// destination, so two processes starting together would each mint a key
+	// and the second rename would overwrite the first. The loser is not just
+	// wasting work — it has already handed its own key to a caller, so every
+	// ref minted in that process is signed with a secret no longer on disk
+	// and stops matching its channel on the next run. Link fails when the
+	// destination exists, which turns the race into "first writer wins, and
+	// everyone else adopts the winner's key".
+	if err := os.Link(tmp.Name(), path); err != nil {
+		// Almost always EEXIST: another process published first, so adopt
+		// its key rather than the one just generated.
+		if b, rerr := os.ReadFile(path); rerr == nil && len(b) >= refKeyBytes {
+			return b[:refKeyBytes]
+		}
+		// Link can also fail because the filesystem does not support hard
+		// links at all. Nothing is published yet in that case, so fall back
+		// to rename: it reintroduces the race on such filesystems, which is
+		// strictly better than having no key.
+		if err := os.Rename(tmp.Name(), path); err != nil {
+			return nil
+		}
 	}
 	return key
 }

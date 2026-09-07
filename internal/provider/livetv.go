@@ -126,18 +126,24 @@ func readFileContext(ctx context.Context, path string) ([]byte, error) {
 		return nil, fmt.Errorf("livetv: reading %s: %w", path, err)
 	}
 
-	// Before the goroutine, not inside it: the point is that nothing ever
-	// opens a FIFO, not that the caller stops waiting for one.
-	st, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !st.Mode().IsRegular() {
-		return nil, fmt.Errorf("livetv: playlist %s is not a regular file", path)
-	}
-
 	ch := make(chan readResult, 1)
 	go func() {
+		// Inside the goroutine, and before os.Open. Inside, because os.Stat
+		// is itself a blocking syscall: on a stalled network mount it hangs
+		// exactly like the read does, so hoisting it above the select traded
+		// one unbounded call for another and put it back on the path that
+		// must stay cancellable. Before the open, because that is what makes
+		// the FIFO refusal work at all — stat returns promptly on a FIFO,
+		// where open blocks until a writer arrives.
+		st, err := os.Stat(path)
+		if err != nil {
+			ch <- readResult{err: err}
+			return
+		}
+		if !st.Mode().IsRegular() {
+			ch <- readResult{err: fmt.Errorf("livetv: playlist %s is not a regular file", path)}
+			return
+		}
 		f, err := os.Open(path)
 		if err != nil {
 			ch <- readResult{err: err}
@@ -169,7 +175,11 @@ const maxPlaylistBytes = 32 << 20
 func (p *LiveTV) httpGet(ctx context.Context, c httpDoer, src string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src, nil)
 	if err != nil {
-		return nil, err
+		// Redacted like every other error here. A malformed source string
+		// reaches this branch carrying whatever the user configured — Xtream
+		// credentials included — and doLoadContext folds the last error into
+		// loadErr, which the agent commands print verbatim as JSON.
+		return nil, fmt.Errorf("livetv: building request for %s failed: %w", redactURL(src), err)
 	}
 	req.Header.Set("User-Agent", liveTVUA)
 	resp, err := c.Do(req)

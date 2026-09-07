@@ -58,11 +58,18 @@ func TestMain(m *testing.M) {
 	// `go test ./cmd/` would leave state behind on the machine it ran on.
 	// Set here rather than per-test because any test that mints a ref
 	// reaches it, including ones that have no other reason to isolate HOME.
-	if dir, err := os.MkdirTemp("", "lobster-test-data-"); err == nil {
-		os.Setenv("XDG_DATA_HOME", dir) // unix (config.dataDir)
-		os.Setenv("LOCALAPPDATA", dir)  // windows
-		defer os.RemoveAll(dir)
+	// Failing loudly, not silently: if this directory cannot be made and the
+	// suite runs anyway, the first ref a test mints writes a refkey into the
+	// developer's real data directory. A test run must not leave state on the
+	// machine it ran on, so an unusable temp dir aborts the run instead.
+	dataDir, err := os.MkdirTemp("", "lobster-test-data-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "TestMain: cannot isolate the test data directory: %v\n", err)
+		os.Exit(1)
 	}
+	os.Setenv("XDG_DATA_HOME", dataDir) // unix (config.dataDir)
+	os.Setenv("LOCALAPPDATA", dataDir)  // windows
+	defer os.RemoveAll(dataDir)
 
 	// Stub flixhqDomain to prevent live network probes in tests.
 	// Tests that need a healthy or dead result override this with t.Cleanup restore.

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"sync"
@@ -125,5 +126,50 @@ func TestRefKeyShortFileIsRegenerated(t *testing.T) {
 	}
 	if len(b) != refKeyBytes {
 		t.Fatalf("key file is %d bytes after regeneration, want %d", len(b), refKeyBytes)
+	}
+}
+
+// TestRefKeyConcurrentCreationAgreesOnOneKey pins the publication race.
+//
+// The first implementation published with os.Rename, which *replaces* the
+// destination. Two starts together each minted a key and the second rename
+// overwrote the first — and the loser had already handed its own key to its
+// caller, so every ref it minted was signed with a secret no longer on disk
+// and stopped matching its channel on the next run. Publication is by
+// os.Link now, which fails when the destination exists, so the loser adopts
+// the winner's key instead of clobbering it.
+//
+// Goroutines rather than processes: loadOrCreateRefKey holds no in-process
+// lock, so every one of them races on the filesystem exactly as separate
+// processes would, and the failure mode is identical.
+func TestRefKeyConcurrentCreationAgreesOnOneKey(t *testing.T) {
+	useTempRefKey(t)
+
+	const racers = 8
+	keys := make([][]byte, racers)
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			keys[i] = loadOrCreateRefKey()
+		}(i)
+	}
+	wg.Wait()
+
+	for i, k := range keys {
+		if len(k) != refKeyBytes {
+			t.Fatalf("racer %d got a %d-byte key, want %d", i, len(k), refKeyBytes)
+		}
+		if !bytes.Equal(k, keys[0]) {
+			t.Fatalf("racer %d disagreed with racer 0; a ref minted by one would not match under the other", i)
+		}
+	}
+
+	// And the key every racer returned is the one actually on disk, so a
+	// later run re-reads the same secret.
+	resetRefKey(t)
+	if got := refSourceSecret(); !bytes.Equal(got, keys[0]) {
+		t.Fatal("the persisted key differs from the one the racers returned")
 	}
 }

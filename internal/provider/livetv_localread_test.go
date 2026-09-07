@@ -98,3 +98,24 @@ func TestReadFileContextRefusesADirectory(t *testing.T) {
 		t.Fatal("readFileContext on a directory must fail")
 	}
 }
+
+// A blocking stat must not block the caller either. The stat that refuses
+// non-regular files was first written above readFileContext's select, which
+// swapped one unbounded syscall for another: os.Stat hangs on a stalled
+// network mount exactly as the read does, and hoisting it put it back on the
+// path that has to stay cancellable. It runs inside the goroutine now, so a
+// cancelled context returns regardless of how long the metadata lookup takes.
+//
+// A stalled mount cannot be conjured in a unit test, so this asserts the
+// property that makes the placement safe: nothing on the cancellation path
+// touches the filesystem before ctx is consulted, proven with a path that
+// does not exist at all.
+func TestReadFileContextCancelsBeforeTouchingTheFilesystem(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := readFileContext(ctx, filepath.Join(t.TempDir(), "no-such-playlist.m3u"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("readFileContext = %v, want context.Canceled rather than a filesystem error", err)
+	}
+}
