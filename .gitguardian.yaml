@@ -1,0 +1,24 @@
+# GitGuardian configuration.
+#
+# The live TV tests build synthetic Xtream playlist URLs of the shape the
+# real provider uses — "<server>/get.php?username=...&password=..." — because
+# that shape is the subject under test, not incidental decoration:
+#
+#   - displaySource strips the entire query string, and the assertion that it
+#     did so is only meaningful against a URL that carries credentials there.
+#   - sourceKey exists precisely because two subscriptions to one server
+#     differ *only* in those query parameters. A fixture without them cannot
+#     express the collision the function was written to break.
+#
+# The values are invented and point at reserved or loopback hosts
+# (host.example, RFC 2606) that resolve to nothing. Nothing here is a
+# credential to any real service, and there is nothing to rotate.
+#
+# The scope is deliberately two named files rather than a glob over tests: a
+# real secret pasted into any other file, test or not, must still be caught.
+version: 2
+
+secret:
+  ignored-paths:
+    - cmd/liveref_test.go
+    - cmd/srckey_test.go
