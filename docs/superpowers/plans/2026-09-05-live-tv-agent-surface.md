@@ -1342,13 +1342,15 @@ func resolveLiveRef(p *provider.LiveTV, r playRef) (provider.Channel, error) {
 	case len(matches) == 1:
 		return matches[0], nil
 	case len(matches) > 1:
-		names := make([]string, 0, len(matches))
-		for _, m := range matches {
-			names = append(names, m.URL)
-		}
+		// Count only, never the matched stream URLs. An Xtream-codes URL
+		// embeds the subscriber's username and password in its *path*
+		// (unlike the playlist source string, whose credentials sit in
+		// query parameters displaySource can strip), so there is no safe
+		// way to redact one for display. The count is enough to tell the
+		// caller this needs a playlist fix, not a retry.
 		return provider.Channel{}, emitErr("ambiguous_channel", exitNoResults,
-			"%q matches %d channels in the same playlist (%s); it cannot be identified unambiguously",
-			r.Title, len(matches), strings.Join(names, ", "))
+			"%q matches %d channels and cannot be identified unambiguously; "+
+				"the playlist needs distinct tvg-id values for them", r.Title, len(matches))
 	}
 
 	// No match. Distinguish "the channel is gone" from "its playlist is down":
@@ -1541,6 +1543,12 @@ snippet, wherever the two disagree:
   discovering the sources can itself fetch the TBCPL catalog over the network.
   The spec's "known gap" about `channels` overshooting 15s is closed;
   `agentLiveSources` and `liveTVSourcesContext` take a `context.Context`.
+- **The ambiguity error names no stream URLs.** The snippet above once joined
+  each match's `m.URL` into the message. An Xtream stream URL carries the
+  subscriber's credentials in its path, where no redaction is safe, so the
+  shipped error reports the title and the match count only. The snippet is
+  corrected in place rather than left to mislead — reintroducing it would be
+  a credential leak, not a formatting change.
 - **`FailedSources()` returns a copy**, as `AllChannels()` and `Lookup()`
   already did — it is read again by `resolveLiveRef` after a caller has
   already been handed it.
