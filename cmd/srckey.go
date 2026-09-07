@@ -89,13 +89,24 @@ func loadOrCreateRefKey() []byte {
 		if b, rerr := os.ReadFile(path); rerr == nil && len(b) >= refKeyBytes {
 			return b[:refKeyBytes]
 		}
-		// Link can also fail because the filesystem does not support hard
-		// links at all. Nothing is published yet in that case, so fall back
-		// to rename: it reintroduces the race on such filesystems, which is
-		// strictly better than having no key.
-		if err := os.Rename(tmp.Name(), path); err != nil {
-			return nil
-		}
+		// Anything else leaves nothing safely published: a filesystem with
+		// no hard links, or a short or unreadable file sitting where the key
+		// belongs. Both degrade rather than improvise.
+		//
+		// Renaming over it was the first instinct and is wrong. Rename
+		// publishes by *replacement*, which is the clobber this function
+		// exists to avoid: two processes repairing the same truncated file
+		// would each overwrite the other, and whichever lost would already
+		// have handed its key to a caller whose refs then stop matching. A
+		// key that never persists costs the same-endpoint distinction; a key
+		// that persists and then changes underneath a running process costs
+		// correctness.
+		//
+		// So nil, which sends sourceKey to "" and matching back to display
+		// Source — the documented fallback. A corrupt key file therefore
+		// degrades the installation until someone deletes it, which is
+		// recoverable and visible in behaviour, unlike a silent clobber.
+		return nil
 	}
 	return key
 }

@@ -104,10 +104,13 @@ func TestSourceKeyIsEmptyWhenNoSecretCanBePersisted(t *testing.T) {
 	}
 }
 
-// A truncated key file is treated as absent and rewritten rather than used:
-// half a key is not a key, and keeping it would weaken every digest minted
-// for the life of the installation.
-func TestRefKeyShortFileIsRegenerated(t *testing.T) {
+// A truncated key file is never used as a key — half a key would weaken every
+// digest minted for the life of the installation — but neither is it repaired
+// in place. Repair would mean publishing by replacement, and two processes
+// repairing the same file would each clobber the other, breaking refs the
+// loser had already minted. It degrades to "" instead, which sends matching
+// back to display Source until someone removes the file.
+func TestRefKeyShortFileDegradesRatherThanBeingOverwritten(t *testing.T) {
 	dir := useTempRefKey(t)
 	path := filepath.Join(dir, "lobster", "refkey")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -117,15 +120,63 @@ func TestRefKeyShortFileIsRegenerated(t *testing.T) {
 		t.Fatalf("writing short key: %v", err)
 	}
 
-	if got := sourceKey("https://host.example/get.php"); got == "" {
-		t.Fatal("sourceKey returned empty rather than regenerating a short key file")
+	if got := sourceKey("https://host.example/get.php"); got != "" {
+		t.Fatalf("sourceKey = %q over a truncated key file, want \"\" (the display-source fallback)", got)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("reading key back: %v", err)
 	}
-	if len(b) != refKeyBytes {
-		t.Fatalf("key file is %d bytes after regeneration, want %d", len(b), refKeyBytes)
+	if string(b) != "short" {
+		t.Fatalf("the truncated file was rewritten (now %d bytes); it must be left alone", len(b))
+	}
+
+	// Removing it restores normal operation on the next call.
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("removing key: %v", err)
+	}
+	resetRefKey(t)
+	if got := sourceKey("https://host.example/get.php"); got == "" {
+		t.Fatal("sourceKey still empty after the corrupt key file was removed")
+	}
+}
+
+// The truncated-file path must be as race-free as the fresh-install one:
+// every racer either adopts one published key or reports none, and none of
+// them rewrites the file out from under the others.
+func TestRefKeyConcurrentAccessToTruncatedFileStaysConsistent(t *testing.T) {
+	dir := useTempRefKey(t)
+	path := filepath.Join(dir, "lobster", "refkey")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("short"), 0o600); err != nil {
+		t.Fatalf("writing short key: %v", err)
+	}
+
+	const racers = 8
+	keys := make([][]byte, racers)
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			keys[i] = loadOrCreateRefKey()
+		}(i)
+	}
+	wg.Wait()
+
+	for i, k := range keys {
+		if !bytes.Equal(k, keys[0]) {
+			t.Fatalf("racer %d disagreed with racer 0 over a truncated key file", i)
+		}
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading key back: %v", err)
+	}
+	if string(b) != "short" {
+		t.Fatalf("a racer rewrote the truncated file (now %d bytes); none may", len(b))
 	}
 }
 
