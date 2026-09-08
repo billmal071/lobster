@@ -299,7 +299,7 @@ tbcpl_include_untrusted = false
 ## All Flags
 
 ```
--c, --continue              Resume from watch history
+-c, --continue[=false]      Resume from watch history (on by default)
 -a, --audio-language <lang> Preferred audio track language (default: english)
 -d, --download <path>       Download to path instead of streaming
 -j, --json                  Output stream metadata as JSON
