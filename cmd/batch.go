@@ -339,12 +339,6 @@ func (l *seasonLister) episodes(season media.Season) ([]media.Episode, error) {
 	return episodes, err
 }
 
-// seasonEpisodes is the single-season form, for callers with one season to
-// list and so nothing to reuse a scan across.
-func seasonEpisodes(p provider.Provider, selected media.SearchResult, season media.Season) ([]media.Episode, error) {
-	return newSeasonLister(p, selected).episodes(season)
-}
-
 // batchDownloadMultiSeason downloads all episodes from multiple seasons.
 func batchDownloadMultiSeason(p provider.Provider, selected media.SearchResult, seasons []media.Season) error {
 	if flagJSON {

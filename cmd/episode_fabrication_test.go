@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -613,26 +615,40 @@ func TestResolveAndPlayDoesNotSubstituteWhenTheChainsListIsShort(t *testing.T) {
 // A multi-season batch download asks the primary for each season's episode
 // list. Under a primary that cannot produce one, every season recorded a
 // synthetic failure and nothing was downloaded — while the chain could have
-// listed all 22. The list lookup must make the same move `episodes` and the
-// interactive menu now make.
-func TestSeasonEpisodesRecoversTheListFromTheChain(t *testing.T) {
+// listed them in full. The list lookup must make the same move `episodes` and
+// the interactive menu now make.
+//
+// It drives batchDownloadMultiSeason, the real caller. The recovery used to be
+// pinned only through seasonEpisodes, a single-season wrapper with no
+// production caller at all: deleting the chain lookup from
+// (*seasonLister).episodes reddened that test alone, so the recovery could
+// have been removed from the path users actually take with the suite still
+// green.
+func TestMultiSeasonBatchDownloadsTheChainsEpisodes(t *testing.T) {
 	hostileEnv(t)
-
-	fb := newListingChainProvider("http://127.0.0.1:1/never-dialed.m3u8")
-	withFallbackChain(t, fb)
+	fb := multiSeasonBatchHarness(t)
 
 	primary := &stubProvider{
-		seasons:     []media.Season{{ID: "s1", Number: 1}},
+		seasons:     []media.Season{{ID: "s1", Number: 1}, {ID: "s2", Number: 2}, {ID: "s3", Number: 3}},
 		episodesErr: errProviderCannotList,
 	}
 	sel := media.SearchResult{ID: "tv/1403", Title: "Some Show", Year: "2013", Type: media.TV}
 
-	eps, err := seasonEpisodes(primary, sel, media.Season{ID: "s1", Number: 1})
-	if err != nil {
-		t.Fatalf("seasonEpisodes = %v; the chain can list this season", err)
+	// Every download fails (the stream URL is unreachable), so this ends at the
+	// retry prompt, which hostileEnv turns into an error. Which episodes were
+	// resolved is already decided by then, and is what is being measured.
+	_ = batchDownloadMultiSeason(primary, sel, primary.seasons)
+
+	// One entry per episode in the chain's own lists — 3 + 1 + 2 — and no
+	// entry for a season/episode pair the chain does not carry. The primary
+	// can list nothing, so every one of these came from the chain.
+	want := []string{
+		"fallback-1:1:1", "fallback-1:1:2", "fallback-1:1:3",
+		"fallback-1:2:1",
+		"fallback-1:3:1", "fallback-1:3:2",
 	}
-	if len(eps) != 22 {
-		t.Fatalf("listed %d episodes, want the chain's 22", len(eps))
+	if got := fb.episodesAsked(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("the chain was asked to stream %v, want %v — the episodes reaching downloadSingleEpisode must be the chain's own list", got, want)
 	}
 }
 
@@ -772,13 +788,16 @@ func TestEpisodesFindsASeasonThePrimaryUndercounts(t *testing.T) {
 }
 
 // scanCountingChainProvider is a chain member that records how many times its
-// seasons were enumerated, which is one per fallbackSeasonHits scan.
+// seasons were enumerated — one per fallbackSeasonHits scan — and which
+// episodes it was asked to stream, which is the only observable proof that the
+// list a batch downloaded from was its own.
 type scanCountingChainProvider struct {
 	*stubProvider
 	url string
 
-	mu    sync.Mutex
-	scans int
+	mu       sync.Mutex
+	scans    int
+	episodes []string
 }
 
 func (p *scanCountingChainProvider) GetSeasons(id string) ([]media.Season, error) {
@@ -789,8 +808,11 @@ func (p *scanCountingChainProvider) GetSeasons(id string) ([]media.Season, error
 }
 
 func (p *scanCountingChainProvider) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
-	// Unreachable on purpose: the resolver's validation hop rejects it, so no
-	// download is ever started.
+	p.mu.Lock()
+	p.episodes = append(p.episodes, episodeID)
+	p.mu.Unlock()
+	// The URL is unreachable on purpose: the resolver's validation hop rejects
+	// it, so no download is ever started.
 	return &media.Stream{URL: p.url}, nil
 }
 
@@ -800,16 +822,32 @@ func (p *scanCountingChainProvider) scanCount() int {
 	return p.scans
 }
 
-// A multi-season batch asks for one season's episodes at a time, and each ask
-// ran a full chain scan of its own: search plus GetSeasons across every
-// fallback provider, bounded at 5s each. Ten seasons is ten scans — around a
-// hundred seconds of scanning before the first byte — and nothing tied the
-// seasons together, so a chain that answered differently between scans could
-// hand each season to a different provider.
-//
-// One scan serves the whole batch.
-func TestMultiSeasonBatchScansTheChainOnce(t *testing.T) {
-	hostileEnv(t)
+// episodesAsked is the episode IDs Watch was handed, deduplicated and sorted
+// so the assertion does not depend on the resolver's retry or race order.
+// tryStreamProviderFallback builds them as "<id>:<season>:<episode>"
+// (internal/resolver/probe.go), so each one names the season and episode
+// number the batch actually resolved.
+func (p *scanCountingChainProvider) episodesAsked() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	seen := map[string]bool{}
+	out := make([]string, 0, len(p.episodes))
+	for _, e := range p.episodes {
+		if !seen[e] {
+			seen[e] = true
+			out = append(out, e)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// multiSeasonBatchHarness sets up a download-mode batch over a chain whose
+// three seasons carry 3, 1 and 2 episodes — deliberately uneven, so an
+// assertion on which episodes were resolved cannot be satisfied by a list of
+// the wrong shape.
+func multiSeasonBatchHarness(t *testing.T) *scanCountingChainProvider {
+	t.Helper()
 
 	prevCfg := cfg
 	cfg = &config.Config{Quality: "1080"}
@@ -824,14 +862,28 @@ func TestMultiSeasonBatchScansTheChainOnce(t *testing.T) {
 			results: []media.SearchResult{{ID: "tv/fallback-1", Title: "Some Show", Type: media.TV}},
 			seasons: []media.Season{{ID: "f1", Number: 1}, {ID: "f2", Number: 2}, {ID: "f3", Number: 3}},
 			episodesBySeason: map[string][]media.Episode{
-				"f1": {{ID: "f1e1", Number: 1}},
+				"f1": {{ID: "f1e1", Number: 1}, {ID: "f1e2", Number: 2}, {ID: "f1e3", Number: 3}},
 				"f2": {{ID: "f2e1", Number: 1}},
-				"f3": {{ID: "f3e1", Number: 1}},
+				"f3": {{ID: "f3e1", Number: 1}, {ID: "f3e2", Number: 2}},
 			},
 		},
 		url: "http://127.0.0.1:1/never-dialed.m3u8",
 	}
 	withFallbackChain(t, fb)
+	return fb
+}
+
+// A multi-season batch asks for one season's episodes at a time, and each ask
+// ran a full chain scan of its own: search plus GetSeasons across every
+// fallback provider, bounded at 5s each. Ten seasons is ten scans — around a
+// hundred seconds of scanning before the first byte — and nothing tied the
+// seasons together, so a chain that answered differently between scans could
+// hand each season to a different provider.
+//
+// One scan serves the whole batch.
+func TestMultiSeasonBatchScansTheChainOnce(t *testing.T) {
+	hostileEnv(t)
+	fb := multiSeasonBatchHarness(t)
 
 	primary := &stubProvider{
 		seasons:     []media.Season{{ID: "s1", Number: 1}, {ID: "s2", Number: 2}, {ID: "s3", Number: 3}},
