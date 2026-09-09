@@ -86,7 +86,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		debugf("episodes: %T enumerated seasons but not episodes (err=%v, episodes=%d); asking the fallback chain", p, err, len(eps))
 		alts := src.alts
 		if src.fromPrimary {
-			alts = fallbackSeasonHits(primary, r)
+			alts = fallbackSeasonHits(primary, seasonRequest(r))
 		}
 		if a := firstEpisodeList(alts, flagSeason); a != nil {
 			debugf("episodes: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), a.season.Number)
@@ -190,7 +190,7 @@ func seasonSource(primary provider.Provider, r playRef) seasonAnswer {
 	}
 	debugf("episodes: primary could not enumerate %q (err=%v, seasons=%d); re-searching the fallback chain by title", r.ID, err, len(seasons))
 
-	if hits := fallbackSeasonHits(primary, r); len(hits) > 0 {
+	if hits := fallbackSeasonHits(primary, seasonRequest(r)); len(hits) > 0 {
 		return seasonAnswer{
 			provider: hits[0].provider,
 			id:       hits[0].id,
@@ -214,6 +214,36 @@ type seasonAnswer struct {
 	// because nothing looked rather than because nothing answered.
 	fromPrimary bool
 	err         error
+}
+
+// seasonRequest is the ref as the resolver sees it: the ID/Title/Year all
+// count towards ranking, which is the reason a ref carries more than an ID.
+func seasonRequest(r playRef) resolver.Request {
+	return resolver.Request{
+		ID:        r.ID,
+		Title:     r.Title,
+		Year:      r.Year,
+		MediaType: media.TV,
+	}
+}
+
+// fallbackEpisodeList finds a chain provider that has this work and can list
+// the requested season's episodes. seasonNumber 0 means the first season.
+//
+// It is the same move `episodes` makes, exposed for the playback paths: a
+// primary that enumerates seasons but not episodes leaves every list-shaped
+// caller — the interactive episode menu, the TUI download dialog, a
+// multi-season batch — with nothing to show, and the chain usually has the
+// list. The answer is a provider's own list, so a number offered from it is a
+// number that provider will honour.
+func fallbackEpisodeList(primary provider.Provider, content media.SearchResult, seasonNumber int) *episodeAnswer {
+	req := resolver.Request{
+		ID:        content.ID,
+		Title:     content.Title,
+		Year:      content.Year,
+		MediaType: content.Type,
+	}
+	return firstEpisodeList(fallbackSeasonHits(primary, req), seasonNumber)
 }
 
 // pickSeason returns the season with the requested number, or the first season
@@ -241,14 +271,7 @@ func pickSeason(seasons []media.Season, want int) (media.Season, bool) {
 // Every hit, not just the first: enumerating seasons does not imply
 // enumerating episodes, so the caller needs somewhere to go when its first
 // choice cannot answer the second question.
-func fallbackSeasonHits(primary provider.Provider, r playRef) []*seasonHit {
-	req := resolver.Request{
-		ID:        r.ID,
-		Title:     r.Title,
-		Year:      r.Year,
-		MediaType: media.TV,
-	}
-
+func fallbackSeasonHits(primary provider.Provider, req resolver.Request) []*seasonHit {
 	ctx, cancel := context.WithTimeout(context.Background(), episodesFallbackTimeout)
 	defer cancel()
 

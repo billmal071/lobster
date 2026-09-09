@@ -219,6 +219,37 @@ func printDetail(r media.SearchResult, d *media.ContentDetail) {
 	fmt.Fprintln(os.Stderr)
 }
 
+// episodeIndex is the position of the episode numbered n, or -1. It is the
+// one lookup that decides whether a request is honoured or refused, so it is
+// named rather than repeated: leaving the index at its zero value on a miss is
+// exactly how a request for episode 47 came back as a successful play of
+// episode 1.
+func episodeIndex(episodes []media.Episode, n int) int {
+	for i, ep := range episodes {
+		if ep.Number == n {
+			return i
+		}
+	}
+	return -1
+}
+
+// seasonIndex is episodeIndex for seasons, or -1.
+func seasonIndex(seasons []media.Season, n int) int {
+	for i, s := range seasons {
+		if s.Number == n {
+			return i
+		}
+	}
+	return -1
+}
+
+// selectItem is ui.Select as a package var, seamed like agentProvider and
+// newPlayer so a test can drive the season and episode menus without a
+// terminal. The menus are not decoration: a provider that cannot enumerate
+// episodes used to fabricate a list, and the only way to check that the list
+// now offered is a real one is to look at what the menu was handed.
+var selectItem = ui.Select
+
 // resolveAndPlay handles season/episode selection for TV and then plays.
 func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, episode int) error {
 	episodeID := ""
@@ -259,14 +290,8 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// return is an error, not a fallback to index 0. Leaving it at 0
 			// played season one and reported success, so the caller was told
 			// it got the season it asked for.
-			found := false
-			for i, s := range seasons {
-				if s.Number == season {
-					seasonIdx, found = i, true
-					break
-				}
-			}
-			if !found {
+			seasonIdx = seasonIndex(seasons, season)
+			if seasonIdx < 0 {
 				return fmt.Errorf("season %d not found for %q (list them with 'lobster episodes --ref ...')", season, title)
 			}
 		} else {
@@ -284,7 +309,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				seasonItems = append(batchItems, seasonItems...)
 			}
 
-			seasonIdx, err = ui.Select("Season", seasonItems)
+			seasonIdx, err = selectItem("Season", seasonItems)
 			if err != nil {
 				return err
 			}
@@ -330,30 +355,66 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// not available at all, and they now say so rather than
 			// generating a list nobody can tell from a real one.
 			//
-			// A caller who already knows which episode it wants does not need
-			// the list: the fallback resolver reaches a StreamProvider through
-			// Watch with an episode ID built arithmetically from season and
-			// episode (tryStreamProviderFallback, internal/resolver/probe.go),
-			// so this mirrors the branch above for a primary that cannot
-			// enumerate seasons. Without a requested episode there is nothing
-			// to offer a menu of, so that case still fails.
-			if episode > 0 {
-				debugf("primary provider episodes failed: %v (%d episodes), trying fallbacks", err, len(episodes))
-				fmt.Fprintf(os.Stderr, "Provider has no episode list, trying fallbacks...\n")
+			// Ask the chain for the list first, exactly as `episodes` does.
+			// A list is what most of this function needs: interactive use
+			// passes no --episode at all, so without one there is no menu to
+			// offer and every show under such a primary is an error. It also
+			// buys back playlist continuity — a session built from a real
+			// list can go to the next episode, which a single resolved stream
+			// cannot.
+			//
+			// The list is a chain provider's own, so playback moves to that
+			// provider too: the numbers offered are numbers it will honour.
+			debugf("primary provider episodes failed: %v (%d episodes), trying fallbacks", err, len(episodes))
+			fmt.Fprintf(os.Stderr, "Provider has no episode list, trying fallbacks...\n")
+
+			answer := fallbackEpisodeList(p, selected, selectedSeason.Number)
+			// A requested episode must be in the list before the session is
+			// built on it. A chain provider can have a real but shorter list
+			// than the show — a currently-airing season, say — and playing
+			// the nearest entry instead is the silent-substitution bug this
+			// whole path exists to prevent. When the number is absent the
+			// resolver below still gets its turn, and it needs no list.
+			if answer != nil && (episode == 0 || episodeIndex(answer.episodes, episode) >= 0) {
+				debugf("episode list recovered from %T (%d episodes)", answer.hit.provider, len(answer.episodes))
+				p = answer.hit.provider
+				selected.ID = answer.hit.id
+				seasons = answer.hit.seasons
+				// The season came out of this very list, so the lookup
+				// cannot miss; clamp anyway rather than index with -1.
+				if seasonIdx = seasonIndex(seasons, answer.season.Number); seasonIdx < 0 {
+					seasonIdx = 0
+				}
+				selectedSeason = answer.season
+				episodes = answer.episodes
+				err = nil
+			} else if episode > 0 {
+				// A caller who already knows which episode it wants does not
+				// need a list: the fallback resolver reaches a StreamProvider
+				// through Watch with an episode ID built arithmetically from
+				// season and episode (tryStreamProviderFallback,
+				// internal/resolver/probe.go), so this mirrors the branch
+				// above for a primary that cannot enumerate seasons.
 				fbStream, fbErr := tryFallbackStream(p, selected, selectedSeason.Number, episode)
 				if fbErr == nil {
 					return playStream(fbStream, title, selected, selectedSeason.Number, episode)
 				}
 				debugf("fallback stream failed: %v", fbErr)
 			}
-
+		}
+		if len(episodes) == 0 {
 			// Out of options, so say who could not answer and what to do
 			// instead. "episode listing unavailable" on its own leaves a user
-			// under a MovieBox or VidNest primary with a dead end; the list
-			// does exist, just not here, and `episodes` is what goes and finds
-			// it — it asks every chain provider that can enumerate the season
-			// (fallbackSeasonHits, cmd/episodes.go), which is more than this
-			// path ever tries.
+			// under a MovieBox or VidNest primary with a dead end.
+			//
+			// `episodes` is not a second search — the recovery above already
+			// asked the same chain — but it is a different report: it prints
+			// the seasons and the episode numbers a chain provider does have
+			// (fallbackSeasonHits/firstEpisodeList, cmd/episodes.go). That is
+			// what a caller needs here, because this path refuses a requested
+			// number the chain's list lacks rather than substituting a
+			// neighbour, and a refusal is only actionable once you can see
+			// which numbers exist.
 			//
 			// The --episode hint is only offered when no episode was
 			// requested: with one, tryFallbackStream just failed above, so
@@ -377,14 +438,8 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// above by handing the request to the fallback resolver, which
 			// needs no list — so refusing here cannot break a provider that
 			// never enumerates episodes.
-			found := false
-			for i, ep := range episodes {
-				if ep.Number == episode {
-					episodeIdx, found = i, true
-					break
-				}
-			}
-			if !found {
+			episodeIdx = episodeIndex(episodes, episode)
+			if episodeIdx < 0 {
 				return fmt.Errorf("season %d of %q has no episode %d (list them with 'lobster episodes --ref ...')", selectedSeason.Number, title, episode)
 			}
 		} else {
@@ -403,7 +458,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				episodeItems = append(batchItems, episodeItems...)
 			}
 
-			episodeIdx, err = ui.Select("Episode", episodeItems)
+			episodeIdx, err = selectItem("Episode", episodeItems)
 			if err != nil {
 				return err
 			}

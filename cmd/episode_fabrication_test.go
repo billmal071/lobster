@@ -424,3 +424,158 @@ func TestResolveAndPlayErrorNamesTheProviderAndTheRemedy(t *testing.T) {
 		}
 	}
 }
+
+// listingChainProvider is a fallback that can do everything the primary
+// cannot: it has the show, enumerates its seasons, lists a real 22-episode
+// season, and streams. That combination is what makes the interactive menu
+// recoverable — the numbers offered are a provider's own list, not invented.
+type listingChainProvider struct {
+	*stubProvider
+	url string
+
+	mu          sync.Mutex
+	lastEpisode string
+}
+
+func (p *listingChainProvider) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+	p.mu.Lock()
+	p.lastEpisode = episodeID
+	p.mu.Unlock()
+	return &media.Stream{URL: p.url}, nil
+}
+
+func (p *listingChainProvider) episodeAsked() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lastEpisode
+}
+
+func newListingChainProvider(url string) *listingChainProvider {
+	return &listingChainProvider{
+		stubProvider: &stubProvider{
+			results: []media.SearchResult{{ID: "tv/fallback-1", Title: "Some Show", Type: media.TV}},
+			seasons: []media.Season{{ID: "f1", Number: 1}},
+			episodesBySeason: map[string][]media.Episode{
+				"f1": twentyTwoEpisodes(),
+			},
+		},
+		url: url,
+	}
+}
+
+// recordSelections installs a menu stub that records what each menu was
+// offered and picks a fixed index.
+func recordSelections(t *testing.T, pick int) *[][]string {
+	t.Helper()
+	var offered [][]string
+	prev := selectItem
+	selectItem = func(prompt string, items []string) (int, error) {
+		offered = append(offered, items)
+		return pick, nil
+	}
+	t.Cleanup(func() { selectItem = prev })
+	return &offered
+}
+
+// Interactive use passes no --episode, so the recovery for a primary that
+// cannot enumerate episodes has to produce a *list*, not a stream: without one
+// there is no menu to offer and the command dies on "getting episodes". The
+// chain can list — `episodes` already makes exactly this move — so the menu
+// must be offered from a chain provider's real list.
+func TestResolveAndPlayOffersTheChainsEpisodeListWhenNoEpisodeRequested(t *testing.T) {
+	hostileEnv(t)
+	pl := &countingPlayer{stubPlayerImpl: stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}}}
+	playStreamHarness(t, pl)
+
+	fb := newListingChainProvider(stubStreamServer(t))
+	withFallbackChain(t, fb)
+	// The last episode, so the session ends rather than reaching the
+	// post-playback menu.
+	offered := recordSelections(t, 21)
+
+	primary := &stubProvider{
+		seasons:     []media.Season{{ID: "s1", Number: 1}},
+		episodesErr: errProviderCannotList,
+	}
+	sel := media.SearchResult{ID: "tv/1403", Title: "Some Show", Year: "2013", Type: media.TV}
+
+	if err := resolveAndPlay(primary, sel, 1, 0); err != nil {
+		t.Fatalf("resolveAndPlay = %v; with no --episode the chain's episode list must be offered as a menu", err)
+	}
+	if len(*offered) != 1 {
+		t.Fatalf("menus offered = %d, want 1 episode menu", len(*offered))
+	}
+	if got := len((*offered)[0]); got != 22 {
+		t.Fatalf("episode menu offered %d entries, want the chain's 22", got)
+	}
+	if got := fb.episodeAsked(); got != "f1e22" {
+		t.Fatalf("chain Watch asked for episode %q, want %q — the menu selection must play the episode it named", got, "f1e22")
+	}
+	if n := pl.played(); n != 1 {
+		t.Fatalf("player started %d time(s), want 1", n)
+	}
+}
+
+// The same recovery with --episode: before this the request went straight to
+// the fallback *resolver*, which returns one stream and no list, so
+// next/previous-episode continuation was lost for every primary that cannot
+// enumerate episodes. When the chain can list, the session is built from that
+// list instead — and the requested number is looked up in it, so a fallback
+// still plays the episode that was asked for or none at all.
+func TestResolveAndPlayKeepsPlaylistContinuityViaTheChain(t *testing.T) {
+	hostileEnv(t)
+	pl := &countingPlayer{stubPlayerImpl: stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}}}
+	playStreamHarness(t, pl)
+
+	fb := newListingChainProvider(stubStreamServer(t))
+	withFallbackChain(t, fb)
+	recordSelections(t, 0) // no menu should be reached
+
+	primary := &stubProvider{
+		seasons:     []media.Season{{ID: "s1", Number: 1}},
+		episodesErr: errProviderCannotList,
+	}
+	sel := media.SearchResult{ID: "tv/1403", Title: "Some Show", Year: "2013", Type: media.TV}
+
+	// The last episode, so the session ends rather than reaching the
+	// post-playback menu — its existence is the point being tested.
+	if err := resolveAndPlay(primary, sel, 1, 22); err != nil {
+		t.Fatalf("resolveAndPlay = %v", err)
+	}
+	if got := fb.episodeAsked(); got != "f1e22" {
+		t.Fatalf("chain Watch asked for episode %q, want the listed ID %q — a session built from the real list, not an arithmetic stream lookup", got, "f1e22")
+	}
+}
+
+// A chain provider's list can be real and still short of the show — a
+// currently-airing season, or a season it only partly carries. Building the
+// session on it and playing the nearest entry would be the silent
+// substitution this whole path exists to prevent, so a requested number the
+// list lacks must go to the resolver, which needs no list, and must never play
+// a different episode.
+func TestResolveAndPlayDoesNotSubstituteWhenTheChainsListIsShort(t *testing.T) {
+	hostileEnv(t)
+	pl := &countingPlayer{stubPlayerImpl: stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}}}
+	playStreamHarness(t, pl)
+
+	fb := newListingChainProvider(stubStreamServer(t))
+	// A genuine but two-episode list: nothing in it is episode 15.
+	fb.episodesBySeason = map[string][]media.Episode{
+		"f1": {{ID: "f1e1", Number: 1}, {ID: "f1e2", Number: 2}},
+	}
+	withFallbackChain(t, fb)
+	recordSelections(t, 0) // no menu should be reached
+
+	primary := &stubProvider{
+		seasons:     []media.Season{{ID: "s1", Number: 1}},
+		episodesErr: errProviderCannotList,
+	}
+	sel := media.SearchResult{ID: "tv/1403", Title: "Some Show", Year: "2013", Type: media.TV}
+
+	if err := resolveAndPlay(primary, sel, 1, 15); err != nil {
+		t.Fatalf("resolveAndPlay = %v; a short chain list must not cost the request its resolver hop", err)
+	}
+	if got := fb.episodeAsked(); got != "fallback-1:1:15" {
+		t.Fatalf("chain Watch asked for episode %q, want the requested %q — never an entry from the short list", got, "fallback-1:1:15")
+	}
+}
