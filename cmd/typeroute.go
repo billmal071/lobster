@@ -54,10 +54,11 @@ func baseIsAuto() bool { return cfg == nil || cfg.Base == config.BaseAuto }
 // ("no seasons found", measured 2026-09-09) — so a series is left with the
 // provider that found it.
 //
-// An explicit base wins for both types (baseIsAuto), and so does an explicit
-// download: YTS resolves to a magnet, which the download path refuses outright
-// (streamToResultChecked, cmd/fallback.go), so routing a download to it would
-// turn a working download into an error message.
+// An explicit base wins for both types (baseIsAuto), and so do --download and
+// --json: YTS resolves to a magnet, which the download path refuses outright
+// (streamToResultChecked, cmd/fallback.go) and which a --json consumer cannot
+// open at all, so routing either to it would turn a working answer into an
+// error message or an unusable URI.
 //
 // The YTS ID is looked up by title and year rather than assumed, because IDs are not
 // portable: YTS's are "yts/<numeric>" and it rejects anything else
@@ -131,6 +132,16 @@ func routeByType(p provider.Provider, sel media.SearchResult) (provider.Provider
 	}
 
 	if flagDownload != "" {
+		return p, sel
+	}
+	// --json is the same class of caller as --download: it wants something it
+	// can act on, and a magnet is not it. playStream's JSON branch runs before
+	// the magnet is handed to the local torrent server (cmd/search.go), so a
+	// routed --json run emits the raw magnet URI as its "url" — which nothing
+	// consuming --json can open — and a null "subtitles", since YTS carries
+	// none. Leaving the primary in place gives the caller a playable HTTP URL
+	// and whatever subtitles the scraper found.
+	if flagJSON {
 		return p, sel
 	}
 	if _, isYTS := p.(*provider.YTS); isYTS {

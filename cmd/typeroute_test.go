@@ -1,6 +1,10 @@
 package cmd
 
 import (
+	"encoding/json"
+	"io"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -521,5 +525,104 @@ func TestResolveAndPlayFilesTheSameHistoryIDWhetherYTSAnswersOrTimesOut(t *testi
 	}
 	if afterRoute[0] != sel.ID {
 		t.Fatalf("history ID = %q, want the pre-routing %q: the selection's own ID is the one that does not depend on a network lookup", afterRoute[0], sel.ID)
+	}
+}
+
+// captureStdout redirects os.Stdout for the duration of the test and returns
+// what was written to it. playStream's --json branch writes straight to
+// os.Stdout (cmd/search.go), so this is the only way to read what an agent
+// would actually receive.
+func captureStdout(t *testing.T) func() string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	prev := os.Stdout
+	os.Stdout = w
+	var (
+		once sync.Once
+		out  string
+	)
+	read := func() string {
+		once.Do(func() {
+			os.Stdout = prev
+			_ = w.Close()
+			b, _ := io.ReadAll(r)
+			_ = r.Close()
+			out = string(b)
+		})
+		return out
+	}
+	t.Cleanup(func() { read() })
+	return read
+}
+
+// --json is the metadata surface: its consumer is a script or an agent that
+// wants a URL it can open. YTS resolves to a magnet, which nothing consuming
+// --json can play, and it carries no subtitles either — so routing a --json
+// run to YTS turns a usable answer into an unusable one. --download already
+// short-circuits the route for the same reason (a magnet cannot be
+// downloaded), and this is the same class of caller.
+func TestRouteByTypeDoesNotSendAJSONRunToYTS(t *testing.T) {
+	yts := matrixOnYTS()
+	withYTSRoute(t, "auto", yts)
+
+	prevJSON := flagJSON
+	flagJSON = true
+	t.Cleanup(func() { flagJSON = prevJSON })
+
+	primary := &stubProvider{}
+	sel := media.SearchResult{ID: "movie/the-matrix-19", Title: "The Matrix", Year: "1999", Type: media.Movie}
+
+	got, routed := routeByType(primary, sel)
+	if got != provider.Provider(primary) {
+		t.Fatalf("routeByType sent a --json run to %T; a magnet is not a URL its caller can open", got)
+	}
+	if routed.ID != "movie/the-matrix-19" {
+		t.Fatalf("routed ID = %q, want the selection untouched under --json", routed.ID)
+	}
+	if n := yts.searchCount(); n != 0 {
+		t.Fatalf("YTS was searched %d times for a --json run", n)
+	}
+}
+
+// The end-to-end statement of the same rule, through the real resolveAndPlay:
+// the JSON branch in playStream runs *before* the magnet is handed to the
+// local torrent server, so a routed --json run emitted the raw magnet URI as
+// its "url" and null subtitles. This drives the whole path so a fix that is
+// correct in routeByType but unwired reds here.
+func TestResolveAndPlayJSONNeverEmitsAMagnetURI(t *testing.T) {
+	playStreamHarness(t, &recordingPlayer{})
+	cfg.Base = "auto"
+	cfg.Quality = "1080"
+	flagJSON = true
+
+	yts := matrixOnYTS()
+	yts.stream = &media.Stream{URL: "magnet:?xt=urn:btih:DEADBEEF&dn=The+Matrix"}
+	prev := newYTSProvider
+	newYTSProvider = func() provider.Provider { return yts }
+	t.Cleanup(func() { newYTSProvider = prev })
+
+	read := captureStdout(t)
+
+	scraper := &scraperStreamStub{stream: &media.Stream{URL: "http://127.0.0.1:1/scraper-1080p.m3u8"}}
+	sel := media.SearchResult{ID: "movie/the-matrix-19", Title: "The Matrix", Year: "1999", Type: media.Movie}
+	if err := resolveAndPlay(scraper, sel, 0, 0); err != nil {
+		t.Fatalf("resolveAndPlay: %v", err)
+	}
+
+	var out struct {
+		URL string `json:"url"`
+	}
+	raw := read()
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatalf("--json output is not valid JSON: %v (%q)", err, raw)
+	}
+	if strings.HasPrefix(out.URL, "magnet:") {
+		t.Fatalf("--json emitted %q; nothing consuming --json can open a magnet", out.URL)
+	}
+	if out.URL != "http://127.0.0.1:1/scraper-1080p.m3u8" {
+		t.Fatalf("--json url = %q, want the primary's playable stream", out.URL)
 	}
 }
