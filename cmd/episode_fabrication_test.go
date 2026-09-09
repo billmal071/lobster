@@ -147,14 +147,11 @@ func TestEpisodesFallsBackWhenSeasonSourceCannotListEpisodes(t *testing.T) {
 	primary.episodesErr = errProviderCannotList
 	withStubProvider(t, primary)
 
-	fb := &stubProvider{
-		results: []media.SearchResult{{ID: "tv/fallback-1", Title: "Some Show", Type: media.TV}},
-		seasons: []media.Season{{ID: "f1", Number: 1}},
-		episodesBySeason: map[string][]media.Episode{
-			"f1": twentyTwoEpisodes(),
-		},
-	}
-	withFallbackChain(t, fb)
+	// More than one member on purpose: with a single-provider chain the test
+	// cannot tell "tries the chain" from "tries every chain provider until one
+	// answers", and the first fallback in the real chain order (VidNest) is
+	// itself a seasons-yes/episodes-no provider.
+	withFallbackChain(t, blockedLister(), answeringLister())
 	withEpisodesFlags(t, tvRef(t, ""), 1)
 
 	if err := episodesRun(episodesCmd, nil); err != nil {
@@ -316,5 +313,69 @@ func TestEpisodesNamesTheAnsweringProvider(t *testing.T) {
 	}
 	if got.Provider != "fallbackstubprovider" {
 		t.Fatalf("provider = %q, want %q — the envelope must name the provider that answered, not the configured primary", got.Provider, "fallbackstubprovider")
+	}
+}
+
+// blockedListerProvider and answeringListerProvider are distinct Go types so
+// providerLabel can tell them apart in the envelope — two *stubProvider values
+// are indistinguishable there.
+type blockedListerProvider struct{ *stubProvider }
+type answeringListerProvider struct{ *stubProvider }
+
+// blockedLister has the show and can enumerate its seasons but cannot list
+// episodes — the shape of VidNest and MovieBox, and the first two entries of
+// the real fallback chain.
+func blockedLister() *blockedListerProvider {
+	return &blockedListerProvider{&stubProvider{
+		results:     []media.SearchResult{{ID: "tv/blocked-1", Title: "Some Show", Type: media.TV}},
+		seasons:     []media.Season{{ID: "b1", Number: 1}},
+		episodesErr: errProviderCannotList,
+	}}
+}
+
+// answeringLister can answer both questions.
+func answeringLister() *answeringListerProvider {
+	return &answeringListerProvider{&stubProvider{
+		results: []media.SearchResult{{ID: "tv/fallback-1", Title: "Some Show", Type: media.TV}},
+		seasons: []media.Season{{ID: "f1", Number: 1}},
+		episodesBySeason: map[string][]media.Episode{
+			"f1": twentyTwoEpisodes(),
+		},
+	}}
+}
+
+// The chain is scanned for a provider that can enumerate *seasons*, which is a
+// different question from enumerating episodes. Taking the first such hit and
+// making exactly one GetEpisodes call means a show the rest of the chain could
+// list exits 3 — and the real chain leads with two providers of exactly that
+// shape (VidNest, MovieBox). Every hit must be tried, in chain order.
+func TestEpisodesTriesLaterChainProvidersWhenTheFirstCannotListEpisodes(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+
+	// The primary cannot enumerate seasons either, so the season list itself
+	// comes from the chain — the path where the hits are already in hand.
+	withStubProvider(t, &stubProvider{seasonsErr: errProviderCannotList})
+	withFallbackChain(t, blockedLister(), answeringLister())
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun = %v; a later chain provider could list all 22 episodes", err)
+	}
+
+	var got struct {
+		Provider string `json:"provider"`
+		Episodes []struct {
+			Number int `json:"number"`
+		} `json:"episodes"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+	}
+	if len(got.Episodes) != 22 {
+		t.Fatalf("listed %d episodes, want the second chain provider's 22", len(got.Episodes))
+	}
+	if got.Provider != "answeringlisterprovider" {
+		t.Fatalf("provider = %q, want %q — the envelope must name the provider that actually listed the episodes", got.Provider, "answeringlisterprovider")
 	}
 }

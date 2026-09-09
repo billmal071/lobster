@@ -48,21 +48,22 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	applyRefBase(cmd, r)
 
 	primary := agentProvider()
-	p, id, seasons, fromPrimary, primaryErr := seasonSource(primary, r)
-	if len(seasons) == 0 {
-		if primaryErr != nil {
-			return emitErr("providers_failed", exitProvidersFailed, "getting seasons: %v", primaryErr)
+	src := seasonSource(primary, r)
+	if len(src.seasons) == 0 {
+		if src.err != nil {
+			return emitErr("providers_failed", exitProvidersFailed, "getting seasons: %v", src.err)
 		}
 		return emitErr("no_results", exitNoResults, "no seasons found for %q", r.Title)
 	}
 
+	p, seasons := src.provider, src.seasons
 	sel, ok := pickSeason(seasons, flagSeason)
 	if !ok {
 		return emitErr("no_results", exitNoResults, "season %d not found for %q", flagSeason, r.Title)
 	}
 
-	eps, err := p.GetEpisodes(id, sel.ID)
-	if (err != nil || len(eps) == 0) && fromPrimary {
+	eps, err := p.GetEpisodes(src.id, sel.ID)
+	if err != nil || len(eps) == 0 {
 		// Enumerating seasons and enumerating episodes are different
 		// questions, and a provider can answer the first and not the second:
 		// MovieBox reports a real season count from cached search data while
@@ -70,18 +71,26 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		// seasons by probing for streams but has no episode index at all.
 		// Both now return an error rather than a generated list, so without
 		// this the command would be exit 3 for every show under such a
-		// primary. Re-search the chain exactly as a failed GetSeasons does.
+		// primary.
 		//
-		// Only when the primary answered: if seasons already came from the
-		// fallback scan, that scan has run and rerunning it would double this
-		// command's worst-case wait.
-		debugf("episodes: %T enumerated seasons but not episodes (err=%v, episodes=%d); re-searching the fallback chain by title", p, err, len(eps))
-		if fp, fid, fseasons, fok := fallbackSeasonSource(primary, r); fok {
-			if fsel, ok := pickSeason(fseasons, flagSeason); ok {
-				if feps, ferr := fp.GetEpisodes(fid, fsel.ID); ferr == nil && len(feps) > 0 {
-					p, id, seasons, sel, eps, err = fp, fid, fseasons, fsel, feps, nil
-				}
-			}
+		// Whoever answered here, the chain is asked next — and every hit in it
+		// is asked, not just the first. Selecting a source on "can you
+		// enumerate seasons?" and then making one GetEpisodes call meant a
+		// single seasons-yes/episodes-no provider ended the search for a show
+		// the rest of the chain could list; the real chain leads with two of
+		// exactly that shape (VidNest, MovieBox).
+		//
+		// src.alts is already in hand when the season list came from the
+		// chain, so that case costs no extra scan. Only a primary-sourced
+		// season list has to run the scan here.
+		debugf("episodes: %T enumerated seasons but not episodes (err=%v, episodes=%d); asking the fallback chain", p, err, len(eps))
+		alts := src.alts
+		if src.fromPrimary {
+			alts = fallbackSeasonHits(primary, r)
+		}
+		if a := firstEpisodeList(alts, flagSeason); a != nil {
+			debugf("episodes: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), a.season.Number)
+			p, seasons, sel, eps, err = a.hit.provider, a.hit.seasons, a.season, a.episodes, nil
 		}
 	}
 	if err != nil {
@@ -174,17 +183,37 @@ var episodesFallbackTimeout = multiSearchTimeout
 // timeout, is minutes of silence on a degraded chain. Provider order still
 // decides the winner, so the answer does not depend on which provider was
 // quickest.
-func seasonSource(primary provider.Provider, r playRef) (provider.Provider, string, []media.Season, bool, error) {
+func seasonSource(primary provider.Provider, r playRef) seasonAnswer {
 	seasons, err := primary.GetSeasons(r.ID)
 	if err == nil && len(seasons) > 0 {
-		return primary, r.ID, seasons, true, nil
+		return seasonAnswer{provider: primary, id: r.ID, seasons: seasons, fromPrimary: true}
 	}
 	debugf("episodes: primary could not enumerate %q (err=%v, seasons=%d); re-searching the fallback chain by title", r.ID, err, len(seasons))
 
-	if p, id, fallbackSeasons, ok := fallbackSeasonSource(primary, r); ok {
-		return p, id, fallbackSeasons, false, nil
+	if hits := fallbackSeasonHits(primary, r); len(hits) > 0 {
+		return seasonAnswer{
+			provider: hits[0].provider,
+			id:       hits[0].id,
+			seasons:  hits[0].seasons,
+			alts:     hits[1:],
+		}
 	}
-	return primary, r.ID, nil, true, err
+	return seasonAnswer{provider: primary, id: r.ID, fromPrimary: true, err: err}
+}
+
+// seasonAnswer is who ended up answering seasonSource, plus the chain hits it
+// did not pick. alts exists so the caller can move on to the next provider
+// when the chosen one turns out to enumerate seasons but not episodes, without
+// paying for the chain scan a second time.
+type seasonAnswer struct {
+	provider provider.Provider
+	id       string
+	seasons  []media.Season
+	alts     []*seasonHit
+	// fromPrimary reports that the chain scan has not run, so alts is empty
+	// because nothing looked rather than because nothing answered.
+	fromPrimary bool
+	err         error
 }
 
 // pickSeason returns the season with the requested number, or the first season
@@ -205,10 +234,14 @@ func pickSeason(seasons []media.Season, want int) (media.Season, bool) {
 	return media.Season{}, false
 }
 
-// fallbackSeasonSource runs the parallel, deadline-bounded scan of the
-// fallback chain described on seasonSource, returning the first provider in
-// chain order that has this work and can enumerate its seasons.
-func fallbackSeasonSource(primary provider.Provider, r playRef) (provider.Provider, string, []media.Season, bool) {
+// fallbackSeasonHits runs the parallel, deadline-bounded scan of the fallback
+// chain described on seasonSource, returning every provider that has this work
+// and can enumerate its seasons, in chain order.
+//
+// Every hit, not just the first: enumerating seasons does not imply
+// enumerating episodes, so the caller needs somewhere to go when its first
+// choice cannot answer the second question.
+func fallbackSeasonHits(primary provider.Provider, r playRef) []*seasonHit {
 	req := resolver.Request{
 		ID:        r.ID,
 		Title:     r.Title,
@@ -235,13 +268,87 @@ func fallbackSeasonSource(primary provider.Provider, r playRef) (provider.Provid
 	// searchWithContext uses, so this Wait is bounded by the context.
 	wg.Wait()
 
+	found := make([]*seasonHit, 0, len(hits))
 	for _, h := range hits {
 		if h != nil {
 			debugf("episodes: %T answers for %q (ID %s)", h.provider, h.title, h.id)
-			return h.provider, h.id, h.seasons, true
+			found = append(found, h)
 		}
 	}
-	return nil, "", nil, false
+	return found
+}
+
+// episodeAnswer is one fallback provider's episode list for the requested
+// season.
+type episodeAnswer struct {
+	hit      *seasonHit
+	season   media.Season
+	episodes []media.Episode
+}
+
+// firstEpisodeList asks every hit for the requested season's episodes and
+// returns the first one in chain order that answers, or nil.
+//
+// It fans out under the same deadline the season scan uses, for the same
+// reason: asking up to eleven providers in turn, each against a 30s HTTP
+// timeout, is minutes of silence on a degraded chain, and `episodes` exists so
+// an agent is never left waiting. Provider order still decides the winner, so
+// the answer does not depend on which provider was quickest.
+func firstEpisodeList(hits []*seasonHit, wantSeason int) *episodeAnswer {
+	if len(hits) == 0 {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), episodesFallbackTimeout)
+	defer cancel()
+
+	answers := make([]*episodeAnswer, len(hits))
+	var wg sync.WaitGroup
+	for i, h := range hits {
+		sel, ok := pickSeason(h.seasons, wantSeason)
+		if !ok {
+			continue
+		}
+		wg.Add(1)
+		go func(idx int, h *seasonHit, sel media.Season) {
+			defer wg.Done()
+			eps, err := episodesWithContext(ctx, h.provider, h.id, sel.ID)
+			if err != nil || len(eps) == 0 {
+				debugf("episodes: fallback %T cannot list season %d (err=%v, episodes=%d)", h.provider, sel.Number, err, len(eps))
+				return
+			}
+			answers[idx] = &episodeAnswer{hit: h, season: sel, episodes: eps}
+		}(i, h, sel)
+	}
+	wg.Wait()
+
+	for _, a := range answers {
+		if a != nil {
+			return a
+		}
+	}
+	return nil
+}
+
+// episodesWithContext is seasonsWithContext for GetEpisodes, with the same
+// caveat: provider.Provider takes no context, so the inner goroutine runs to
+// completion and its result is discarded when the deadline wins.
+func episodesWithContext(ctx context.Context, p provider.Provider, id, seasonID string) ([]media.Episode, error) {
+	type result struct {
+		episodes []media.Episode
+		err      error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		e, err := p.GetEpisodes(id, seasonID)
+		ch <- result{e, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case r := <-ch:
+		return r.episodes, r.err
+	}
 }
 
 // seasonHit is one fallback provider's answer for a ref.
