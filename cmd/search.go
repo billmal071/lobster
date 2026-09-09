@@ -585,9 +585,12 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	var startPos float64
 	if flagContinue && cfg.History {
 		entries, _ := history.Load()
-		if pos, ok := resumePosition(entries, selected, season, episode); ok {
-			startPos = pos
-			debugf("resuming from position: %.0fs", startPos)
+		for _, e := range entries {
+			if e.ID == selected.ID && e.Season == season && e.Episode == episode {
+				startPos = e.Position
+				debugf("resuming from position: %.0fs", startPos)
+				break
+			}
 		}
 	}
 
@@ -607,16 +610,6 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 
 	result, playErr := p2.Play(stream, title, startPos, subFiles)
 
-	// The write path deliberately keeps the exact-ID rule: it files this watch
-	// under the selection's own ID and matches an existing row on
-	// (ID, Season, Episode) alone (history.Save). The resume lookup above can
-	// afford to guess from a title because a wrong guess costs one playback
-	// starting in the wrong place, and the next save corrects the row; a save
-	// that adopted a same-titled row's ID would rewrite the user's history on
-	// the strength of that guess, with nothing to undo it. The cost of the
-	// asymmetry is a second row for a title watched under two sources, which
-	// still resumes correctly by title.
-	//
 	// Save to history before surfacing any player error: Play returns the
 	// tracked position alongside the error, and an abnormal exit (killed,
 	// crash) is exactly the watch whose resume point must not be lost. With no
