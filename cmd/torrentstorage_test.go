@@ -57,12 +57,20 @@ func withOutputFlags(t *testing.T, jsonOut bool, dl string) {
 	t.Cleanup(func() { flagJSON, flagDownload = prevJSON, prevDL })
 }
 
-// applyConfig is PersistentPreRunE, so this runs for every subcommand — and
-// warnf is ungated, so a wrong "yes" on Windows (where canExec is false and
-// planFileIo warns instead of re-execing) prints a SIGBUS notice on `lobster
-// version`. Under the auto base the route is the only thing that reaches YTS,
-// and routeByType returns early for both --json and --download, so neither
-// run can open a magnet however it ends.
+// Under the auto base the route is the only thing that reaches YTS, and
+// routeByType returns early for both --json and --download, so neither run can
+// open a magnet however it ends. Saying "yes" for one of them costs a re-exec,
+// or on Windows (canExec false) an ungated SIGBUS notice on stderr.
+//
+// This covers the output flags only. It says nothing about which subcommand is
+// running: `lobster version` passes neither flag, so this function answered
+// "yes" for it and every other non-playback command until the gate moved to
+// loadConfig. That gate is asserted in
+// TestOnlyCommandsThatCanPlayChooseTheStorageBackend (storagegate_test.go),
+// which watches the call rather than the environment — the
+// TORRENT_STORAGE_DEFAULT_FILE_IO that TestMain presets makes the mechanism
+// itself a no-op under test, so any fixture reading the environment would see
+// nothing.
 func TestMayStreamTorrentUnderAutoIgnoresRunsTheRouteRefuses(t *testing.T) {
 	auto := &config.Config{Base: config.BaseAuto}
 

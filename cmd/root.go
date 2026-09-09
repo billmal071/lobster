@@ -101,6 +101,15 @@ func init() {
 	rootCmd.AddCommand(trendingCmd)
 	rootCmd.AddCommand(recentCmd)
 	rootCmd.AddCommand(versionCmd)
+
+	// The commands that end in resolveAndPlay: the bare root (searchRun's
+	// interactive picker), play (agentResolveAndPlay), history (historyRun),
+	// and the two browse commands (trendingRun/recentRun).
+	markPlaybackCommand(rootCmd)
+	markPlaybackCommand(playCmd)
+	markPlaybackCommand(historyCmd)
+	markPlaybackCommand(trendingCmd)
+	markPlaybackCommand(recentCmd)
 }
 
 // loadConfig is the root's PersistentPreRunE, so it runs for the interactive
@@ -116,8 +125,53 @@ func loadConfig(cmd *cobra.Command, args []string) error {
 		}
 		return err
 	}
+
+	// The torrent library picks its storage backend in its own init(), so the
+	// only way onto the one that cannot SIGBUS is to start the process again
+	// with the variable already set. Do it here, once the effective base and
+	// fallback setting are known but before any search, network call or
+	// terminal setup — the re-exec replays argv, so anything the user would
+	// not want repeated must not have happened yet.
+	//
+	// Gated on the command, not on the output flags. This is
+	// PersistentPreRunE, so it runs for `version`, `doctor`, `find`,
+	// `episodes` and `channels` too, and none of them can reach a magnet: the
+	// per-type route to YTS runs from resolveAndPlay only. Flag-gating was
+	// tried and does not cover them — `version` passes neither --json nor
+	// --download, so it re-execed all the same, and on Windows (canExec
+	// false) planFileIo warns instead, printing a SIGBUS notice ahead of the
+	// version string. The flag conditions inside mayStreamTorrent still earn
+	// their place for the commands that do play; they are just not sufficient
+	// on their own.
+	if reachesPlayback(cmd) {
+		ensureSafeStorage(mayStreamTorrent(cfg), warnf)
+	}
 	return nil
 }
+
+// playbackCommands is the set of commands that can reach resolveAndPlay, and
+// so the set for which the torrent storage backend matters. Membership is
+// declared at registration (init) rather than inferred, because there is no
+// way to ask a cobra command what its RunE eventually calls.
+var playbackCommands = map[*cobra.Command]bool{}
+
+// markPlaybackCommand records that c can reach resolveAndPlay.
+func markPlaybackCommand(c *cobra.Command) { playbackCommands[c] = true }
+
+// reachesPlayback reports whether cmd can end in playback. A command absent
+// from the set is treated as one that cannot, which is the safe direction for
+// the wrong answer: the cost is a run that streams a torrent on the
+// memory-mapped backend only if a playback command is ever added without being
+// marked — and TestOnlyCommandsThatCanPlayChooseTheStorageBackend fails on any
+// unlisted command to stop exactly that.
+func reachesPlayback(cmd *cobra.Command) bool { return cmd != nil && playbackCommands[cmd] }
+
+// ensureSafeStorage is torrentstream.EnsureSafeStorage behind a package var.
+// The mechanism's own no-op path is environment-driven
+// (TORRENT_STORAGE_DEFAULT_FILE_IO, which this package's TestMain presets so a
+// test binary can never re-exec itself), so a test asserting on the environment
+// could not see whether the call happens at all. This seam can.
+var ensureSafeStorage = torrentstream.EnsureSafeStorage
 
 // applyConfig loads and merges configuration: defaults < config file < CLI flags.
 func applyConfig() error {
@@ -155,14 +209,6 @@ func applyConfig() error {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	// The torrent library picks its storage backend in its own init(), so the
-	// only way onto the one that cannot SIGBUS is to start the process again
-	// with the variable already set. Do it here, once the effective base and
-	// fallback setting are known but before any search, network call or
-	// terminal setup — the re-exec replays argv, so anything the user would
-	// not want repeated must not have happened yet.
-	torrentstream.EnsureSafeStorage(mayStreamTorrent(cfg), warnf)
-
 	if cfg.Debug {
 		log.SetOutput(os.Stderr)
 		log.SetPrefix("[lobster] ")
@@ -179,7 +225,6 @@ func applyConfig() error {
 	return nil
 }
 
-// debugf logs a message if debug mode is enabled.
 // mayStreamTorrent reports whether this run could open a magnet, which decides
 // whether the storage backend matters at all.
 //
@@ -215,10 +260,11 @@ func mayStreamTorrent(c *config.Config) bool {
 	//     path accepts.
 	//
 	// Cobra parses flags before PersistentPreRunE, so both are populated by
-	// the time applyConfig calls this. Reading them matters because applyConfig
-	// runs for every subcommand and warnf is ungated: on Windows, where
-	// canExec is false and planFileIo warns instead of re-execing, a wrong
-	// "yes" here prints a SIGBUS notice on a run that never opens a torrent.
+	// the time loadConfig calls this. They are worth reading because a "yes"
+	// is not free: it re-execs the process, or on Windows (canExec false)
+	// prints an ungated SIGBUS notice. Which subcommand is running is handled
+	// separately and earlier, by reachesPlayback — this function is only ever
+	// asked about a command that can play.
 	if flagJSON || flagDownload != "" {
 		return false
 	}
