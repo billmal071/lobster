@@ -962,3 +962,145 @@ func TestResolveAndPlayRefusesAPartialListThatCameWithAnError(t *testing.T) {
 		t.Fatalf("player started %d time(s) from a list that arrived with an error", n)
 	}
 }
+
+// withExcludingFallbackChain installs a chain that drops whichever provider it
+// is handed, which is what the real fallbackProviders does (by concrete type,
+// cmd/fallback.go) and what withFallbackChain's fixed list cannot express. The
+// distinction is the whole of this pair of tests: once the episode-list
+// recovery moves playback to a chain provider, handing that provider to the
+// chain builder excludes the one source proven to have this work and adds back
+// the primary that could not even list it.
+func withExcludingFallbackChain(t *testing.T, ps ...provider.Provider) {
+	t.Helper()
+	prev := agentFallbackProviders
+	agentFallbackProviders = func(primary provider.Provider) []provider.Provider {
+		out := make([]provider.Provider, 0, len(ps))
+		for _, p := range ps {
+			if p != primary {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	t.Cleanup(func() { agentFallbackProviders = prev })
+}
+
+// twoEpisodeChainProvider is a chain member with one season of two episodes,
+// small enough that a batch over it is quick.
+func twoEpisodeChainProvider(url string) *scanCountingChainProvider {
+	return &scanCountingChainProvider{
+		stubProvider: &stubProvider{
+			results: []media.SearchResult{{ID: "tv/fallback-1", Title: "Some Show", Type: media.TV}},
+			seasons: []media.Season{{ID: "f1", Number: 1}},
+			episodesBySeason: map[string][]media.Episode{
+				"f1": {{ID: "f1e1", Number: 1}, {ID: "f1e2", Number: 2}},
+			},
+		},
+		url: url,
+	}
+}
+
+// After the episode-list recovery, every later use of the rebound provider
+// treated it as "the primary" — including chain construction. A batch download
+// then resolved each episode from a chain that excluded the provider which had
+// just listed them, and included the primary that could not.
+//
+// Nothing masks it here: unlike playback, downloadSingleEpisode has no
+// try-the-session's-provider-first step. The chain is the only thing it has.
+func TestBatchDownloadKeepsTheAnsweringProviderInItsChain(t *testing.T) {
+	hostileEnv(t)
+
+	prevCfg := cfg
+	cfg = &config.Config{Quality: "1080"}
+	t.Cleanup(func() { cfg = prevCfg })
+
+	prevJSON, prevDL := flagJSON, flagDownload
+	flagJSON, flagDownload = false, t.TempDir()
+	t.Cleanup(func() { flagJSON, flagDownload = prevJSON, prevDL })
+
+	fb := twoEpisodeChainProvider("http://127.0.0.1:1/never-dialed.m3u8")
+	withExcludingFallbackChain(t, fb)
+
+	// One season, so the season menu offers no batch entries and index 0 is
+	// Season 1; the episode menu does, and index 0 there is "Download all".
+	recordSelections(t, 0)
+
+	primary := &stubProvider{
+		seasons:     []media.Season{{ID: "s1", Number: 1}},
+		episodesErr: errProviderCannotList,
+	}
+	sel := media.SearchResult{ID: "tv/1403", Title: "Some Show", Year: "2013", Type: media.TV}
+
+	// The downloads themselves fail on an unreachable URL and end at the retry
+	// prompt, which hostileEnv turns into an error. Which providers were asked
+	// is settled before that.
+	_ = resolveAndPlay(primary, sel, 0, 0)
+
+	want := []string{"fallback-1:1:1", "fallback-1:1:2"}
+	if got := fb.episodesAsked(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("the provider that listed the season was asked to stream %v, want %v — the recovery must not exclude it from its own chain", got, want)
+	}
+}
+
+// listedIDFailingProvider lists a season and streams it, but its own listed
+// episode IDs no longer resolve — a dead entry on its side, which is the state
+// AllAnime's finished series are in and any scraper can reach transiently. The
+// resolver's arithmetic "<id>:<season>:<episode>" lookup still works, so the
+// provider is far from useless; it just cannot be reached through the
+// session's first attempt.
+type listedIDFailingProvider struct {
+	*stubProvider
+	url string
+
+	mu   sync.Mutex
+	byID []string
+}
+
+func (p *listedIDFailingProvider) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+	if strings.HasPrefix(episodeID, "f1e") {
+		p.mu.Lock()
+		p.byID = append(p.byID, episodeID)
+		p.mu.Unlock()
+		return nil, errors.New("that episode ID is gone")
+	}
+	return &media.Stream{URL: p.url}, nil
+}
+
+// The session built on a recovered list carries the answering provider, and
+// cmd/session.go's resolveStream used it to build the fallback chain too. The
+// Watch-first step masks that whenever the provider answers to its own episode
+// IDs — but when it does not, playback fell all the way through to a chain
+// with the one provider that has this show removed from it.
+func TestRecoveredSessionKeepsTheAnsweringProviderInItsChain(t *testing.T) {
+	hostileEnv(t)
+	pl := &countingPlayer{stubPlayerImpl: stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}}}
+	playStreamHarness(t, pl)
+
+	fb := &listedIDFailingProvider{
+		stubProvider: &stubProvider{
+			results: []media.SearchResult{{ID: "tv/fallback-1", Title: "Some Show", Type: media.TV}},
+			seasons: []media.Season{{ID: "f1", Number: 1}},
+			episodesBySeason: map[string][]media.Episode{
+				"f1": {{ID: "f1e1", Number: 1}, {ID: "f1e2", Number: 2}},
+			},
+		},
+		url: stubStreamServer(t),
+	}
+	withExcludingFallbackChain(t, fb)
+	recordSelections(t, 0)
+
+	primary := &stubProvider{
+		seasons:     []media.Season{{ID: "s1", Number: 1}},
+		episodesErr: errProviderCannotList,
+	}
+	sel := media.SearchResult{ID: "tv/1403", Title: "Some Show", Year: "2013", Type: media.TV}
+
+	// The last episode, so the session ends rather than reaching the
+	// post-playback menu.
+	if err := resolveAndPlay(primary, sel, 1, 2); err != nil {
+		t.Fatalf("resolveAndPlay = %v; the provider that listed this season can still resolve it by number", err)
+	}
+	if n := pl.played(); n != 1 {
+		t.Fatalf("player started %d time(s), want 1", n)
+	}
+}

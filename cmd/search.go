@@ -280,6 +280,15 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	episodeID := ""
 	title := selected.Title
 
+	// chainPrimary is the provider that was configured, kept apart from p
+	// because the episode-list recovery below rebinds p to whichever chain
+	// member could answer. The fallback chain is built by *excluding* its
+	// argument (fallbackProviders, cmd/fallback.go), so passing the rebound p
+	// to anything that builds one would drop the single provider proven to
+	// have this show, this season and this episode list, and add back the
+	// primary that could not list it.
+	chainPrimary := p
+
 	// Live channels are endless streams; ffmpeg-to-file would never finish.
 	if _, isLive := p.(*provider.LiveTV); isLive && flagDownload != "" {
 		return fmt.Errorf("live channels cannot be downloaded")
@@ -508,7 +517,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			if flagDownload != "" {
 				if episodeIdx == 0 {
 					// Download all episodes
-					return batchDownload(p, selected, episodes, selectedSeason)
+					return batchDownload(chainPrimary, selected, episodes, selectedSeason)
 				} else if episodeIdx == 1 {
 					// Download range
 					for {
@@ -525,7 +534,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 							fmt.Fprintln(os.Stderr, "No episodes matched the range.")
 							continue
 						}
-						return batchDownload(p, selected, matched, selectedSeason)
+						return batchDownload(chainPrimary, selected, matched, selectedSeason)
 					}
 				}
 				// Offset index by 2 for injected batch options
@@ -538,6 +547,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 
 		// Create a playlist session for continuous playback
 		sess := playlist.NewWithProviderID(p, selected, providerID, seasons, episodes, seasonIdx, episodeIdx)
+		sess.ChainPrimary = chainPrimary
 		cachedServerName = ""
 		return runPlaybackLoop(sess)
 	}

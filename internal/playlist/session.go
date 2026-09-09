@@ -33,6 +33,18 @@ type Session struct {
 	// Session built as a struct literal leaves it empty.
 	ProviderID string
 
+	// ChainPrimary is the provider the fallback chain must be built around,
+	// which is not always Provider either. cmd builds the chain by excluding
+	// its argument (fallbackProviders, cmd/fallback.go), so handing it a
+	// Provider the episode-list recovery moved to would drop the one source
+	// proven to have this work and add back the primary that could not even
+	// list it.
+	//
+	// It is the same split ProviderID makes, one layer out: Provider is who
+	// answers, ChainPrimary is who was configured. Use ChainBase rather than
+	// reading this directly.
+	ChainPrimary provider.Provider
+
 	Seasons      []media.Season
 	Episodes     []media.Episode // episodes for current season
 	SeasonIdx    int
@@ -75,6 +87,16 @@ func NewWithProviderID(p provider.Provider, content media.SearchResult, provider
 		SeasonIdx:  seasonIdx,
 		EpisodeIdx: episodeIdx,
 	}
+}
+
+// ChainBase is the provider to build the fallback chain around. It falls back
+// to Provider, which is what every session did before the episode-list
+// recovery could move Provider somewhere else.
+func (s *Session) ChainBase() provider.Provider {
+	if s.ChainPrimary != nil {
+		return s.ChainPrimary
+	}
+	return s.Provider
 }
 
 // ProviderKey is the ID to call Provider with. It falls back to Content.ID so
