@@ -663,3 +663,32 @@ func TestMayStreamTorrentIgnoresTheAutoBaseWhenAPIURLIsSet(t *testing.T) {
 		t.Fatalf("mayStreamTorrent(%+v) = true; api_url overrides Base, so the route never reaches YTS", c)
 	}
 }
+
+// The route only ever closed the auto path. `lobster --base yts --json <film>`
+// resolves a magnet with no route involved at all, and so does the fallback
+// chain under `torrent_fallback = true` — and playStream's JSON branch runs
+// before the magnet is stood up on the local server, so both handed the caller
+// a "magnet:?xt=…" as their "url". Nothing consuming --json can open one.
+//
+// The guard therefore belongs in the JSON branch itself, which is the one
+// place every arrival path passes through. The fixture is a magnet arriving
+// with no routing decision in sight.
+func TestPlayStreamJSONRefusesAMagnetFromAnyArrivalPath(t *testing.T) {
+	playStreamHarness(t, &recordingPlayer{})
+	cfg.Base = "yts"
+	prevJSON := flagJSON
+	flagJSON = true
+	t.Cleanup(func() { flagJSON = prevJSON })
+
+	read := captureStdout(t)
+
+	sel := media.SearchResult{ID: "yts/1745", Title: "The Matrix", Year: "1999", Type: media.Movie}
+	stream := &media.Stream{URL: "magnet:?xt=urn:btih:DEADBEEF&dn=The+Matrix"}
+	err := playStream(stream, "The Matrix", sel, 0, 0)
+	if err == nil {
+		t.Fatalf("playStream returned no error for a magnet under --json; the caller gets a URI it cannot open")
+	}
+	if out := read(); strings.Contains(out, "magnet:") {
+		t.Fatalf("--json still emitted a magnet: %q", out)
+	}
+}

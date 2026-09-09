@@ -494,6 +494,19 @@ var newPlayer = player.New
 func playStream(stream *media.Stream, title string, selected media.SearchResult, season, episode int) error {
 	// JSON output mode
 	if flagJSON {
+		// A magnet reaches here from any path that does not go through the
+		// per-type route: `--base yts` makes YTS the primary, and
+		// torrent_fallback puts it in the fallback chain. Emitting it as
+		// "url" would hand the caller a URI nothing consuming --json can
+		// open. Standing up the local torrent server instead is no answer
+		// either — its loopback URL dies with this process, which exits as
+		// soon as the JSON is printed — so say so and name the flag that
+		// works. Guarding here rather than at each arrival covers all of
+		// them, including any added later.
+		if torrentstream.IsMagnet(stream.URL) {
+			return fmt.Errorf("%s resolved to a torrent, which --json cannot express as a playable URL; "+
+				"play it without --json, or use --download to fetch it first", title)
+		}
 		out := map[string]interface{}{
 			"title":     title,
 			"url":       stream.URL,
