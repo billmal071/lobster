@@ -306,8 +306,8 @@ another mapping of it is still live, and reading the truncated tail raises
 `SIGBUS` — a signal, not a Go error, so lobster dies mid-playback with no
 recoverable failure.
 
-Lobster avoids this for you. When a run could open a magnet — the default
-`base = "auto"` (which plays movies from YTS), `--base yts`, or
+Lobster avoids this for you. When a playback command could open a magnet — the
+default `base = "auto"` (which plays movies from YTS), `--base yts`, or
 `torrent_fallback = true` — it restarts itself once at startup with the safer
 backend selected:
 
@@ -328,6 +328,16 @@ Two things worth knowing:
 - **On Windows there is no way to restart in place**, so lobster prints a
   warning instead. Set the variable in your environment before launching to get
   the safe backend there.
+- **Commands that cannot play do not restart.** `version`, `find`, `episodes`,
+  `doctor` and `channels` never reach playback, so they neither restart nor
+  print the Windows warning.
+- **A ref can name a torrent source too late.** `play --ref` adopts the base
+  the ref was found under, and that happens after the backend has been chosen,
+  so a ref minted under `--base yts` played from a config with an explicit
+  non-torrent base streams on whichever backend that run was given. Restarting
+  at that point would replay the command, so lobster prints the same warning
+  instead. Pass `--base yts` explicitly, or set the variable, to get the safe
+  backend for those runs.
 
 Set it to anything other than `classic` or `mmap` and the library panics during
 startup, before lobster can report it — the message will be a bare Go panic

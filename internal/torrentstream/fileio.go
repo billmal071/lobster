@@ -99,3 +99,22 @@ func ensureClassicFileIo(willStream bool, warnf func(string, ...any)) {
 func EnsureSafeStorage(willStream bool, warnf func(string, ...any)) {
 	ensureClassicFileIo(willStream, warnf)
 }
+
+// WarnLateStorageRisk reports the exposure for a run that only turns out to
+// need a torrent after EnsureSafeStorage has already answered — a ref carrying
+// its own base, which the playback command copies into the config inside RunE,
+// long after PersistentPreRunE picked the backend.
+//
+// It warns rather than re-execs on every platform, not just where canExec is
+// false. A re-exec replays argv, so it is only safe before anything the user
+// would not want repeated; by the time a ref's base has been applied the
+// process is committed to this invocation. Warning is what is left.
+//
+// An explicit fileIoEnv is respected exactly as it is elsewhere: a user who
+// chose the backend does not need to be told about the one they chose.
+func WarnLateStorageRisk(willStream bool, warnf func(string, ...any)) {
+	_, set := os.LookupEnv(fileIoEnv)
+	if plan := planFileIo(willStream, set, "", false); plan.warn != "" {
+		warnf("%s", plan.warn)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/provider"
+	"lobster/internal/torrentstream"
 )
 
 // agentResolveAndPlay is the playback entry point, as a package var so tests
@@ -79,9 +80,21 @@ func init() {
 // nothing under episodes, because a MovieBox provider was handed a FlixHQ ID
 // and reported "no seasons found". The two commands must agree on what one ref
 // means.
+// The storage backend is a startup decision (loadConfig, cmd/root.go) and this
+// runs inside RunE, so a ref that moves the run onto a torrent source arrives
+// after that decision has been made — with `base = "soap2day"` and
+// torrent_fallback off it was made as "this run will not stream a torrent", and
+// playStream then serves the magnet on the memory-mapped backend. Re-execing
+// here is not an option (argv would be replayed, and the player check has
+// already run), so the run says what it is doing instead. Only for a command
+// that can actually play: episodes shares this function and never streams.
 func applyRefBase(cmd *cobra.Command, r playRef) {
 	if r.Base != "" && cfg != nil && !cmd.Flags().Changed("base") {
+		changed := cfg.Base != r.Base
 		cfg.Base = r.Base
+		if changed && reachesPlayback(cmd) {
+			torrentstream.WarnLateStorageRisk(mayStreamTorrent(cfg), warnf)
+		}
 	}
 }
 

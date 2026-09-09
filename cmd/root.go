@@ -228,8 +228,9 @@ func applyConfig() error {
 // mayStreamTorrent reports whether this run could open a magnet, which decides
 // whether the storage backend matters at all.
 //
-// YTS is the only provider that resolves to one, and it is reachable three
-// ways: named as the base, enabled as a fallback, or reached by the per-type
+// YTS is the only provider that resolves to one. Three ways of reaching it are
+// visible to this function, because all three are settled by the time it is
+// called: named as the base, enabled as a fallback, or reached by the per-type
 // route, which sends every movie to YTS whenever the user has named no source
 // of their own (routeByType and baseIsAuto, cmd/typeroute.go). Since that is
 // the *default* configuration, the third way is the common one — leaving it
@@ -237,6 +238,17 @@ func applyConfig() error {
 // the memory-mapped backend, which is the SIGBUS this whole mechanism exists
 // to avoid. Anything else resolves to HTTP or HLS and never reaches the
 // torrent client.
+//
+// There is a fourth way, and it is deliberately not answered here: a ref
+// carries the base it was found under, and applyRefBase (cmd/play.go) copies
+// that into cfg.Base inside RunE — after this function has been consulted and
+// the backend decided. `lobster play --ref <ref minted under --base yts>`
+// under a configured `base = "soap2day"` therefore streams a magnet on
+// whichever backend a non-torrent run was given. It cannot be closed from
+// here: the value is not knowable until the ref is decoded, and re-execing
+// once it is would replay argv after the process has committed to the
+// invocation. applyRefBase warns instead
+// (torrentstream.WarnLateStorageRisk).
 //
 // It answers for the run, not for a particular selection, because it is
 // consulted before any search: under auto it cannot yet know whether the user
@@ -275,7 +287,9 @@ func mayStreamTorrent(c *config.Config) bool {
 // Unlike debugf it is not gated on the debug flag: a silent downgrade to a
 // backend that can kill the process is exactly the kind of thing that should
 // not need a flag to be seen.
-func warnf(format string, args ...any) {
+// A package var, not a plain func, so a test can observe what was warned about
+// without capturing os.Stderr.
+var warnf = func(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "lobster: "+format+"\n", args...)
 }
 
