@@ -59,6 +59,26 @@ var ytsRouteTimeout = multiSearchTimeout
 // away from the source they explicitly configured.
 func baseIsAuto() bool { return cfg == nil || (cfg.APIURL == "" && cfg.Base == config.BaseAuto) }
 
+// yearsAgree reports whether two release years describe the same work,
+// allowing one year of slack: catalogues disagree by a year over festival
+// versus general release, and over a December film listed under the following
+// year. An empty or unparsable year on either side is not a disagreement but
+// an absence of evidence, and this returns false for it — the caller is
+// choosing whether to swap one film for another, where "we cannot tell" must
+// mean "do not".
+func yearsAgree(a, b string) bool {
+	ai, err1 := strconv.Atoi(strings.TrimSpace(a))
+	bi, err2 := strconv.Atoi(strings.TrimSpace(b))
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	d := ai - bi
+	if d < 0 {
+		d = -d
+	}
+	return d <= 1
+}
+
 // routeByType picks the provider for a selection whose media type is now
 // known, and returns it alongside the selection to play through it.
 //
@@ -67,9 +87,10 @@ func baseIsAuto() bool { return cfg == nil || (cfg.APIURL == "" && cfg.Base == c
 // query, when no type exists to route on, and one interactive search returns
 // movies and series interleaved in a single list (gatherSearchResults merges
 // every provider's rows and each row carries its own media.Type), so the type
-// is not known until the user picks a row. It is not in the resolver either: the resolver races a chain by
-// health and has no notion of a preferred source, so "prefer YTS" expressed
-// there would be a suggestion rather than a route. resolveAndPlay is the one
+// is not known until the user picks a row. It is not in the resolver either:
+// the resolver races a chain by health and has no notion of a preferred
+// source, so "prefer YTS" expressed there would be a suggestion rather than a
+// route. resolveAndPlay is the one
 // funnel every selection passes through — the interactive picker, the TUI, and
 // `play --ref` via agentResolveAndPlay — so it is where the type is first
 // known for every path at once.
@@ -92,8 +113,8 @@ func baseIsAuto() bool { return cfg == nil || (cfg.APIURL == "" && cfg.Base == c
 // playStream (cmd/search.go) — so routing either to it would turn a working
 // answer into an error message.
 //
-// The YTS ID is looked up by title and year rather than assumed, because IDs are not
-// portable: YTS's are "yts/<numeric>" and it rejects anything else
+// The YTS ID is looked up by title and year rather than assumed, because IDs
+// are not portable: YTS's are "yts/<numeric>" and it rejects anything else
 // (movieByID). The lookup borrows seasonSource's shape (cmd/episodes.go) —
 // rank with resolver.Candidates, then admit only on resolver.Matches, under a
 // context deadline. Matches is the load-bearing half: Candidates applies no
@@ -112,26 +133,6 @@ func baseIsAuto() bool { return cfg == nil || (cfg.APIURL == "" && cfg.Base == c
 // it, and a missing or unparsable year on either side refuses to route at all
 // — the cost is a stream from the primary, which is what an unrouted movie
 // gets anyway.
-// yearsAgree reports whether two release years describe the same work,
-// allowing one year of slack: catalogues disagree by a year over festival
-// versus general release, and over a December film listed under the following
-// year. An empty or unparsable year on either side is not a disagreement but
-// an absence of evidence, and this returns false for it — the caller is
-// choosing whether to swap one film for another, where "we cannot tell" must
-// mean "do not".
-func yearsAgree(a, b string) bool {
-	ai, err1 := strconv.Atoi(strings.TrimSpace(a))
-	bi, err2 := strconv.Atoi(strings.TrimSpace(b))
-	if err1 != nil || err2 != nil {
-		return false
-	}
-	d := ai - bi
-	if d < 0 {
-		d = -d
-	}
-	return d <= 1
-}
-
 func routeByType(p provider.Provider, sel media.SearchResult) (provider.Provider, media.SearchResult) {
 	if !baseIsAuto() {
 		return p, sel
