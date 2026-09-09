@@ -134,10 +134,12 @@ func (v *VidNest) GetSeasons(id string) ([]media.Season, error) {
 // As the primary — reachable as "--base vidnest" (cmd/provider.go) — the
 // resolver is precisely what will not reach it, because tryFallbackStream
 // builds its chain from fallbackProviders (cmd/fallback.go), which excludes
-// the primary by concrete type. An interactive episode menu under this primary
-// therefore fails instead of listing fifty episodes that do not exist; the
-// error names the provider and points at "lobster episodes --ref ...", which
-// asks every chain provider that can enumerate the season (cmd/episodes.go).
+// the primary by concrete type. There the list comes from the fallback chain
+// instead (fallbackEpisodeList, cmd/episodes.go), and listing and playback move
+// to the provider that could answer. When nothing in the chain can, the error
+// names the provider and points at "lobster episodes --ref ...", which asks
+// every chain provider that can enumerate the season (cmd/episodes.go) —
+// rather than listing fifty episodes that do not exist.
 func (v *VidNest) GetEpisodes(id string, seasonID string) ([]media.Episode, error) {
 	return nil, fmt.Errorf("vidnest: episode listing unavailable; backends expose no episode index")
 }

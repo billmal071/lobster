@@ -438,17 +438,19 @@ func (m *MovieBox) GetSeasons(id string) ([]media.Season, error) {
 //
 // As the primary the resolver is the one thing that will not reach it:
 // tryFallbackStream builds its chain from fallbackProviders (cmd/fallback.go),
-// which excludes the primary by concrete type. So under a MovieBox primary —
+// which excludes the primary by concrete type. And that is not a corner case —
 // any unrecognised --base lands here (newProvider, cmd/provider.go), and
-// cmd/search.go tips users towards "--base moviebox" by name — an interactive
-// episode menu fails outright rather than showing an invented one. The error
-// names this provider and points at "lobster episodes --ref ...", which asks
-// every chain provider that can enumerate the season (cmd/episodes.go); a
-// caller that already knows the number can still pass --episode N, which the
-// fallback resolver serves without a list.
+// cmd/search.go tips users towards "--base moviebox" by name. So the list has
+// to come from elsewhere: cmd asks the fallback chain for it
+// (fallbackEpisodeList, cmd/episodes.go), moving the listing and the playback
+// that follows to whichever provider answered. When the chain cannot answer
+// either, the error names this provider and points at
+// "lobster episodes --ref ...", which asks every chain provider that can
+// enumerate the season; a caller that already knows the number can still pass
+// --episode N, which the fallback resolver serves without a list.
 //
-// That trade is deliberate: a failure the caller can act on beats a list
-// nobody can tell from a measured one.
+// Either way the caller ends up with a real list or an honest failure, neither
+// of which a fabricated 1..10 could offer.
 func (m *MovieBox) GetEpisodes(id string, seasonID string) ([]media.Episode, error) {
 	return nil, fmt.Errorf("moviebox: episode listing unavailable; the detail endpoint requires authentication")
 }
