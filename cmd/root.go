@@ -185,9 +185,10 @@ func applyConfig() error {
 //
 // YTS is the only provider that resolves to one, and it is reachable three
 // ways: named as the base, enabled as a fallback, or reached by the per-type
-// route, which sends every movie to YTS whenever the base is the "auto"
-// sentinel (routeByType, cmd/typeroute.go). Since auto is the *default* base,
-// the third way is the common one — leaving it out put the default install on
+// route, which sends every movie to YTS whenever the user has named no source
+// of their own (routeByType and baseIsAuto, cmd/typeroute.go). Since that is
+// the *default* configuration, the third way is the common one — leaving it
+// out put the default install on
 // the memory-mapped backend, which is the SIGBUS this whole mechanism exists
 // to avoid. Anything else resolves to HTTP or HLS and never reaches the
 // torrent client.
@@ -201,9 +202,14 @@ func mayStreamTorrent(c *config.Config) bool {
 	if c == nil {
 		return false
 	}
-	return strings.EqualFold(c.Base, "yts") ||
-		strings.EqualFold(c.Base, config.BaseAuto) ||
-		c.TorrentFallback
+	if strings.EqualFold(c.Base, "yts") || c.TorrentFallback {
+		return true
+	}
+	// The auto arm mirrors routeByType's own condition (baseIsAuto,
+	// cmd/typeroute.go), so it has to read APIURL for the same reason that
+	// does: a configured api_url overrides Base entirely, no movie is routed
+	// to YTS, and nothing in the run can reach a magnet.
+	return c.APIURL == "" && strings.EqualFold(c.Base, config.BaseAuto)
 }
 
 // warnf reports something the user should know but that does not stop the run.

@@ -50,7 +50,14 @@ var ytsRouteTimeout = multiSearchTimeout
 // found under and applyRefBase copies it back into cfg.Base, so a ref minted
 // under auto still routes by type, and a ref minted under an explicit base
 // still pins that base — which is what playRef promises.
-func baseIsAuto() bool { return cfg == nil || cfg.Base == config.BaseAuto }
+//
+// APIURL has to be read too, because it is the one way of naming a source that
+// does not go through Base at all: newProvider returns a consumet client for a
+// non-empty APIURL and never looks at Base (cmd/provider.go), so a user who
+// configured their own backend leaves Base sitting at its "auto" default. On
+// Base alone that reads as "no preference" and sends every movie to YTS —
+// away from the source they explicitly configured.
+func baseIsAuto() bool { return cfg == nil || (cfg.APIURL == "" && cfg.Base == config.BaseAuto) }
 
 // routeByType picks the provider for a selection whose media type is now
 // known, and returns it alongside the selection to play through it.

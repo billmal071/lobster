@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"lobster/internal/config"
 	"lobster/internal/history"
 	"lobster/internal/media"
 	"lobster/internal/player"
@@ -624,5 +625,41 @@ func TestResolveAndPlayJSONNeverEmitsAMagnetURI(t *testing.T) {
 	}
 	if out.URL != "http://127.0.0.1:1/scraper-1080p.m3u8" {
 		t.Fatalf("--json url = %q, want the primary's playable stream", out.URL)
+	}
+}
+
+// A configured `api_url` is an explicit choice of source in exactly the way
+// `--base` is: newProvider treats it as overriding Base entirely (cmd/provider.go),
+// so a user who pointed lobster at their own consumet backend never touches the
+// Base value at all — it stays at its "auto" default. Reading Base alone
+// therefore routed every movie away from the backend they configured and onto
+// BitTorrent, which is the opposite of what "an explicit source wins" promises.
+func TestRouteByTypeLeavesAConfiguredAPIURLAlone(t *testing.T) {
+	yts := matrixOnYTS()
+	withYTSRoute(t, config.BaseAuto, yts)
+	cfg.APIURL = "http://127.0.0.1:1/consumet"
+
+	primary := &stubProvider{}
+	sel := media.SearchResult{ID: "movie/the-matrix-19", Title: "The Matrix", Year: "1999", Type: media.Movie}
+
+	got, routed := routeByType(primary, sel)
+	if got != provider.Provider(primary) {
+		t.Fatalf("routeByType overrode a configured api_url with %T", got)
+	}
+	if routed.ID != "movie/the-matrix-19" {
+		t.Fatalf("routed ID = %q with api_url set, want the selection untouched", routed.ID)
+	}
+	if n := yts.searchCount(); n != 0 {
+		t.Fatalf("YTS was searched %d times with api_url configured; the user already named their source", n)
+	}
+}
+
+// The same fact, from the storage side: with api_url set no movie is routed to
+// YTS, so a run that names no torrent source cannot open a magnet and must not
+// re-exec onto the classic backend for one.
+func TestMayStreamTorrentIgnoresTheAutoBaseWhenAPIURLIsSet(t *testing.T) {
+	c := &config.Config{Base: config.BaseAuto, APIURL: "http://127.0.0.1:1/consumet"}
+	if mayStreamTorrent(c) {
+		t.Fatalf("mayStreamTorrent(%+v) = true; api_url overrides Base, so the route never reaches YTS", c)
 	}
 }
