@@ -336,7 +336,7 @@ and where the others break"). Run it before concluding a source is broken.
 
 | `base` | Covers | Worth knowing |
 | --- | --- | --- |
-| `auto` (default) | Films and series | No preference: a film is looked up on YTS by title and year and played from there when both agree, and a series always goes to a scraping source, because YTS has no TV catalogue. Everything else — series, and films YTS has no match for — is served by `soap2day`, the general source `auto` maps to. An explicit `base`, `--base`, or an `api_url` overrides all of this. |
+| `auto` (default) | Films and series | Automatic routing: you name no source, so lobster picks one per content type. `soap2day` is the general source `auto` maps to, and the primary every `auto` run searches with. A film is then looked up on YTS by title and year and played from there when both agree. A series is not — YTS is never even queried for one, because it has no TV catalogue — so it stays on `soap2day`, and if `soap2day` cannot enumerate its seasons, playback falls back to the chain, which re-searches every source by title. Films YTS has no match for stay on `soap2day` too. An explicit `base`, `--base`, or an `api_url` overrides all of this. |
 | `soap2day` | Films and series | The general-purpose source `auto` falls back to. |
 | `vaplayer` | Films and series | General-purpose, API-based. |
 | `flixhq.to`, `flixhq.ws` | Films and series | Scraper-based. `flixhq.ws` was the default before `auto`. Both check their domain at startup and try known alternates (plus any `domain_overrides`) when it is unreachable. |

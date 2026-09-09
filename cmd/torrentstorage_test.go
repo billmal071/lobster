@@ -38,7 +38,24 @@ func TestMayStreamTorrent(t *testing.T) {
 		// and that is asserted end to end in
 		// TestALoudlySpelledAutoIsAutoForEveryReaderOfBase (autobase_test.go).
 		{"an unvalidated loud auto still reads as auto here", &config.Config{Base: "AUTO"}, true},
+		// api_url overrides Base entirely — newProvider returns a Consumet
+		// client for a non-empty APIURL and never reads Base (cmd/provider.go)
+		// — so `api_url` alongside `base = "yts"` gets Consumet, and no magnet
+		// is reachable. baseIsAuto reads APIURL for the same reason, so the
+		// per-type route does not reach YTS either. Saying true here is not
+		// free: it re-execs, or on Windows prints an ungated SIGBUS notice.
+		{"api_url overrides an explicit yts base", &config.Config{Base: "yts", APIURL: "http://127.0.0.1:3000"}, false},
+		{"api_url overrides the auto base", &config.Config{Base: config.BaseAuto, APIURL: "http://127.0.0.1:3000"}, false},
+		// The exception, and why torrent_fallback is answered before api_url:
+		// fallbackProviders appends YTS whenever the setting is on, whatever
+		// the primary is (cmd/fallback.go) — a Consumet primary included — so
+		// a failed resolution can still end on a magnet.
+		{"the fallback still reaches yts behind an api_url", &config.Config{Base: "yts", APIURL: "http://127.0.0.1:3000", TorrentFallback: true}, true},
 	}
+	// The Base arms are read after --json and --download, so pin both: an
+	// inherited flagDownload would turn the auto rows false and hide a
+	// regression in the arm under test.
+	withOutputFlags(t, false, "")
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			if got := mayStreamTorrent(c.cfg); got != c.want {

@@ -275,22 +275,41 @@ func mayStreamTorrent(c *config.Config) bool {
 	if flagJSON {
 		return false
 	}
+	// torrent_fallback first, and on its own: it is the one route to a magnet
+	// that api_url does not close. fallbackProviders appends YTS whenever the
+	// setting is on, whatever the primary is (cmd/fallback.go) — including a
+	// Consumet primary built from api_url — so a failed stream resolution can
+	// still end on a torrent.
+	if c.TorrentFallback {
+		return true
+	}
+	// api_url next, because it overrides Base entirely: newProvider returns a
+	// Consumet client for a non-empty APIURL and never reads Base at all
+	// (cmd/provider.go), so `api_url = "..."` with `base = "yts"` gets Consumet
+	// and never a magnet. It also refuses the per-type route (baseIsAuto), so
+	// no movie is sent to YTS either. With torrent_fallback already answered
+	// above, this leaves no way for the run to open one.
+	//
+	// Only the yts and auto arms are behind this, and both are Base arms — the
+	// value api_url overrides. Answering true for a run that cannot reach a
+	// magnet is not free: it re-execs the process, or on Windows (canExec
+	// false) prints an ungated SIGBUS notice on stderr.
+	if c.APIURL != "" {
+		return false
+	}
 	// The user naming a torrent source outright does not go through the route
-	// at all: --base yts makes YTS the primary and torrent_fallback puts it in
-	// the fallback chain, and both resolve a magnet for playback and for
-	// --download alike, which serves the torrent over loopback and fetches
-	// from there.
-	if strings.EqualFold(c.Base, "yts") || c.TorrentFallback {
+	// at all: --base yts makes YTS the primary, and it resolves a magnet for
+	// playback and for --download alike, which serves the torrent over
+	// loopback and fetches from there — so this is read before the --download
+	// arm below.
+	if strings.EqualFold(c.Base, "yts") {
 		return true
 	}
 	// The auto arm mirrors routeByType's own conditions (cmd/typeroute.go),
-	// because under auto the route is the only thing that reaches YTS:
-	//
-	//   - a configured api_url overrides Base entirely (baseIsAuto), so no
-	//     movie is routed and nothing in the run can reach a magnet;
-	//   - --download returns before the lookup, so no movie is routed to YTS
-	//     under it either — unlike the arms above, where the user asked for
-	//     the torrent source by name.
+	// because under auto the route is the only thing that reaches YTS, and
+	// --download returns before its lookup — so no movie is routed to YTS
+	// under it, unlike the arms above where the user asked for the torrent
+	// source by name.
 	//
 	// Which subcommand is running is handled separately and earlier, by
 	// reachesPlayback — this function is only ever asked about a command that
@@ -298,7 +317,7 @@ func mayStreamTorrent(c *config.Config) bool {
 	if flagDownload != "" {
 		return false
 	}
-	return c.APIURL == "" && strings.EqualFold(c.Base, config.BaseAuto)
+	return strings.EqualFold(c.Base, config.BaseAuto)
 }
 
 // warnf reports something the user should know but that does not stop the run.

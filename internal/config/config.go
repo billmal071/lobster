@@ -174,7 +174,6 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// Validate checks config values are within acceptable bounds.
 // NormalizeBase returns the canonical spelling of a base value.
 //
 // Base has three readers that do not compare it the same way —
@@ -196,6 +195,7 @@ func NormalizeBase(base string) string {
 	return strings.ToLower(strings.TrimSpace(base))
 }
 
+// Validate checks config values are within acceptable bounds.
 func (c *Config) Validate() error {
 	validPlayers := map[string]bool{
 		"mpv": true, "vlc": true, "iina": true, "celluloid": true,
