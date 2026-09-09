@@ -283,12 +283,17 @@ auto_next = true
 download_dir = "~/Videos/lobster"
 
 # Fall back to YTS torrents when every streaming provider fails.
-# Note this is separate from `base = "auto"`, which already prefers YTS for
-# movies. This setting is about the reverse direction: letting a *failed*
-# stream resolution end up on a torrent.
-# Off by default on purpose: YTS resolves to a magnet, so this makes lobster
-# join a BitTorrent swarm, and your IP is visible to its peers. `--base yts`
-# always works without this — the setting only controls automatic fallback.
+#
+# This is NOT the swarm opt-in, and leaving it false does not keep you out of
+# a swarm: the default `base = "auto"` already plays movies from YTS, so a
+# default install joins one for films. To never join a swarm, choose an
+# explicit source instead — `base = "soap2day"` — and leave this false.
+#
+# What this setting controls is the other direction: letting a *failed* stream
+# resolution end up on a torrent — for a series, for a film YTS does not
+# carry, and under a base you chose explicitly. Off by default because a swarm
+# reached by choosing "auto" is documented, while one reached because a
+# scraper broke is not. `--base yts` always works without this.
 # Torrent sources can be played but not downloaded with --download.
 torrent_fallback = false
 ```

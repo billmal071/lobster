@@ -56,6 +56,11 @@ type Config struct {
 	// magnet, so falling back to it joins a BitTorrent swarm and exposes the
 	// user's IP to its peers. That is worth doing on request, not silently
 	// because a scraper broke.
+	//
+	// It is not the swarm opt-in, and must not be read as one: the default
+	// Base of "auto" already routes every movie to YTS (cmd/typeroute.go), so
+	// a default install swarms for films whatever this is set to. Setting an
+	// explicit non-YTS Base is what opts out.
 	TorrentFallback bool         `toml:"torrent_fallback"`
 	LiveTV          LiveTVConfig `toml:"live_tv"`
 }

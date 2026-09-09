@@ -322,7 +322,9 @@ download_dir = "~/Videos/lobster"
 # yts is BitTorrent, not HTTP streaming. It plays while downloading, but it
 # also makes you a participant in the swarm: your IP is visible to every peer
 # and to the monitoring firms that sit in them, which ordinary streaming never
-# does. Use a VPN, or use one of the HTTP providers above. Needs a 64-bit
+# does. This applies to the default install, because "auto" plays movies from
+# YTS — set base = "soap2day" (or any other explicit source) to never join a
+# swarm. Otherwise use a VPN. Needs a 64-bit
 # build. Pieces land in a temp directory and are removed when playback ends.
 
 # Optional: use a consumet API backend instead of the built-in scraper.

@@ -213,10 +213,22 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 		}
 	}
 
-	// YTS last, and only on request. It resolves to a magnet rather than an HTTP
-	// stream, so falling back to it joins a BitTorrent swarm and makes the user's
-	// IP visible to its peers. Reaching it via `--base yts` is a deliberate act;
-	// reaching it because a scraper broke is not, so it stays opt-in.
+	// YTS last, and only when torrent_fallback is set.
+	//
+	// Be precise about what that setting does and does not decide. It is NOT
+	// what makes lobster join a swarm: under the default base = "auto" every
+	// movie is routed to YTS at selection time (routeByType, cmd/typeroute.go),
+	// so a default install already streams films over BitTorrent with the
+	// user's IP visible to its peers. What this setting controls is the other
+	// direction — letting a *failed* stream resolution end on a torrent: for a
+	// series, for a film YTS has no match for, and under an explicit base the
+	// user chose precisely to say which source to use. A swarm reached by
+	// choosing "auto" is a consequence of the documented default; one reached
+	// because a scraper broke is not, which is why this stays off until asked.
+	//
+	// Opting out of swarming altogether is a base, not this flag:
+	// `base = "soap2day"` (or any explicit non-YTS base) with
+	// torrent_fallback off never reaches a magnet.
 	if _, ok := primary.(*provider.YTS); !ok {
 		if cfg != nil && cfg.TorrentFallback {
 			fallbacks = append(fallbacks, provider.NewYTS())
