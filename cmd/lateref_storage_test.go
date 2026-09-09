@@ -47,8 +47,15 @@ func captureWarnings(t *testing.T) *[]string {
 // refCmd builds a command with the persistent flags bound, so
 // cmd.Flags().Changed("base") answers about this invocation rather than about
 // whatever rootCmd's globals hold.
+//
+// Binding the flags overwrites all eleven flag globals with their registered
+// defaults (saveFlagGlobals), so anything the caller pinned first — notably
+// withOutputFlags' flagJSON and flagDownload, which mayStreamTorrent reads —
+// is restored the moment parsing is done.
 func refCmd(t *testing.T, argv ...string) *cobra.Command {
 	t.Helper()
+	restoreFlags := saveFlagGlobals(t)
+	defer restoreFlags()
 	c := &cobra.Command{Use: "play", RunE: func(*cobra.Command, []string) error { return nil }}
 	registerPersistentFlags(c)
 	c.SetArgs(argv)
@@ -240,5 +247,60 @@ func TestApplyRefBaseIgnoresAWhitespaceOnlyRefBase(t *testing.T) {
 	}
 	if len(*warnings) != 0 {
 		t.Fatalf("applyRefBase warned for a ref that named no base at all: %q", *warnings)
+	}
+}
+
+// registerPersistentFlags binds every persistent flag to a package global, and
+// pflag writes each flag's registered default into its target at registration
+// time. So building a throwaway command resets all eleven of them, and refCmd
+// used to restore only its playbackCommands entry — a test that pinned
+// flagBase or flagQuality had it silently cleared, and nothing red only
+// because the values it happened to pin equalled the defaults.
+//
+// continueFromCLI (continue_default_test.go) already saved and restored the
+// full set for the same reason; this asserts the shared helper both now use.
+func TestRefCmdRestoresTheFlagGlobalsItRegistrationClobbers(t *testing.T) {
+	dl, lang, alang := flagDownload, flagLanguage, flagAudioLang
+	prov, qual, plr, base := flagProvider, flagQuality, flagPlayer, flagBase
+	nosubs, cont, js, dbg := flagNoSubs, flagContinue, flagJSON, flagDebug
+	t.Cleanup(func() {
+		flagDownload, flagLanguage, flagAudioLang = dl, lang, alang
+		flagProvider, flagQuality, flagPlayer, flagBase = prov, qual, plr, base
+		flagNoSubs, flagContinue, flagJSON, flagDebug = nosubs, cont, js, dbg
+	})
+
+	// Pinned to values that differ from every registered default, so a reset
+	// is visible. flagContinue's default is true, so false is the tell.
+	flagDownload, flagLanguage, flagAudioLang = "/tmp/dl", "spanish", "japanese"
+	flagProvider, flagQuality, flagPlayer, flagBase = "upcloud", "720", "vlc", "soap2day"
+	flagNoSubs, flagContinue, flagJSON, flagDebug = true, false, true, true
+
+	refCmd(t)
+
+	for _, tc := range []struct{ name, got, want string }{
+		{"flagDownload", flagDownload, "/tmp/dl"},
+		{"flagLanguage", flagLanguage, "spanish"},
+		{"flagAudioLang", flagAudioLang, "japanese"},
+		{"flagProvider", flagProvider, "upcloud"},
+		{"flagQuality", flagQuality, "720"},
+		{"flagPlayer", flagPlayer, "vlc"},
+		{"flagBase", flagBase, "soap2day"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("refCmd left %s = %q, want %q — registering the persistent flags overwrote it", tc.name, tc.got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		name      string
+		got, want bool
+	}{
+		{"flagNoSubs", flagNoSubs, true},
+		{"flagContinue", flagContinue, false},
+		{"flagJSON", flagJSON, true},
+		{"flagDebug", flagDebug, true},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("refCmd left %s = %v, want %v — registering the persistent flags overwrote it", tc.name, tc.got, tc.want)
+		}
 	}
 }
