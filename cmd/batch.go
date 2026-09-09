@@ -292,6 +292,27 @@ func parseSeasonRange(input string, seasons []media.Season) ([]media.Season, err
 }
 
 // batchDownloadMultiSeason downloads all episodes from multiple seasons.
+// seasonEpisodes lists one season's episodes, asking the fallback chain when
+// the provider cannot answer.
+//
+// A primary can enumerate seasons and not episodes — MovieBox and VidNest both
+// do — and a multi-season batch then recorded one synthetic failure per season
+// and downloaded nothing, for a show the chain could list in full. The list is
+// all that is needed here: downloads resolve their streams by title, season
+// and episode number through makeStreamResolver, not by episode ID, so a list
+// borrowed from another provider costs the download nothing.
+func seasonEpisodes(p provider.Provider, selected media.SearchResult, season media.Season) ([]media.Episode, error) {
+	episodes, err := p.GetEpisodes(selected.ID, season.ID)
+	if err == nil && len(episodes) > 0 {
+		return episodes, nil
+	}
+	if a := fallbackEpisodeList(p, selected, season.Number); a != nil {
+		debugf("batch: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), season.Number)
+		return a.episodes, nil
+	}
+	return episodes, err
+}
+
 func batchDownloadMultiSeason(p provider.Provider, selected media.SearchResult, seasons []media.Season) error {
 	if flagJSON {
 		return fmt.Errorf("--json is not supported with batch downloads")
@@ -310,7 +331,7 @@ func batchDownloadMultiSeason(p provider.Provider, selected media.SearchResult, 
 		fmt.Fprintf(os.Stderr, "\n=== Season %d ===\n", season.Number)
 
 		stopEps := ui.StartSpinner(fmt.Sprintf("Fetching Season %d episodes...", season.Number))
-		episodes, err := p.GetEpisodes(selected.ID, season.ID)
+		episodes, err := seasonEpisodes(p, selected, season)
 		stopEps()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to fetch Season %d episodes: %v\n", season.Number, err)

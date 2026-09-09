@@ -534,3 +534,29 @@ func TestResolveAndPlayDoesNotSubstituteWhenTheChainsListIsShort(t *testing.T) {
 		t.Fatalf("chain Watch asked for episode %q, want the requested %q — never an entry from the short list", got, "fallback-1:1:15")
 	}
 }
+
+// A multi-season batch download asks the primary for each season's episode
+// list. Under a primary that cannot produce one, every season recorded a
+// synthetic failure and nothing was downloaded — while the chain could have
+// listed all 22. The list lookup must make the same move `episodes` and the
+// interactive menu now make.
+func TestSeasonEpisodesRecoversTheListFromTheChain(t *testing.T) {
+	hostileEnv(t)
+
+	fb := newListingChainProvider("http://127.0.0.1:1/never-dialed.m3u8")
+	withFallbackChain(t, fb)
+
+	primary := &stubProvider{
+		seasons:     []media.Season{{ID: "s1", Number: 1}},
+		episodesErr: errProviderCannotList,
+	}
+	sel := media.SearchResult{ID: "tv/1403", Title: "Some Show", Year: "2013", Type: media.TV}
+
+	eps, err := seasonEpisodes(primary, sel, media.Season{ID: "s1", Number: 1})
+	if err != nil {
+		t.Fatalf("seasonEpisodes = %v; the chain can list this season", err)
+	}
+	if len(eps) != 22 {
+		t.Fatalf("listed %d episodes, want the chain's 22", len(eps))
+	}
+}
