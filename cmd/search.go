@@ -226,7 +226,21 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	// interleaved, so the type cannot be settled when newProvider builds the
 	// primary. See routeByType (cmd/typeroute.go) for why this funnel is where
 	// it belongs.
-	p, selected = routeByType(p, selected)
+	//
+	// Only the provider handle and the ID used to *ask* it for a stream move:
+	// `selected` stays exactly the row the user picked. History and the resume
+	// checkpoint key on (ID, Season, Episode) — history.Save matches a row on
+	// those three (internal/history/history.go) and playStream looks the
+	// resume position up the same way — so filing a watch under the routed ID
+	// would make a film's identity depend on whether a 5s YTS lookup answered
+	// inside its deadline: the next launch would not find the position it
+	// stored, and a second row would accumulate for one title. The selection's
+	// own ID does not depend on a network call, so it is the stable one.
+	//
+	// Only the movie route moves the ID. The series branch hands `sel` back
+	// untouched on both of its paths, which is why the TV code below can go on
+	// using selected.ID for the provider calls.
+	p, routed := routeByType(p, selected)
 
 	episodeID := ""
 	title := selected.Title
@@ -402,7 +416,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	if sp, ok := p.(provider.StreamProvider); ok {
 		debugf("primary provider: %T (StreamProvider)", p)
 		stopStream := ui.StartSpinner("Negotiating stream servers...")
-		servers, err := p.GetServers(selected.ID, episodeID)
+		servers, err := p.GetServers(routed.ID, episodeID)
 		stopStream()
 		if err != nil || len(servers) == 0 {
 			if err != nil {
@@ -427,7 +441,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		var stream *media.Stream
 		for _, srv := range ordered {
 			debugf("trying server (watch): %s (ID: %s)", srv.Name, srv.ID)
-			stream, err = sp.Watch(selected.ID, episodeID, srv.Name, cfg.Quality)
+			stream, err = sp.Watch(routed.ID, episodeID, srv.Name, cfg.Quality)
 			if err != nil {
 				debugf("server %s watch failed: %v", srv.Name, err)
 				fmt.Fprintf(os.Stderr, "Server %s failed, trying next...\n", srv.Name)

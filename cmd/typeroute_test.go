@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"lobster/internal/history"
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/provider"
@@ -340,5 +341,83 @@ func TestResolveAndPlayRoutesAMovieToYTSAtSelectionTime(t *testing.T) {
 	yts.mu.Unlock()
 	if watched != "yts/1745" {
 		t.Fatalf("YTS was asked to watch %q, want yts/1745 — a foreign ID would be rejected", watched)
+	}
+}
+
+// historyIDs returns the IDs of every row currently in the test's history
+// file, in file order.
+func historyIDs(t *testing.T) []string {
+	t.Helper()
+	entries, err := history.Load()
+	if err != nil {
+		t.Fatalf("history.Load: %v", err)
+	}
+	ids := make([]string, 0, len(entries))
+	for _, e := range entries {
+		ids = append(ids, e.ID)
+	}
+	return ids
+}
+
+// A watch's history identity is (ID, Season, Episode) — history.Save matches
+// a row on exactly those three (internal/history/history.go) — and playStream
+// keys the resume lookup and the periodic checkpoint on the same ID. So the ID
+// a film is filed under must not depend on whether a network lookup answered
+// inside its deadline.
+//
+// Without that guarantee the route leaks its outcome into history: the same
+// film is filed under "yts/1745" when YTS answers and under
+// "movie/the-matrix-19" when it times out or offers no match, so `--continue`
+// cannot see the position the other run stored and a second row accumulates
+// for one title.
+func TestResolveAndPlayFilesTheSameHistoryIDWhetherYTSAnswersOrTimesOut(t *testing.T) {
+	rec := &recordingPlayer{}
+	playStreamHarness(t, rec)
+	cfg.Base = "auto"
+	cfg.Quality = "1080"
+
+	prevYTS := newYTSProvider
+	t.Cleanup(func() { newYTSProvider = prevYTS })
+	prevTimeout := ytsRouteTimeout
+	t.Cleanup(func() { ytsRouteTimeout = prevTimeout })
+
+	sel := media.SearchResult{ID: "movie/the-matrix-19", Title: "The Matrix", Year: "1999", Type: media.Movie}
+	scraper := func() *scraperStreamStub {
+		return &scraperStreamStub{stream: &media.Stream{URL: "http://127.0.0.1:1/scraper-1080p.m3u8"}}
+	}
+
+	// Run one: YTS answers, so playback really does move to the YTS ID.
+	answering := matrixOnYTS()
+	answering.stream = &media.Stream{URL: "http://127.0.0.1:1/yts-2160p.mkv"}
+	newYTSProvider = func() provider.Provider { return answering }
+	if err := resolveAndPlay(scraper(), sel, 0, 0); err != nil {
+		t.Fatalf("resolveAndPlay (YTS answering): %v", err)
+	}
+	if rec.url != "http://127.0.0.1:1/yts-2160p.mkv" {
+		t.Fatalf("player received %q, want the YTS stream — the route did not fire, so this test proves nothing", rec.url)
+	}
+	afterRoute := historyIDs(t)
+
+	// Run two: the same film, the same selection, a YTS that never answers.
+	hanging := matrixOnYTS()
+	hanging.block = 30 * time.Second
+	newYTSProvider = func() provider.Provider { return hanging }
+	ytsRouteTimeout = 50 * time.Millisecond
+	if err := resolveAndPlay(scraper(), sel, 0, 0); err != nil {
+		t.Fatalf("resolveAndPlay (YTS timing out): %v", err)
+	}
+	if rec.url != "http://127.0.0.1:1/scraper-1080p.m3u8" {
+		t.Fatalf("player received %q after the route timed out, want the primary's stream", rec.url)
+	}
+	afterTimeout := historyIDs(t)
+
+	if len(afterRoute) != 1 || len(afterTimeout) != 1 {
+		t.Fatalf("history IDs = %q after a routed play and %q after a timed-out one; one film watched twice must occupy one row", afterRoute, afterTimeout)
+	}
+	if afterRoute[0] != afterTimeout[0] {
+		t.Fatalf("history ID = %q when YTS answered and %q when it timed out; the identity must be the same either way or the watch cannot resume", afterRoute[0], afterTimeout[0])
+	}
+	if afterRoute[0] != sel.ID {
+		t.Fatalf("history ID = %q, want the pre-routing %q: the selection's own ID is the one that does not depend on a network lookup", afterRoute[0], sel.ID)
 	}
 }
