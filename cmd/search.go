@@ -49,11 +49,6 @@ func searchRun(cmd *cobra.Command, args []string) error {
 		}
 
 		for {
-			// The dialog cannot build the chain itself: that needs the
-			// configured primary and the health store, both of which live
-			// here. Without this its download dialog is an error message for
-			// any primary that cannot enumerate episodes.
-			tui.EpisodeListFallback = tuiEpisodeListFallback
 			selected, lineup, startIdx, selectedProvider, err := tui.StartApp(p, cfg, liveTVSources(), mgr, fallbackSearchProviders(p)...)
 			if err != nil {
 				return err
@@ -222,6 +217,21 @@ func printDetail(r media.SearchResult, d *media.ContentDetail) {
 	output := poster.RenderSideBySide(r.Poster, posterCols, posterRows, lines)
 	fmt.Fprintln(os.Stderr, " "+output)
 	fmt.Fprintln(os.Stderr)
+}
+
+// The TUI's download dialog cannot build the fallback chain itself: that needs
+// the configured primary and the health store, both of which live in cmd.
+// Without this wiring the dialog is an error message for any primary that
+// cannot enumerate episodes.
+//
+// It is wired here rather than in searchRun because searchRun reopens the
+// browser in a loop, and Bubble Tea does not wait for its Cmd goroutines at
+// shutdown — a leaked fetchEpisodes could still be reading this var while the
+// next iteration wrote it. The value was the same both times, so nothing
+// misbehaved, but it was an unsynchronised write to a package var all the
+// same. Assigning once, before any goroutine exists, removes the question.
+func init() {
+	tui.EpisodeListFallback = tuiEpisodeListFallback
 }
 
 // tuiEpisodeListFallback is tui.EpisodeListFallback: the chain's answer for a

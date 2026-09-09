@@ -14,6 +14,7 @@ import (
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/provider"
+	"lobster/internal/tui"
 )
 
 // recordingStreamProvider is a fallback-chain stand-in: it answers a title
@@ -837,5 +838,16 @@ func TestMultiSeasonBatchScansTheChainOnce(t *testing.T) {
 
 	if got := fb.scanCount(); got != 1 {
 		t.Fatalf("the chain was scanned %d times for a 3-season batch, want 1 — a 10-season batch is ten full chain scans, and nothing keeps the seasons on one provider", got)
+	}
+}
+
+// The TUI's download dialog only recovers a missing episode list if cmd wires
+// the hook — the tui package cannot build the chain itself. The wiring lived
+// inside searchRun's browser loop, which no test ever reaches, so deleting it
+// cost nothing anywhere. It is an init now, and this is what notices if it
+// goes.
+func TestTUIEpisodeListFallbackIsWired(t *testing.T) {
+	if tui.EpisodeListFallback == nil {
+		t.Fatal("tui.EpisodeListFallback is nil; the TUI download dialog has no way to recover an episode list the provider cannot give it")
 	}
 }
