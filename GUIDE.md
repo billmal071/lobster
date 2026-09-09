@@ -293,6 +293,40 @@ download_dir = "~/Videos/lobster"
 torrent_fallback = false
 ```
 
+### Torrent storage backend
+
+The torrent library stores pieces through one of two file backends. The default
+memory-maps them, which is faster but has a race: a file can be truncated while
+another mapping of it is still live, and reading the truncated tail raises
+`SIGBUS` — a signal, not a Go error, so lobster dies mid-playback with no
+recoverable failure.
+
+Lobster avoids this for you. When a run could open a magnet — `--base yts`, or
+`torrent_fallback = true` — it restarts itself once at startup with the safer
+backend selected:
+
+```sh
+TORRENT_STORAGE_DEFAULT_FILE_IO=classic
+```
+
+The library reads that variable in its own package initialisation, before any
+lobster code runs, so it can only be chosen before the process starts; that is
+why lobster restarts rather than setting it in place. The restart replaces the
+process (same pid, terminal and exit status) and happens before any search or
+output, so it is not observable in normal use.
+
+Two things worth knowing:
+
+- **Setting it yourself is respected**, including `mmap`. If you would rather
+  have the throughput and accept the race, set it and lobster leaves it alone.
+- **On Windows there is no way to restart in place**, so lobster prints a
+  warning instead. Set the variable in your environment before launching to get
+  the safe backend there.
+
+Set it to anything other than `classic` or `mmap` and the library panics during
+startup, before lobster can report it — the message will be a bare Go panic
+naming the value you typed.
+
 ### TBCPL catalog feed
 
 Lobster can pull site metadata from [tbcpl.lol](https://tbcpl.lol), a directory of streaming sites, to keep mirror domains fresh, add a best-effort fallback embed provider, and feed additional live-TV/sports channels. The catalog is cached for 12 hours with an embedded offline snapshot as a fallback.
@@ -318,7 +352,7 @@ tbcpl_include_untrusted = false
 ## All Flags
 
 ```
--c, --continue              Resume from watch history
+-c, --continue[=false]      Resume from watch history (on by default)
 -a, --audio-language <lang> Preferred audio track language (default: english)
 -d, --download <path>       Download to path instead of streaming
 -j, --json                  Output stream metadata as JSON
