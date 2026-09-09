@@ -344,3 +344,41 @@ func TestExpandTildeBackslashIsWindowsOnly(t *testing.T) {
 		t.Fatalf("expandTilde(%q) = %q, want it unchanged: on %s a backslash is part of the filename, not a separator", in, got, runtime.GOOS)
 	}
 }
+
+// Base is compared in three separate places in cmd — case-insensitively in
+// mayStreamTorrent, exactly in baseIsAuto, and by substring in newProvider —
+// and it arrives from two inputs that neither trim nor case-fold it: a
+// config.toml `base =` line and the --base flag. Validate is the one routine
+// that runs after both have landed (Load, then again in applyConfig after the
+// flag overrides), so it is where the value has to be made canonical. Without
+// this, `base = "AUTO"` was auto for one reader and an unrecognised base for
+// the others.
+func TestValidateNormalizesBase(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"AUTO", BaseAuto},
+		{"  auto  ", BaseAuto},
+		{"YTS", "yts"},
+		{"FlixHQ.WS", "flixhq.ws"},
+		{"soap2day", "soap2day"},
+	} {
+		c := Default()
+		c.Base = tc.in
+		if err := c.Validate(); err != nil {
+			t.Fatalf("Validate() with base %q = %v, want nil", tc.in, err)
+		}
+		if c.Base != tc.want {
+			t.Errorf("Validate() left base %q as %q, want %q", tc.in, c.Base, tc.want)
+		}
+	}
+}
+
+// A base of nothing but whitespace is an empty base once trimmed, and has to
+// be rejected as one rather than reaching newProvider as a value that matches
+// no branch and falls through to MovieBox.
+func TestValidateRejectsAWhitespaceOnlyBase(t *testing.T) {
+	c := Default()
+	c.Base = "   "
+	if err := c.Validate(); err == nil {
+		t.Fatalf("Validate() with a whitespace-only base = nil, want an error")
+	}
+}

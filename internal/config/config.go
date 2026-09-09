@@ -205,6 +205,16 @@ func (c *Config) Validate() error {
 	}
 	c.Quality = quality
 
+	// Normalize, don't just tolerate. Base has three readers that compare it
+	// differently — mayStreamTorrent case-insensitively, baseIsAuto exactly,
+	// newProvider by substring (cmd/root.go, cmd/typeroute.go,
+	// cmd/provider.go) — so an un-normalized value can be "auto" for one of
+	// them and unrecognized for the rest. `base = "AUTO"` was read as auto by
+	// mayStreamTorrent, refused the per-type route at baseIsAuto, and fell
+	// through newProvider's chain to MovieBox. Validate is the one routine
+	// that runs after both inputs have landed — the file at Load, and --base
+	// at applyConfig's re-validation — so canonicalizing here covers both.
+	c.Base = strings.ToLower(strings.TrimSpace(c.Base))
 	if c.Base == "" {
 		return fmt.Errorf("base URL cannot be empty")
 	}

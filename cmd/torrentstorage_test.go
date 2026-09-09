@@ -18,8 +18,10 @@ func TestMayStreamTorrent(t *testing.T) {
 	}{
 		{"no config at all", nil, false},
 		{"yts as the base resolves to magnets", &config.Config{Base: "yts"}, true},
-		// Base reaches this from a flag as well as the file, and neither is
-		// case-normalised on the way in.
+		// config.Validate lower-cases Base before any reader sees it, so a
+		// loud spelling does not reach here from a real run. The EqualFold
+		// below is what covers a cfg assembled without Validate — which is
+		// what every fixture in this file is.
 		{"yts spelled loudly", &config.Config{Base: "YTS"}, true},
 		{"the fallback can reach yts from any base", &config.Config{Base: "flixhq.to", TorrentFallback: true}, true},
 		{"an http provider with no fallback never streams", &config.Config{Base: "flixhq.to"}, false},
@@ -29,7 +31,13 @@ func TestMayStreamTorrent(t *testing.T) {
 		// torrents and needs the backend that cannot SIGBUS just as much as
 		// an explicit --base yts does.
 		{"the auto base routes movies to yts", &config.Config{Base: config.BaseAuto}, true},
-		{"auto spelled loudly", &config.Config{Base: "AUTO"}, true},
+		// Deliberately not a claim about routing: this fixture can only see
+		// mayStreamTorrent, and mayStreamTorrent is the one reader of Base
+		// that folds case. Whether a loudly spelled auto actually routes
+		// movies to YTS depends on baseIsAuto and newProvider agreeing too,
+		// and that is asserted end to end in
+		// TestALoudlySpelledAutoIsAutoForEveryReaderOfBase (autobase_test.go).
+		{"an unvalidated loud auto still reads as auto here", &config.Config{Base: "AUTO"}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

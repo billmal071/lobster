@@ -49,3 +49,42 @@ func TestNewProviderStillHonoursAnExplicitBase(t *testing.T) {
 		}
 	}
 }
+
+// Base has three readers that do not compare it the same way — mayStreamTorrent
+// case-insensitively (cmd/root.go), baseIsAuto exactly (cmd/typeroute.go), and
+// newProvider by substring (cmd/provider.go) — so an un-normalised value can be
+// auto for one and unrecognised for the others. `base = "AUTO"` did exactly
+// that: it re-execed for a torrent that would never be reached, skipped the
+// per-type route, and fell through newProvider's chain to MovieBox, the
+// provider that answers a 22-episode season with 10 fabricated rows.
+//
+// config.Validate is the single place both inputs pass through (the file at
+// Load, the flag at applyConfig's re-validation), so normalising there is what
+// makes the three agree. This asserts the agreement rather than any one
+// reader: a fixture that only asked mayStreamTorrent could not have seen the
+// bug, which is how it shipped.
+func TestALoudlySpelledAutoIsAutoForEveryReaderOfBase(t *testing.T) {
+	withOutputFlags(t, false, "")
+	prev := cfg
+	t.Cleanup(func() { cfg = prev })
+
+	c := config.Default()
+	// The catalog feed behind newProvider's domain overrides fetches over the
+	// network; nothing here needs it.
+	c.TBCPLFeed = false
+	c.Base = "  AUTO  "
+	if err := c.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+	cfg = c
+
+	if !mayStreamTorrent(c) {
+		t.Errorf("mayStreamTorrent(base=%q) = false; under auto every movie is routed to YTS, so the run may open a magnet", c.Base)
+	}
+	if !baseIsAuto() {
+		t.Errorf("baseIsAuto(base=%q) = false; a loudly spelled auto is still no preference, so movies must route to YTS", c.Base)
+	}
+	if p := newProvider(); func() bool { _, ok := p.(*provider.Soap2Day); return !ok }() {
+		t.Errorf("newProvider(base=%q) = %T, want *provider.Soap2Day; the fall-through is MovieBox, which fabricates episode lists", c.Base, p)
+	}
+}
