@@ -298,9 +298,15 @@ download_dir = "~/Videos/lobster"
 # scraper broke is not. `--base yts` always works without this.
 #
 # Torrent sources can be downloaded as well as played: lobster serves the
-# torrent over loopback and --download fetches from there. Only the TUI's
-# download queue refuses a torrent. Note that downloading this way still joins
-# the swarm, so your IP is visible to its peers for the whole download.
+# torrent over loopback and --download fetches from there. Note that
+# downloading this way still joins the swarm, so your IP is visible to its
+# peers for the whole download.
+#
+# Two paths refuse a torrent outright. The TUI's download queue is one. The
+# other is --json: a magnet is not a URL a JSON consumer can open, and the
+# loopback URL would die with the process that printed it, so the run fails
+# with "resolved to a torrent, which --json cannot express as a playable URL".
+# Play it without --json, or use --download to fetch it first.
 torrent_fallback = false
 ```
 
@@ -310,7 +316,18 @@ torrent_fallback = false
 one asked to enumerate a series' seasons and episodes, and the starting point
 for stream resolution. It does not pin the stream — every playback path still
 falls back to the rest of the chain when the primary cannot serve a title, so
-naming a source that does not carry something is not fatal, just slower.
+for **playback** naming a source that does not carry something is not fatal,
+just slower.
+
+`lobster episodes` is not covered by that. When the primary cannot enumerate a
+ref's seasons it re-searches the chain by title, but a fallback's result is
+only accepted if its title matches the ref's after normalisation. A show the
+two spell differently — `Marvel's Agents of S.H.I.E.L.D.` in the ref against
+`Agents of S.H.I.E.L.D.` on the fallback — is rejected, and `episodes` exits 2
+with `no seasons found`. `play --ref` has no such check, so it plays the very
+ref `episodes --ref` cannot list. If `episodes` says a ref has no seasons, name
+a source that carries the series (`--base soap2day`) rather than the one the
+ref was found under.
 
 This table is about **scope** — what a source covers and what it structurally
 cannot do. It says nothing about whether a site is up today; that changes week
@@ -320,20 +337,20 @@ and where the others break"). Run it before concluding a source is broken.
 | `base` | Covers | Worth knowing |
 | --- | --- | --- |
 | `auto` (default) | Films and series | No preference: a film is looked up on YTS by title and year and played from there when both agree, and a series always goes to a scraping source, because YTS has no TV catalogue. Everything else — series, and films YTS has no match for — is served by `soap2day`, the general source `auto` maps to. An explicit `base`, `--base`, or an `api_url` overrides all of this. |
-| `soap2day` | Films and series | The general-purpose source `auto` falls back to. Resolves its own streams rather than deferring to the fallback chain. |
+| `soap2day` | Films and series | The general-purpose source `auto` falls back to. |
 | `vaplayer` | Films and series | General-purpose, API-based. |
 | `flixhq.to`, `flixhq.ws` | Films and series | Scraper-based. `flixhq.ws` was the default before `auto`. Both check their domain at startup and try known alternates (plus any `domain_overrides`) when it is unreachable. |
 | `tbcpl`, `1shows.org` | Films and series | The same provider against the same site: `tbcpl` resolves to `https://www.1shows.org`, `1shows.org` to `https://1shows.org`. Honours `audio_language` for multi-dub releases. |
 | `kimcartoon` | Cartoons and anime | Domain-checked like FlixHQ. |
 | `allanime` | Anime | No longer part of the automatic fallback chain — its sources endpoint is crypto-gated behind a bot challenge — so it is reachable only by naming it here. `lobster doctor` reports whether it answers. |
-| `moviebox` | Films | **Cannot enumerate episodes.** Its season listing returns ten placeholder rows without querying anything, so a series' episode list is fiction: a 22-episode season lists as 10. Fine for films. |
+| `moviebox` | Films | **Cannot enumerate episodes.** Its episode listing is generated, not fetched: every season returns exactly ten placeholder rows, so a 22-episode season lists as 10. (The season count itself comes from search metadata, and is 1 for any ID MovieBox did not find itself.) Fine for films. |
 | `vidnest` | Films | **Cannot enumerate episodes**, the same way: every season lists episodes 1–50 whether they exist or not. Fine for films. |
-| `yts` | Films only | No TV catalogue at all, so a series named under `--base yts` is answered by the fallback chain instead — `--base yts` pins nothing for a series. Resolves to a **magnet**, so playback joins a BitTorrent swarm and your IP is visible to its peers; lobster serves it over loopback, so `--download` works too, but the swarm is joined either way. If no peer answers within 90 seconds the run gives up with "the swarm may be dead". |
+| `yts` | Films only | No TV catalogue at all, so a series named under `--base yts` is played from the fallback chain instead — for playback, `--base yts` pins nothing for a series. `lobster episodes` under it can still fail outright, per the note above. Resolves to a **magnet**, so playback joins a BitTorrent swarm and your IP is visible to its peers; lobster serves it over loopback, so `--download` works too, but the swarm is joined either way. If no peer answers within 90 seconds the run gives up with "the swarm may be dead". |
 
 **A value lobster does not recognise is not an error.** Values are matched by
 substring, so anything still containing a known name works — `flixhq.xx` is
 read as `flixhq`, `soap2days` as `soap2day`. Anything else falls through to
-`moviebox`, the one source that cannot enumerate episodes: `--base sopa2day`
+`moviebox`, which cannot enumerate episodes: `--base sopa2day`
 plays films but reports every season as ten episodes. If a series suddenly
 lists exactly ten, check the spelling of `base` first.
 
