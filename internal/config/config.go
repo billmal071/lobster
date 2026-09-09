@@ -14,8 +14,22 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// BaseAuto is the Base value meaning "let lobster choose the source".
+//
+// It is the default because there is no single source that serves both
+// content types well: measured 2026-09-09, flixhq.ws — the previous default —
+// answered TV season enumeration with HTTP 404, and YTS has no TV catalogue at
+// all. Naming the absence of a choice lets the per-type routing apply without
+// ever second-guessing a base the user did pick.
+const BaseAuto = "auto"
+
 // Config holds all application configuration.
 type Config struct {
+	// Base names the content source. The default is the sentinel "auto",
+	// which means "no preference": lobster maps it to a live general-purpose
+	// source and is free to pick a different one per content type (see
+	// cmd/typeroute.go). Any other value is an explicit choice and is used
+	// verbatim for every title, whatever its type.
 	Base                   string              `toml:"base"`
 	APIURL                 string              `toml:"api_url"`
 	Player                 string              `toml:"player"`
@@ -90,7 +104,7 @@ func (c LiveTVConfig) Sources() []string {
 // Default returns the default configuration.
 func Default() *Config {
 	return &Config{
-		Base:                   "flixhq.ws",
+		Base:                   BaseAuto,
 		Player:                 "mpv",
 		Provider:               "Default",
 		SubsLanguage:           "english",

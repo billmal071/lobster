@@ -22,8 +22,8 @@ func TestDefault(t *testing.T) {
 	if !cfg.History {
 		t.Error("default history should be true")
 	}
-	if cfg.Base != "flixhq.ws" {
-		t.Fatalf("Base=%q want flixhq.ws", cfg.Base)
+	if cfg.Base != BaseAuto {
+		t.Fatalf("Base=%q want %q", cfg.Base, BaseAuto)
 	}
 	if cfg.AnimeDub {
 		t.Error("default AnimeDub should be false (sub)")

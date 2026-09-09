@@ -309,10 +309,11 @@ history = true
 auto_next = true
 download_dir = "~/Videos/lobster"
 
-# Provider selection (default: moviebox)
-# Available: moviebox, flixhq.to, flixhq.ws, soap2day, kimcartoon, yts
+# Provider selection (default: auto)
+# Available: auto, moviebox, flixhq.to, flixhq.ws, soap2day, kimcartoon,
+# vaplayer, vidnest, tbcpl, 1shows.org, allanime, yts
 # All other providers are automatically used as fallbacks.
-# base = "moviebox"
+# base = "auto"
 
 # yts is BitTorrent, not HTTP streaming. It plays while downloading, but it
 # also makes you a participant in the swarm: your IP is visible to every peer
