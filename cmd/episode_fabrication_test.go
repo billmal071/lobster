@@ -349,6 +349,14 @@ func answeringLister() *answeringListerProvider {
 // making exactly one GetEpisodes call means a show the rest of the chain could
 // list exits 3 — and the real chain leads with two providers of exactly that
 // shape (VidNest, MovieBox). Every hit must be tried, in chain order.
+//
+// Three chain members, not two, and that is load-bearing. seasonSource takes
+// hits[0] as the answering provider and leaves the rest as alts, so a
+// two-member chain gives firstEpisodeList a single-element slice and it never
+// iterates at all — the test then passes on a build where firstEpisodeList
+// only ever looks at its first hit, which is exactly the bug it is named for.
+// Proven by inserting `hits = hits[:1]` into firstEpisodeList: with two
+// members this test stayed green, with three it fails.
 func TestEpisodesTriesLaterChainProvidersWhenTheFirstCannotListEpisodes(t *testing.T) {
 	hostileEnv(t)
 	buf := captureAgentOut(t)
@@ -356,7 +364,7 @@ func TestEpisodesTriesLaterChainProvidersWhenTheFirstCannotListEpisodes(t *testi
 	// The primary cannot enumerate seasons either, so the season list itself
 	// comes from the chain — the path where the hits are already in hand.
 	withStubProvider(t, &stubProvider{seasonsErr: errProviderCannotList})
-	withFallbackChain(t, blockedLister(), answeringLister())
+	withFallbackChain(t, blockedLister(), blockedLister(), answeringLister())
 	withEpisodesFlags(t, tvRef(t, ""), 1)
 
 	if err := episodesRun(episodesCmd, nil); err != nil {
