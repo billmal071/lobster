@@ -78,6 +78,18 @@ func routeByType(p provider.Provider, sel media.SearchResult) (provider.Provider
 	}
 
 	if sel.Type == media.TV {
+		// Defensive rather than live: nothing reaches here with a YTS primary
+		// today. This route only runs under config.BaseAuto, newProvider maps
+		// BaseAuto to autoBase ("soap2day", cmd/provider.go), and an explicit
+		// --base yts returns above — YTS is otherwise only a fallback *search*
+		// source (fallbackProviders, cmd/fallback.go), never the provider a
+		// selection is played through. It stays as insurance against autoBase
+		// becoming a movie-only source. Note that sel goes back with its ID
+		// untouched, so if this ever does fire the replacement is handed an ID
+		// another provider minted: resolveAndPlay's TV branch treats an empty
+		// or failing GetSeasons as "no season data" and falls through to
+		// tryFallbackStream, which resolves by title, so the cost is a wasted
+		// call rather than the wrong series.
 		if _, isYTS := p.(*provider.YTS); isYTS {
 			debugf("route: %q is a series and YTS has no TV catalogue; using the configured source instead", sel.Title)
 			return newProvider(), sel
