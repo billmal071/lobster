@@ -97,9 +97,12 @@ func TestMayStreamTorrentUnderAutoIgnoresRunsTheRouteRefuses(t *testing.T) {
 // The other two arms are the user naming a torrent source outright, and those
 // do not go through the route at all: --base yts makes YTS the primary and
 // torrent_fallback puts it in the fallback chain, both of which resolve a
-// magnet whatever the output flags say.
-func TestMayStreamTorrentKeepsAnExplicitTorrentSourceUnderOutputFlags(t *testing.T) {
-	withOutputFlags(t, true, t.TempDir())
+// magnet. --download does not change that — playStream stands up the local
+// torrent server and fetches from loopback — so unlike the auto arm, these two
+// must still answer yes under it. (--json is the one flag that overrides them,
+// asserted in TestMayStreamTorrentSaysNoUnderJSONWhateverTheSource.)
+func TestMayStreamTorrentKeepsAnExplicitTorrentSourceUnderDownload(t *testing.T) {
+	withOutputFlags(t, false, t.TempDir())
 	for _, c := range []struct {
 		name string
 		cfg  *config.Config
@@ -109,7 +112,32 @@ func TestMayStreamTorrentKeepsAnExplicitTorrentSourceUnderOutputFlags(t *testing
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if !mayStreamTorrent(c.cfg) {
-				t.Fatalf("mayStreamTorrent(%+v) = false under output flags; the user named a torrent source", c.cfg)
+				t.Fatalf("mayStreamTorrent(%+v) = false under --download; the user named a torrent source, and --download streams it over loopback", c.cfg)
+			}
+		})
+	}
+}
+
+// --json is not a routing question, so the auto arm is the wrong place for it:
+// playStream refuses a magnet outright before it looks at anything else
+// (cmd/search.go), so NO run with --json set can open a torrent, whichever arm
+// would otherwise say yes. The yts and torrent_fallback arms short-circuited
+// above that check and answered true, which costs a re-exec — or, on Windows
+// where canExec is false, an ungated SIGBUS notice printed on stderr ahead of
+// the JSON the caller is parsing.
+func TestMayStreamTorrentSaysNoUnderJSONWhateverTheSource(t *testing.T) {
+	withOutputFlags(t, true, "")
+	for _, c := range []struct {
+		name string
+		cfg  *config.Config
+	}{
+		{"--base yts", &config.Config{Base: "yts"}},
+		{"torrent_fallback", &config.Config{Base: "flixhq.to", TorrentFallback: true}},
+		{"auto", &config.Config{Base: config.BaseAuto}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if mayStreamTorrent(c.cfg) {
+				t.Fatalf("mayStreamTorrent(%+v) = true under --json; playStream refuses a magnet before anything can open one", c.cfg)
 			}
 		})
 	}

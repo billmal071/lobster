@@ -263,6 +263,23 @@ func mayStreamTorrent(c *config.Config) bool {
 	if c == nil {
 		return false
 	}
+	// --json is not a routing question, so it is read before any arm: the
+	// JSON branch of playStream (cmd/search.go) refuses a magnet outright and
+	// returns, before the local torrent server — the only place in the
+	// program that opens one — is ever stood up. So no --json run can reach a
+	// magnet, whichever arm would otherwise say yes, and saying yes is not
+	// free: it re-execs the process, or on Windows (canExec false) prints an
+	// ungated SIGBUS notice on stderr, ahead of the JSON the caller is
+	// parsing. Cobra parses flags before PersistentPreRunE, so this is
+	// populated by the time loadConfig calls this.
+	if flagJSON {
+		return false
+	}
+	// The user naming a torrent source outright does not go through the route
+	// at all: --base yts makes YTS the primary and torrent_fallback puts it in
+	// the fallback chain, and both resolve a magnet for playback and for
+	// --download alike, which serves the torrent over loopback and fetches
+	// from there.
 	if strings.EqualFold(c.Base, "yts") || c.TorrentFallback {
 		return true
 	}
@@ -271,17 +288,14 @@ func mayStreamTorrent(c *config.Config) bool {
 	//
 	//   - a configured api_url overrides Base entirely (baseIsAuto), so no
 	//     movie is routed and nothing in the run can reach a magnet;
-	//   - --json and --download return before the lookup, since a magnet is
-	//     neither a URL a JSON consumer can open nor something the download
-	//     path accepts.
+	//   - --download returns before the lookup, so no movie is routed to YTS
+	//     under it either — unlike the arms above, where the user asked for
+	//     the torrent source by name.
 	//
-	// Cobra parses flags before PersistentPreRunE, so both are populated by
-	// the time loadConfig calls this. They are worth reading because a "yes"
-	// is not free: it re-execs the process, or on Windows (canExec false)
-	// prints an ungated SIGBUS notice. Which subcommand is running is handled
-	// separately and earlier, by reachesPlayback — this function is only ever
-	// asked about a command that can play.
-	if flagJSON || flagDownload != "" {
+	// Which subcommand is running is handled separately and earlier, by
+	// reachesPlayback — this function is only ever asked about a command that
+	// can play.
+	if flagDownload != "" {
 		return false
 	}
 	return c.APIURL == "" && strings.EqualFold(c.Base, config.BaseAuto)
