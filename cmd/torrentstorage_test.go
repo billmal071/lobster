@@ -39,3 +39,62 @@ func TestMayStreamTorrent(t *testing.T) {
 		})
 	}
 }
+
+// withOutputFlags sets the two flags that make a run produce output rather
+// than playback, and restores them afterwards.
+func withOutputFlags(t *testing.T, jsonOut bool, dl string) {
+	t.Helper()
+	prevJSON, prevDL := flagJSON, flagDownload
+	flagJSON, flagDownload = jsonOut, dl
+	t.Cleanup(func() { flagJSON, flagDownload = prevJSON, prevDL })
+}
+
+// applyConfig is PersistentPreRunE, so this runs for every subcommand — and
+// warnf is ungated, so a wrong "yes" on Windows (where canExec is false and
+// planFileIo warns instead of re-execing) prints a SIGBUS notice on `lobster
+// version`. Under the auto base the route is the only thing that reaches YTS,
+// and routeByType returns early for both --json and --download, so neither
+// run can open a magnet however it ends.
+func TestMayStreamTorrentUnderAutoIgnoresRunsTheRouteRefuses(t *testing.T) {
+	auto := &config.Config{Base: config.BaseAuto}
+
+	t.Run("--json is never routed to YTS", func(t *testing.T) {
+		withOutputFlags(t, true, "")
+		if mayStreamTorrent(auto) {
+			t.Fatalf("mayStreamTorrent said a --json run may open a magnet; routeByType returns early for it")
+		}
+	})
+	t.Run("--download is never routed to YTS", func(t *testing.T) {
+		withOutputFlags(t, false, t.TempDir())
+		if mayStreamTorrent(auto) {
+			t.Fatalf("mayStreamTorrent said a --download run may open a magnet; routeByType returns early for it")
+		}
+	})
+	t.Run("a plain auto run still may", func(t *testing.T) {
+		withOutputFlags(t, false, "")
+		if !mayStreamTorrent(auto) {
+			t.Fatalf("mayStreamTorrent said a default install cannot stream; the route sends every movie to YTS")
+		}
+	})
+}
+
+// The other two arms are the user naming a torrent source outright, and those
+// do not go through the route at all: --base yts makes YTS the primary and
+// torrent_fallback puts it in the fallback chain, both of which resolve a
+// magnet whatever the output flags say.
+func TestMayStreamTorrentKeepsAnExplicitTorrentSourceUnderOutputFlags(t *testing.T) {
+	withOutputFlags(t, true, t.TempDir())
+	for _, c := range []struct {
+		name string
+		cfg  *config.Config
+	}{
+		{"--base yts", &config.Config{Base: "yts"}},
+		{"torrent_fallback", &config.Config{Base: "flixhq.to", TorrentFallback: true}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if !mayStreamTorrent(c.cfg) {
+				t.Fatalf("mayStreamTorrent(%+v) = false under output flags; the user named a torrent source", c.cfg)
+			}
+		})
+	}
+}

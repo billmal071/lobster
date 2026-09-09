@@ -205,10 +205,23 @@ func mayStreamTorrent(c *config.Config) bool {
 	if strings.EqualFold(c.Base, "yts") || c.TorrentFallback {
 		return true
 	}
-	// The auto arm mirrors routeByType's own condition (baseIsAuto,
-	// cmd/typeroute.go), so it has to read APIURL for the same reason that
-	// does: a configured api_url overrides Base entirely, no movie is routed
-	// to YTS, and nothing in the run can reach a magnet.
+	// The auto arm mirrors routeByType's own conditions (cmd/typeroute.go),
+	// because under auto the route is the only thing that reaches YTS:
+	//
+	//   - a configured api_url overrides Base entirely (baseIsAuto), so no
+	//     movie is routed and nothing in the run can reach a magnet;
+	//   - --json and --download return before the lookup, since a magnet is
+	//     neither a URL a JSON consumer can open nor something the download
+	//     path accepts.
+	//
+	// Cobra parses flags before PersistentPreRunE, so both are populated by
+	// the time applyConfig calls this. Reading them matters because applyConfig
+	// runs for every subcommand and warnf is ungated: on Windows, where
+	// canExec is false and planFileIo warns instead of re-execing, a wrong
+	// "yes" here prints a SIGBUS notice on a run that never opens a torrent.
+	if flagJSON || flagDownload != "" {
+		return false
+	}
 	return c.APIURL == "" && strings.EqualFold(c.Base, config.BaseAuto)
 }
 
