@@ -125,10 +125,19 @@ func (v *VidNest) GetSeasons(id string) ([]media.Season, error) {
 // GetSeasons above is different, and stays: it probes each season for actual
 // streams and stops when they disappear, so its answer is measured.
 //
-// Returning an error costs playback nothing: VidNest is a StreamProvider, so
-// the resolver reaches it through Watch with an arithmetically built episode
-// ID (tryStreamProviderFallback, internal/resolver/probe.go) rather than a
-// list.
+// What that costs depends on which side of the chain VidNest is on.
+//
+// As a fallback it costs nothing: VidNest is a StreamProvider, so the resolver
+// reaches it through Watch with an arithmetically built episode ID
+// (tryStreamProviderFallback, internal/resolver/probe.go) rather than a list.
+//
+// As the primary — reachable as "--base vidnest" (cmd/provider.go) — the
+// resolver is precisely what will not reach it, because tryFallbackStream
+// builds its chain from fallbackProviders (cmd/fallback.go), which excludes
+// the primary by concrete type. An interactive episode menu under this primary
+// therefore fails instead of listing fifty episodes that do not exist; the
+// error names the provider and points at "lobster episodes --ref ...", which
+// asks every chain provider that can enumerate the season (cmd/episodes.go).
 func (v *VidNest) GetEpisodes(id string, seasonID string) ([]media.Episode, error) {
 	return nil, fmt.Errorf("vidnest: episode listing unavailable; backends expose no episode index")
 }

@@ -346,10 +346,26 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				}
 				debugf("fallback stream failed: %v", fbErr)
 			}
-			if err != nil {
-				return fmt.Errorf("getting episodes: %w", err)
+
+			// Out of options, so say who could not answer and what to do
+			// instead. "episode listing unavailable" on its own leaves a user
+			// under a MovieBox or VidNest primary with a dead end; the list
+			// does exist, just not here, and `episodes` is what goes and finds
+			// it — it asks every chain provider that can enumerate the season
+			// (fallbackSeasonHits, cmd/episodes.go), which is more than this
+			// path ever tries.
+			//
+			// The --episode hint is only offered when no episode was
+			// requested: with one, tryFallbackStream just failed above, so
+			// suggesting it would send the caller back to what did not work.
+			remedy := "list them with 'lobster episodes --ref ...', which asks every fallback provider"
+			if episode == 0 {
+				remedy += ", or pass --episode N to play a known episode without a list"
 			}
-			return fmt.Errorf("no episodes found")
+			if err != nil {
+				return fmt.Errorf("%s cannot list season %d of %q: %w (%s)", providerLabel(p), selectedSeason.Number, title, err, remedy)
+			}
+			return fmt.Errorf("%s returned no episodes for season %d of %q (%s)", providerLabel(p), selectedSeason.Number, title, remedy)
 		}
 
 		// Select episode (or use provided)

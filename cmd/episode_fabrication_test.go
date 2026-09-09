@@ -379,3 +379,48 @@ func TestEpisodesTriesLaterChainProvidersWhenTheFirstCannotListEpisodes(t *testi
 		t.Fatalf("provider = %q, want %q — the envelope must name the provider that actually listed the episodes", got.Provider, "answeringlisterprovider")
 	}
 }
+
+// Refusing to invent a list is only defensible if the refusal tells the user
+// where a real one lives. Under a MovieBox or VidNest primary the interactive
+// path has no menu to offer and no requested number to hand the resolver, so
+// this error is the entire user-facing outcome: it has to name the provider
+// that could not answer and point at `lobster episodes --ref ...`, which asks
+// every chain provider that can enumerate the season. "getting episodes:
+// episode listing unavailable" named neither.
+func TestResolveAndPlayErrorNamesTheProviderAndTheRemedy(t *testing.T) {
+	hostileEnv(t)
+
+	sel := media.SearchResult{
+		ID:    "tv/1403",
+		Title: "Marvel's Agents of S.H.I.E.L.D.",
+		Year:  "2013",
+		Type:  media.TV,
+	}
+
+	// No chain at all: nothing here may reach a real provider, and with no
+	// episode requested resolveAndPlay must not consult one anyway.
+	withFallbackChain(t)
+
+	primary := &stubProvider{
+		seasons:     []media.Season{{ID: "1", Number: 1}},
+		episodesErr: errProviderCannotList,
+	}
+
+	err := resolveAndPlay(primary, sel, 1, 0)
+	if err == nil {
+		t.Fatalf("resolveAndPlay = nil; a primary that cannot list episodes has no menu to offer and must fail")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"stubprovider",
+		"season 1",
+		sel.Title,
+		errProviderCannotList.Error(),
+		"lobster episodes --ref",
+		"--episode N",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error %q does not mention %q; the refusal has to name who failed and what to do instead", msg, want)
+		}
+	}
+}

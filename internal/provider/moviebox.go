@@ -429,11 +429,26 @@ func (m *MovieBox) GetSeasons(id string) ([]media.Season, error) {
 // instead, which a caller cannot distinguish from a measured one — so a show
 // with 22 episodes in season 1 had `--episode 15` refused as out of range.
 //
-// Returning an error costs playback nothing: MovieBox is a StreamProvider, so
-// the resolver reaches it through Watch and builds the episode ID
-// arithmetically (tryStreamProviderFallback, internal/resolver/probe.go)
-// without ever asking for a list. Only listing and validation are affected,
-// and both are better off with "unknown" than with a fabricated number.
+// What that costs depends on which side of the chain MovieBox is on.
+//
+// As a fallback it costs nothing: MovieBox is a StreamProvider, so the
+// resolver reaches it through Watch with an episode ID built arithmetically
+// from season and episode (tryStreamProviderFallback,
+// internal/resolver/probe.go) and never asks for a list.
+//
+// As the primary the resolver is the one thing that will not reach it:
+// tryFallbackStream builds its chain from fallbackProviders (cmd/fallback.go),
+// which excludes the primary by concrete type. So under a MovieBox primary —
+// any unrecognised --base lands here (newProvider, cmd/provider.go), and
+// cmd/search.go tips users towards "--base moviebox" by name — an interactive
+// episode menu fails outright rather than showing an invented one. The error
+// names this provider and points at "lobster episodes --ref ...", which asks
+// every chain provider that can enumerate the season (cmd/episodes.go); a
+// caller that already knows the number can still pass --episode N, which the
+// fallback resolver serves without a list.
+//
+// That trade is deliberate: a failure the caller can act on beats a list
+// nobody can tell from a measured one.
 func (m *MovieBox) GetEpisodes(id string, seasonID string) ([]media.Episode, error) {
 	return nil, fmt.Errorf("moviebox: episode listing unavailable; the detail endpoint requires authentication")
 }
