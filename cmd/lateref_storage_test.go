@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"lobster/internal/config"
+	"lobster/internal/provider"
 )
 
 // unsetStorageEnv removes the backend selection for one test and puts it back
@@ -128,5 +129,116 @@ func TestApplyRefBaseStaysQuietForACommandThatCannotPlay(t *testing.T) {
 
 	if len(*warnings) != 0 {
 		t.Fatalf("applyRefBase warned for a non-playback command: %q", *warnings)
+	}
+}
+
+// A ref carries a third `base` input, and it never passes through
+// config.Validate: decodeRef validates Type strictly and Base not at all, and
+// applyRefBase assigns it into cfg long after the last Validate() call. So the
+// canonicalisation that made mayStreamTorrent, baseIsAuto and newProvider
+// agree about `base = "AUTO"` covered the file and the flag but not the token,
+// and every disagreement it closed was reachable again through `play --ref`.
+//
+// The worst of them is a ref base of " yts ": newProvider matches by substring
+// so the run really does get YTS and a magnet, while mayStreamTorrent compares
+// with EqualFold and answers false — so WarnLateStorageRisk stays silent and
+// the magnet is served on the memory-mapped backend, which is the exact case
+// this file's first test exists for.
+//
+// This asserts the agreement across all three readers, on the ref path, rather
+// than any one of them: the round-7 fixture asked only config.Validate, which
+// is why the token path shipped broken underneath it.
+func TestARefSuppliedBaseIsCanonicalForEveryReaderOfBase(t *testing.T) {
+	for _, tc := range []struct {
+		refBase  string
+		wantBase string
+		wantAuto bool
+		wantYTS  bool
+	}{
+		{refBase: " YTS ", wantBase: "yts", wantAuto: false, wantYTS: true},
+		{refBase: "AUTO", wantBase: config.BaseAuto, wantAuto: true, wantYTS: false},
+	} {
+		t.Run(tc.refBase, func(t *testing.T) {
+			unsetStorageEnv(t)
+			withOutputFlags(t, false, "")
+			prev := cfg
+			c := config.Default()
+			// newProvider's domain overrides fetch a catalog feed over the
+			// network; nothing here needs it.
+			c.TBCPLFeed = false
+			c.Base = "soap2day"
+			cfg = c
+			t.Cleanup(func() { cfg = prev })
+
+			warnings := captureWarnings(t)
+			applyRefBase(refCmd(t), playRef{Base: tc.refBase})
+
+			if cfg.Base != tc.wantBase {
+				t.Errorf("applyRefBase(ref base %q) left base %q, want %q", tc.refBase, cfg.Base, tc.wantBase)
+			}
+			if got := baseIsAuto(); got != tc.wantAuto {
+				t.Errorf("baseIsAuto() after ref base %q = %v, want %v", tc.refBase, got, tc.wantAuto)
+			}
+			if _, isYTS := newProvider().(*provider.YTS); isYTS != tc.wantYTS {
+				t.Errorf("newProvider() after ref base %q = %T, YTS=%v, want YTS=%v", tc.refBase, newProvider(), isYTS, tc.wantYTS)
+			}
+			// Both bases can reach a magnet, and both changed the base, so
+			// the late-arrival notice has to fire for each of them.
+			if !mayStreamTorrent(cfg) {
+				t.Errorf("mayStreamTorrent() after ref base %q = false; this run can open a magnet, so the backend risk is real", tc.refBase)
+			}
+			if joined := strings.Join(*warnings, "\n"); !strings.Contains(joined, "SIGBUS") {
+				t.Errorf("applyRefBase(ref base %q) said nothing about the storage backend (warnings: %q)", tc.refBase, *warnings)
+			}
+		})
+	}
+}
+
+// The `changed` comparison decides whether the notice fires, and it compared
+// raw strings: a run already configured for yts that replays a ref stamped
+// " YTS " read as a change and warned about a backend that was chosen
+// correctly at startup. Canonicalising before the comparison is what makes the
+// notice mean "this run moved".
+func TestApplyRefBaseStaysQuietWhenOnlyTheSpellingOfTheBaseDiffers(t *testing.T) {
+	unsetStorageEnv(t)
+	withOutputFlags(t, false, "")
+	prev := cfg
+	cfg = &config.Config{Base: "yts", Quality: "1080", Player: "mpv"}
+	t.Cleanup(func() { cfg = prev })
+
+	warnings := captureWarnings(t)
+	applyRefBase(refCmd(t), playRef{Base: " YTS "})
+
+	// Without this, silence would prove nothing: an un-normalised " YTS "
+	// also reads as "not a torrent base" to mayStreamTorrent, so the notice
+	// would be suppressed by the risk gate rather than by `changed`, and the
+	// fixture could not see its own subject.
+	if !mayStreamTorrent(cfg) {
+		t.Fatalf("mayStreamTorrent() = false for base %q; this run can open a magnet, so silence here must come from the base not having changed", cfg.Base)
+	}
+	if len(*warnings) != 0 {
+		t.Fatalf("applyRefBase warned on a ref naming the base this run already had, spelled differently: %q", *warnings)
+	}
+}
+
+// A ref whose base is nothing but whitespace names no source. Assigning it
+// verbatim replaces a working base with "", which newProvider matches against
+// nothing and falls through to MovieBox — the provider that answers a
+// 22-episode season with 10 fabricated rows.
+func TestApplyRefBaseIgnoresAWhitespaceOnlyRefBase(t *testing.T) {
+	unsetStorageEnv(t)
+	withOutputFlags(t, false, "")
+	prev := cfg
+	cfg = &config.Config{Base: "soap2day", Quality: "1080", Player: "mpv"}
+	t.Cleanup(func() { cfg = prev })
+
+	warnings := captureWarnings(t)
+	applyRefBase(refCmd(t), playRef{Base: "   "})
+
+	if cfg.Base != "soap2day" {
+		t.Fatalf("applyRefBase(ref base %q) left base %q, want soap2day untouched", "   ", cfg.Base)
+	}
+	if len(*warnings) != 0 {
+		t.Fatalf("applyRefBase warned for a ref that named no base at all: %q", *warnings)
 	}
 }

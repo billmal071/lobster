@@ -353,6 +353,10 @@ func TestExpandTildeBackslashIsWindowsOnly(t *testing.T) {
 // flag overrides), so it is where the value has to be made canonical. Without
 // this, `base = "AUTO"` was auto for one reader and an unrecognised base for
 // the others.
+//
+// A third input, a ref's stamped base, never reaches Validate at all; it
+// canonicalises through the same NormalizeBase in applyRefBase, and is
+// asserted on the ref path in cmd/lateref_storage_test.go.
 func TestValidateNormalizesBase(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"AUTO", BaseAuto},

@@ -175,6 +175,27 @@ func Load() (*Config, error) {
 }
 
 // Validate checks config values are within acceptable bounds.
+// NormalizeBase returns the canonical spelling of a base value.
+//
+// Base has three readers that do not compare it the same way —
+// mayStreamTorrent case-insensitively, baseIsAuto exactly, and newProvider by
+// substring (cmd/root.go, cmd/typeroute.go, cmd/provider.go) — so an
+// un-normalized value can be "auto" for one of them and unrecognized for the
+// rest. `base = "AUTO"` was read as auto by mayStreamTorrent, refused the
+// per-type route at baseIsAuto, and fell through newProvider's chain to
+// MovieBox, the provider that answers a 22-episode season with 10 fabricated
+// rows. A ref stamped " yts " was worse: newProvider's substring match handed
+// the run real YTS and a magnet while mayStreamTorrent answered false, so the
+// late-storage warning stayed silent and the magnet was served on the
+// memory-mapped backend.
+//
+// Exported so every entry point for a base value can canonicalize through the
+// same routine. Callers that reject an empty base must test the result, not
+// the input: a whitespace-only base normalizes to "".
+func NormalizeBase(base string) string {
+	return strings.ToLower(strings.TrimSpace(base))
+}
+
 func (c *Config) Validate() error {
 	validPlayers := map[string]bool{
 		"mpv": true, "vlc": true, "iina": true, "celluloid": true,
@@ -208,16 +229,12 @@ func (c *Config) Validate() error {
 	}
 	c.Quality = quality
 
-	// Normalize, don't just tolerate. Base has three readers that compare it
-	// differently — mayStreamTorrent case-insensitively, baseIsAuto exactly,
-	// newProvider by substring (cmd/root.go, cmd/typeroute.go,
-	// cmd/provider.go) — so an un-normalized value can be "auto" for one of
-	// them and unrecognized for the rest. `base = "AUTO"` was read as auto by
-	// mayStreamTorrent, refused the per-type route at baseIsAuto, and fell
-	// through newProvider's chain to MovieBox. Validate is the one routine
-	// that runs after both inputs have landed — the file at Load, and --base
-	// at applyConfig's re-validation — so canonicalizing here covers both.
-	c.Base = strings.ToLower(strings.TrimSpace(c.Base))
+	// Normalize, don't just tolerate — see NormalizeBase for why. Validate
+	// covers two of the three inputs: the file at Load, and --base at
+	// applyConfig's re-validation. The third, a ref's stamped base, never
+	// reaches Validate at all and calls NormalizeBase itself (applyRefBase,
+	// cmd/play.go).
+	c.Base = NormalizeBase(c.Base)
 	if c.Base == "" {
 		return fmt.Errorf("base URL cannot be empty")
 	}

@@ -58,9 +58,11 @@ func TestNewProviderStillHonoursAnExplicitBase(t *testing.T) {
 // per-type route, and fell through newProvider's chain to MovieBox, the
 // provider that answers a 22-episode season with 10 fabricated rows.
 //
-// config.Validate is the single place both inputs pass through (the file at
-// Load, the flag at applyConfig's re-validation), so normalising there is what
-// makes the three agree. This asserts the agreement rather than any one
+// config.Validate is the single place both of those inputs pass through (the
+// file at Load, the flag at applyConfig's re-validation), so normalising there
+// is what makes the three agree. The third input, a ref's stamped base, does
+// not pass through Validate and normalises in applyRefBase instead; see
+// TestARefSuppliedBaseIsCanonicalForEveryReaderOfBase. This asserts the agreement rather than any one
 // reader: a fixture that only asked mayStreamTorrent could not have seen the
 // bug, which is how it shipped.
 func TestALoudlySpelledAutoIsAutoForEveryReaderOfBase(t *testing.T) {

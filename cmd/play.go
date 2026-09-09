@@ -3,6 +3,7 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 
+	"lobster/internal/config"
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/provider"
@@ -89,9 +90,19 @@ func init() {
 // already run), so the run says what it is doing instead. Only for a command
 // that can actually play: episodes shares this function and never streams.
 func applyRefBase(cmd *cobra.Command, r playRef) {
-	if r.Base != "" && cfg != nil && !cmd.Flags().Changed("base") {
-		changed := cfg.Base != r.Base
-		cfg.Base = r.Base
+	// A ref is the third input for base, and the only one that never passes
+	// through config.Validate: decodeRef checks Type strictly and Base not at
+	// all, and this assignment happens inside RunE, long after the last
+	// Validate(). Canonicalize through the same routine Validate uses, before
+	// the comparison — otherwise a ref stamped " yts " gets real YTS from
+	// newProvider's substring match while mayStreamTorrent's EqualFold says
+	// no, and the warning below never fires on the one case it exists for.
+	// It also makes `changed` mean "this run moved" rather than "the token
+	// was spelled differently".
+	base := config.NormalizeBase(r.Base)
+	if base != "" && cfg != nil && !cmd.Flags().Changed("base") {
+		changed := cfg.Base != base
+		cfg.Base = base
 		if changed && reachesPlayback(cmd) {
 			torrentstream.WarnLateStorageRisk(mayStreamTorrent(cfg), warnf)
 		}
