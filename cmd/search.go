@@ -255,11 +255,19 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		// Select season (or use provided)
 		seasonIdx := 0
 		if season > 0 {
+			// A requested number absent from a list the provider really did
+			// return is an error, not a fallback to index 0. Leaving it at 0
+			// played season one and reported success, so the caller was told
+			// it got the season it asked for.
+			found := false
 			for i, s := range seasons {
 				if s.Number == season {
-					seasonIdx = i
+					seasonIdx, found = i, true
 					break
 				}
+			}
+			if !found {
+				return fmt.Errorf("season %d not found for %q (list them with 'lobster episodes --ref ...')", season, title)
 			}
 		} else {
 			seasonItems := make([]string, len(seasons))
@@ -347,11 +355,21 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		// Select episode (or use provided)
 		episodeIdx := 0
 		if episode > 0 {
+			// Same rule as the season above, and the same bug: an episode
+			// missing from a real list silently played episode one. The list
+			// being unavailable is a different case entirely and was handled
+			// above by handing the request to the fallback resolver, which
+			// needs no list — so refusing here cannot break a provider that
+			// never enumerates episodes.
+			found := false
 			for i, ep := range episodes {
 				if ep.Number == episode {
-					episodeIdx = i
+					episodeIdx, found = i, true
 					break
 				}
+			}
+			if !found {
+				return fmt.Errorf("season %d of %q has no episode %d (list them with 'lobster episodes --ref ...')", selectedSeason.Number, title, episode)
 			}
 		} else {
 			episodeItems := make([]string, len(episodes))

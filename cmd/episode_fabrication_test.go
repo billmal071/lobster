@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -170,5 +171,105 @@ func TestEpisodesFallsBackWhenSeasonSourceCannotListEpisodes(t *testing.T) {
 	}
 	if len(got.Episodes) != 22 {
 		t.Fatalf("listed %d episodes, want the fallback's 22", len(got.Episodes))
+	}
+}
+
+// listingStreamProvider both lists (via stubProvider) and streams, which is
+// the combination needed to observe the silent-S1E1 bug: the primary answers
+// the season/episode lists and then plays whatever resolveAndPlay selected, so
+// a wrong selection shows up as a successful play of the wrong episode rather
+// than as an error from somewhere else.
+type listingStreamProvider struct {
+	*stubProvider
+	url string
+}
+
+func (p *listingStreamProvider) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+	return &media.Stream{URL: p.url}, nil
+}
+
+// countingPlayer records how many times playback actually started.
+type countingPlayer struct {
+	stubPlayerImpl
+	mu    sync.Mutex
+	plays int
+}
+
+func (p *countingPlayer) Play(s *media.Stream, title string, pos float64, subs []string) (player.PlayResult, error) {
+	p.mu.Lock()
+	p.plays++
+	p.mu.Unlock()
+	return p.stubPlayerImpl.Play(s, title, pos, subs)
+}
+
+func (p *countingPlayer) played() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.plays
+}
+
+// The requested episode is not in a list the provider really did return.
+// resolveAndPlay used to leave episodeIdx at its zero value and play episode
+// one, reporting success — the worst outcome available, because the caller is
+// told it got episode 47 of a season that has three. It must be an error.
+func TestResolveAndPlayRefusesAnEpisodeTheListLacks(t *testing.T) {
+	hostileEnv(t)
+	pl := &countingPlayer{stubPlayerImpl: stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}}}
+	playStreamHarness(t, pl)
+	withNoFallbackProviders(t)
+
+	sel := media.SearchResult{ID: "tv/1403", Title: "Some Show", Type: media.TV}
+	p := &listingStreamProvider{
+		stubProvider: &stubProvider{
+			seasons: []media.Season{{ID: "s1", Number: 1}},
+			episodesBySeason: map[string][]media.Episode{
+				"s1": {{ID: "e1", Number: 1}, {ID: "e2", Number: 2}, {ID: "e3", Number: 3}},
+			},
+		},
+		url: "http://127.0.0.1:1/never-dialed.m3u8",
+	}
+
+	err := resolveAndPlay(p, sel, 1, 47)
+	if err == nil {
+		t.Fatalf("resolveAndPlay returned nil for episode 47 of a three-episode season; it played episode %d instead of refusing", 1)
+	}
+	if !strings.Contains(err.Error(), "47") {
+		t.Errorf("error = %v; it must name the episode that does not exist", err)
+	}
+	if n := pl.played(); n != 0 {
+		t.Errorf("player started %d time(s); a missing episode must never play different content", n)
+	}
+}
+
+// The same hole one level up: a season number the provider's own list does not
+// contain left seasonIdx at zero and played season one.
+func TestResolveAndPlayRefusesASeasonTheListLacks(t *testing.T) {
+	hostileEnv(t)
+	pl := &countingPlayer{stubPlayerImpl: stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}}}
+	playStreamHarness(t, pl)
+	withNoFallbackProviders(t)
+
+	sel := media.SearchResult{ID: "tv/1403", Title: "Some Show", Type: media.TV}
+	p := &listingStreamProvider{
+		stubProvider: &stubProvider{
+			seasons: []media.Season{{ID: "s1", Number: 1}, {ID: "s2", Number: 2}, {ID: "s3", Number: 3}},
+			episodesBySeason: map[string][]media.Episode{
+				"s1": {{ID: "e1", Number: 1}},
+				"s2": {{ID: "e2", Number: 1}},
+				"s3": {{ID: "e3", Number: 1}},
+			},
+		},
+		url: "http://127.0.0.1:1/never-dialed.m3u8",
+	}
+
+	err := resolveAndPlay(p, sel, 5, 1)
+	if err == nil {
+		t.Fatal("resolveAndPlay returned nil for season 5 of a three-season show; it played season 1 instead of refusing")
+	}
+	if !strings.Contains(err.Error(), "5") {
+		t.Errorf("error = %v; it must name the season that does not exist", err)
+	}
+	if n := pl.played(); n != 0 {
+		t.Errorf("player started %d time(s); a missing season must never play different content", n)
 	}
 }
