@@ -274,7 +274,7 @@ download_dir = "~/Videos/lobster"
 torrent_fallback = false
 ```
 
-#### Torrent storage backend
+### Torrent storage backend
 
 The torrent library stores pieces through one of two file backends. The default
 memory-maps them, which is faster but has a race: a file can be truncated while
