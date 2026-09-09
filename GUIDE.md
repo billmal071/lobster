@@ -247,6 +247,22 @@ Config file: `~/.config/lobster/config.toml`
 # Default player (mpv, vlc, iina, celluloid)
 player = "mpv"
 
+# Content source (default: "auto")
+#
+# "auto" means "no preference", and lets lobster pick per content type: a
+# movie is played from YTS where YTS carries it, and a series always goes to
+# a scraping source, because YTS has no TV catalogue at all. Series and
+# anything YTS does not carry fall back to soap2day, the general-purpose
+# source "auto" maps to.
+#
+# Any other value is an explicit choice and is used for every title of either
+# type — lobster never overrides it. Same for `--base` on the command line.
+# Set it if you would rather never join a torrent swarm:
+#   base = "soap2day"
+# Available: auto, soap2day, moviebox, flixhq.to, flixhq.ws, kimcartoon,
+# vaplayer, vidnest, tbcpl, 1shows.org, allanime, yts
+base = "auto"
+
 # Preferred streaming server (Vidcloud, UpCloud)
 provider = "Vidcloud"
 
@@ -267,6 +283,9 @@ auto_next = true
 download_dir = "~/Videos/lobster"
 
 # Fall back to YTS torrents when every streaming provider fails.
+# Note this is separate from `base = "auto"`, which already prefers YTS for
+# movies. This setting is about the reverse direction: letting a *failed*
+# stream resolution end up on a torrent.
 # Off by default on purpose: YTS resolves to a magnet, so this makes lobster
 # join a BitTorrent swarm, and your IP is visible to its peers. `--base yts`
 # always works without this — the setting only controls automatic fallback.
@@ -309,6 +328,9 @@ tbcpl_include_untrusted = false
 -q, --quality <quality>     Video quality: 360 | 480 | 720 | 1080 | best
     --player <player>       Player: mpv | vlc | iina | celluloid
 -x, --debug                 Debug logging to stderr
+    --base <source>         Content source (default: auto — YTS for movies,
+                            a scraping source for series). An explicit value
+                            is used for both types.
 ```
 
 ## Troubleshooting

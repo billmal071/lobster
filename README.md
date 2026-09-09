@@ -310,6 +310,10 @@ auto_next = true
 download_dir = "~/Videos/lobster"
 
 # Provider selection (default: auto)
+# "auto" means "no preference": movies play from YTS where YTS carries them,
+# series always go to a scraping source (YTS has no TV catalogue), and
+# anything YTS does not carry falls back to soap2day. Any other value is an
+# explicit choice and is used for both content types.
 # Available: auto, moviebox, flixhq.to, flixhq.ws, soap2day, kimcartoon,
 # vaplayer, vidnest, tbcpl, 1shows.org, allanime, yts
 # All other providers are automatically used as fallbacks.

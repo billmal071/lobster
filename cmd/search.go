@@ -221,6 +221,13 @@ func printDetail(r media.SearchResult, d *media.ContentDetail) {
 
 // resolveAndPlay handles season/episode selection for TV and then plays.
 func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, episode int) error {
+	// Selection time is the first moment the content type is known on every
+	// path into playback: one interactive search returns movies and series
+	// interleaved, so the type cannot be settled when newProvider builds the
+	// primary. See routeByType (cmd/typeroute.go) for why this funnel is where
+	// it belongs.
+	p, selected = routeByType(p, selected)
+
 	episodeID := ""
 	title := selected.Title
 
