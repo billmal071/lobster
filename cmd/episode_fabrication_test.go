@@ -435,11 +435,13 @@ type listingChainProvider struct {
 
 	mu          sync.Mutex
 	lastEpisode string
+	lastMedia   string
 }
 
 func (p *listingChainProvider) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
 	p.mu.Lock()
 	p.lastEpisode = episodeID
+	p.lastMedia = mediaID
 	p.mu.Unlock()
 	return &media.Stream{URL: p.url}, nil
 }
@@ -448,6 +450,16 @@ func (p *listingChainProvider) episodeAsked() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.lastEpisode
+}
+
+// mediaAsked is the ID Watch was called with. It is recorded because the
+// provider-call key and the history key were once the same field: a fixture
+// that only remembers the episode ID cannot tell a session calling the chain
+// provider with its own ID from one calling it with the primary's.
+func (p *listingChainProvider) mediaAsked() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lastMedia
 }
 
 func newListingChainProvider(url string) *listingChainProvider {

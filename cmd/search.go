@@ -359,9 +359,16 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		selectedSeason := seasons[seasonIdx]
 		debugf("season: %d (ID: %s)", selectedSeason.Number, selectedSeason.ID)
 
+		// providerID is the key p answers to. It starts as the work's own ID
+		// and follows p if the episode-list recovery below moves playback to a
+		// chain provider. selected.ID stays put: it is the identity history is
+		// keyed on (cmd/session.go), so it has to mean the same work whichever
+		// provider ended up answering this run.
+		providerID := selected.ID
+
 		// Get episodes
 		stopEps := ui.StartSpinner("Fetching episodes...")
-		episodes, err := p.GetEpisodes(selected.ID, selectedSeason.ID)
+		episodes, err := p.GetEpisodes(providerID, selectedSeason.ID)
 		stopEps()
 		if err != nil || len(episodes) == 0 {
 			// The primary has season data but cannot enumerate this season's
@@ -380,6 +387,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			//
 			// The list is a chain provider's own, so playback moves to that
 			// provider too: the numbers offered are numbers it will honour.
+			// Only the provider-call key moves with it, not selected.ID.
 			debugf("primary provider episodes failed: %v (%d episodes), trying fallbacks", err, len(episodes))
 			fmt.Fprintf(os.Stderr, "Provider has no episode list, trying fallbacks...\n")
 
@@ -393,7 +401,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			if answer != nil && (episode == 0 || episodeIndex(answer.episodes, episode) >= 0) {
 				debugf("episode list recovered from %T (%d episodes)", answer.hit.provider, len(answer.episodes))
 				p = answer.hit.provider
-				selected.ID = answer.hit.id
+				providerID = answer.hit.id
 				seasons = answer.hit.seasons
 				// The season came out of this very list, so the lookup
 				// cannot miss; clamp anyway rather than index with -1.
@@ -511,7 +519,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		debugf("episode: %d (ID: %s)", selectedEpisode.Number, selectedEpisode.ID)
 
 		// Create a playlist session for continuous playback
-		sess := playlist.New(p, selected, seasons, episodes, seasonIdx, episodeIdx)
+		sess := playlist.NewWithProviderID(p, selected, providerID, seasons, episodes, seasonIdx, episodeIdx)
 		cachedServerName = ""
 		return runPlaybackLoop(sess)
 	}

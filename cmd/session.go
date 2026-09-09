@@ -178,7 +178,7 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 	// dead Primary stream can't trap playCurrentEpisode in an infinite retry.
 	if sp, ok := sess.Provider.(provider.StreamProvider); ok && !excludeNames["Primary"] {
 		ep := sess.Current()
-		if stream, err := sp.Watch(sess.Content.ID, ep.ID, "Default", cfg.Quality); err == nil && stream != nil {
+		if stream, err := sp.Watch(sess.ProviderKey(), ep.ID, "Default", cfg.Quality); err == nil && stream != nil {
 			return stream, "Primary", nil
 		}
 		// AllAnime can't reliably stream FINISHED series (its CDN goes 500/404),
