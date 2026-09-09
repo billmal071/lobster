@@ -183,14 +183,27 @@ func applyConfig() error {
 // mayStreamTorrent reports whether this run could open a magnet, which decides
 // whether the storage backend matters at all.
 //
-// YTS is the only provider that resolves to one, and it is reachable exactly
-// two ways: named as the base, or enabled as a fallback. Anything else resolves
-// to HTTP or HLS and never reaches the torrent client.
+// YTS is the only provider that resolves to one, and it is reachable three
+// ways: named as the base, enabled as a fallback, or reached by the per-type
+// route, which sends every movie to YTS whenever the base is the "auto"
+// sentinel (routeByType, cmd/typeroute.go). Since auto is the *default* base,
+// the third way is the common one — leaving it out put the default install on
+// the memory-mapped backend, which is the SIGBUS this whole mechanism exists
+// to avoid. Anything else resolves to HTTP or HLS and never reaches the
+// torrent client.
+//
+// It answers for the run, not for a particular selection, because it is
+// consulted before any search: under auto it cannot yet know whether the user
+// will pick a movie (routed to YTS) or a series (never routed there). The
+// conservative answer is the safe one — the cost of a false positive is one
+// re-exec, and of a false negative a process killed mid-playback.
 func mayStreamTorrent(c *config.Config) bool {
 	if c == nil {
 		return false
 	}
-	return strings.EqualFold(c.Base, "yts") || c.TorrentFallback
+	return strings.EqualFold(c.Base, "yts") ||
+		strings.EqualFold(c.Base, config.BaseAuto) ||
+		c.TorrentFallback
 }
 
 // warnf reports something the user should know but that does not stop the run.

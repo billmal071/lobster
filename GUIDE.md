@@ -301,7 +301,8 @@ another mapping of it is still live, and reading the truncated tail raises
 `SIGBUS` — a signal, not a Go error, so lobster dies mid-playback with no
 recoverable failure.
 
-Lobster avoids this for you. When a run could open a magnet — `--base yts`, or
+Lobster avoids this for you. When a run could open a magnet — the default
+`base = "auto"` (which plays movies from YTS), `--base yts`, or
 `torrent_fallback = true` — it restarts itself once at startup with the safer
 backend selected:
 

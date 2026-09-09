@@ -93,8 +93,9 @@ func ensureClassicFileIo(willStream bool, warnf func(string, ...any)) {
 // whose backend the user has already chosen.
 //
 // willStream should be true whenever the YTS provider is reachable — as the
-// primary source or as an enabled fallback — since it is the only provider that
-// resolves to a magnet.
+// primary source, as an enabled fallback, or by the caller's own routing —
+// since it is the only provider that resolves to a magnet. The caller decides;
+// see mayStreamTorrent (cmd/root.go) for what reaches YTS today.
 func EnsureSafeStorage(willStream bool, warnf func(string, ...any)) {
 	ensureClassicFileIo(willStream, warnf)
 }
