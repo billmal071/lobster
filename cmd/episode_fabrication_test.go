@@ -911,3 +911,54 @@ func TestTUIEpisodeListFallbackIsWired(t *testing.T) {
 		t.Fatal("tui.EpisodeListFallback is nil; the TUI download dialog has no way to recover an episode list the provider cannot give it")
 	}
 }
+
+// partialListPrimary answers GetEpisodes with a short list *and* an error —
+// "here is what I have, and I could not finish". It streams, so playback from
+// that list would succeed and nothing downstream would notice the list was
+// never complete.
+type partialListPrimary struct {
+	*stubProvider
+	url string
+}
+
+func (p *partialListPrimary) GetEpisodes(string, string) ([]media.Episode, error) {
+	return []media.Episode{{ID: "e1", Number: 1}, {ID: "e2", Number: 2}}, errProviderCannotList
+}
+
+func (p *partialListPrimary) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+	return &media.Stream{URL: p.url}, nil
+}
+
+// A list that arrives with an error is not a list. The guard used to read
+// `if err != nil || len(episodes) == 0`; splitting it left the error checked
+// only on the way in to the chain recovery and never again, so a provider
+// answering "two episodes, and an error" had those two treated as the season.
+//
+// That is the fabrication bug wearing a different hat: season 1 has 22
+// episodes, the menu would offer 2, the playlist would end after the second,
+// and the run would report success throughout. The recovery still clears err
+// when the chain supplies a real list, which is the only way past this gate.
+func TestResolveAndPlayRefusesAPartialListThatCameWithAnError(t *testing.T) {
+	hostileEnv(t)
+	pl := &countingPlayer{stubPlayerImpl: stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}}}
+	playStreamHarness(t, pl)
+
+	// Nothing in the chain, so neither the list recovery nor the resolver hop
+	// can answer and the partial list is all that is left.
+	withFallbackChain(t)
+	recordSelections(t, 0)
+
+	primary := &partialListPrimary{
+		stubProvider: &stubProvider{seasons: []media.Season{{ID: "s1", Number: 1}}},
+		url:          stubStreamServer(t),
+	}
+	sel := media.SearchResult{ID: "tv/1403", Title: "Some Show", Year: "2013", Type: media.TV}
+
+	err := resolveAndPlay(primary, sel, 1, 2)
+	if err == nil {
+		t.Fatal("resolveAndPlay = nil; an episode list the provider itself could not finish must not stand in for the season")
+	}
+	if n := pl.played(); n != 0 {
+		t.Fatalf("player started %d time(s) from a list that arrived with an error", n)
+	}
+}

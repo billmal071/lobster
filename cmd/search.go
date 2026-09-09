@@ -435,7 +435,15 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				debugf("fallback stream failed: %v", fbErr)
 			}
 		}
-		if len(episodes) == 0 {
+		if err != nil || len(episodes) == 0 {
+			// A list that arrived with an error is not a list: the provider
+			// said it could not finish, and treating the part it managed as
+			// the season is the fabrication bug in another form — a menu two
+			// entries long for a 22-episode season, a playlist that ends
+			// early, and success reported throughout. err is cleared above
+			// when the chain supplies a real list, which is the only way past
+			// this gate with something in hand.
+			//
 			// Out of options, so say who could not answer and what to do
 			// instead. "episode listing unavailable" on its own leaves a user
 			// under a MovieBox or VidNest primary with a dead end.
