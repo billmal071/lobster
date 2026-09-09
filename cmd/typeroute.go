@@ -20,6 +20,24 @@ var newYTSProvider = func() provider.Provider { return provider.NewYTS() }
 // multiSearchTimeout, which bounds find's fan-out over the whole fallback
 // chain: a single extra search must not cost more than searching everything.
 // A var, not a const, so tests can shrink it and stay deterministic.
+//
+// It is a ceiling, not a cost: the lookup returns as soon as YTS answers, and
+// only a YTS that is slow or unreachable spends the whole 5s. Kept at 5s
+// deliberately, over the two alternatives:
+//
+//   - Shrinking it trades a rare wait for a silent downgrade. A YTS that
+//     would have answered in 3s now misses its deadline, and the run plays
+//     from the scraper with nothing but a debugf to say why.
+//   - Racing it against the primary means committing to a source before the
+//     answer is in, and switching afterwards would mean restarting playback.
+//
+// The exposure is also narrower than the number suggests. The route runs from
+// resolveAndPlay only, so `find` and `episodes` never reach it; --json and
+// --download return above before the lookup; and a detached `play` returns at
+// playDetached (cmd/play.go), which is before agentResolveAndPlay, so the wait
+// falls in the child after the caller has been answered. What remains is an
+// attached play of a movie against an unhealthy YTS: at most 5s, then it
+// plays from the primary.
 var ytsRouteTimeout = multiSearchTimeout
 
 // baseIsAuto reports whether the user has expressed no source preference, so
@@ -49,10 +67,17 @@ func baseIsAuto() bool { return cfg == nil || cfg.Base == config.BaseAuto }
 // `play --ref` via agentResolveAndPlay — so it is where the type is first
 // known for every path at once.
 //
-// Movies prefer YTS: it serves a torrent, which is why it can offer 2160p when
-// the scrapers cap out. Series never reach it — YTS has no TV catalogue at all
-// ("no seasons found", measured 2026-09-09) — so a series is left with the
-// provider that found it.
+// Movies prefer YTS: it serves complete release-group encodes over BitTorrent
+// rather than whatever a scraped embed host happens to hold, so the file is
+// the one the release was made from and the bitrate is not re-encoded down.
+// Note what this does NOT claim: YTS stocks 2160p for some films, but
+// pickTorrent (internal/provider/yts.go) matches the *requested* quality
+// before falling back to the highest available, and config.Default().Quality
+// is 1080 — so a default install gets 1080p from YTS just as it would from a
+// scraper, and the 2160p rung is reachable only with `-q best`.
+//
+// Series never reach it — YTS has no TV catalogue at all ("no seasons found",
+// measured 2026-09-09) — so a series is left with the provider that found it.
 //
 // An explicit base wins for both types (baseIsAuto), and so do --download and
 // --json: YTS resolves to a magnet, which the download path refuses outright
