@@ -108,10 +108,19 @@ func yearsAgree(a, b string) bool {
 // measured 2026-09-09) — so a series is left with the provider that found it.
 //
 // An explicit base wins for both types (baseIsAuto), and so do --download and
-// --json: YTS resolves to a magnet, and both refuse one outright — the
-// download path at streamToResultChecked (cmd/fallback.go), the JSON branch in
-// playStream (cmd/search.go) — so routing either to it would turn a working
-// answer into an error message.
+// --json — for two different reasons. --json cannot express a magnet at all
+// and playStream refuses one outright, so routing to YTS would turn a working
+// answer into an error message. --download is not that: playStream stands the
+// local torrent server up and rewrites the magnet to a loopback URL
+// (cmd/search.go) *before* it reaches the --download branch a few lines later,
+// so `--base yts --download <dir>` downloads perfectly well. What refuses a
+// magnet is streamToResultChecked (cmd/fallback.go), and that is reached only
+// through makeStreamResolver, which is wired into the TUI's download queue —
+// not into this flag. --download is left on the primary as a policy choice:
+// downloading over BitTorrent puts the user in a swarm with their IP visible
+// to its peers, and a route the user did not ask for is the wrong place to
+// decide that. Asking for it with an explicit --base yts still works, which is
+// exactly what the --json refusal message tells the caller to do.
 //
 // The YTS ID is looked up by title and year rather than assumed, because IDs
 // are not portable: YTS's are "yts/<numeric>" and it rejects anything else
@@ -164,11 +173,14 @@ func routeByType(p provider.Provider, sel media.SearchResult) (provider.Provider
 		return p, sel
 	}
 
+	// Not a capability limit — the download path handles a magnet fine over the
+	// loopback server (see the doc comment) — but a refusal to put a run in a
+	// swarm it did not ask for. `--base yts --download` remains the way to ask.
 	if flagDownload != "" {
 		return p, sel
 	}
-	// --json is the same class of caller as --download: it wants something it
-	// can act on, and a magnet is not it. playStream's JSON branch refuses one
+	// --json is a different case: it wants something it can act on, and a
+	// magnet is not it. playStream's JSON branch refuses one
 	// outright (cmd/search.go), because no URL it could print would still be
 	// open by the time the caller used it — so routing a --json run to YTS
 	// would turn a working answer into an error, and cost it the subtitles

@@ -294,7 +294,11 @@ download_dir = "~/Videos/lobster"
 # carry, and under a base you chose explicitly. Off by default because a swarm
 # reached by choosing "auto" is documented, while one reached because a
 # scraper broke is not. `--base yts` always works without this.
-# Torrent sources can be played but not downloaded with --download.
+#
+# Torrent sources can be downloaded as well as played: lobster serves the
+# torrent over loopback and --download fetches from there. Only the TUI's
+# download queue refuses a torrent. Note that downloading this way still joins
+# the swarm, so your IP is visible to its peers for the whole download.
 torrent_fallback = false
 ```
 
