@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"lobster/internal/config"
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/provider"
@@ -758,5 +759,83 @@ func TestEpisodesFindsASeasonThePrimaryUndercounts(t *testing.T) {
 	}
 	if got.Season != 5 {
 		t.Fatalf("season = %d, want the requested 5", got.Season)
+	}
+}
+
+// scanCountingChainProvider is a chain member that records how many times its
+// seasons were enumerated, which is one per fallbackSeasonHits scan.
+type scanCountingChainProvider struct {
+	*stubProvider
+	url string
+
+	mu    sync.Mutex
+	scans int
+}
+
+func (p *scanCountingChainProvider) GetSeasons(id string) ([]media.Season, error) {
+	p.mu.Lock()
+	p.scans++
+	p.mu.Unlock()
+	return p.stubProvider.GetSeasons(id)
+}
+
+func (p *scanCountingChainProvider) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+	// Unreachable on purpose: the resolver's validation hop rejects it, so no
+	// download is ever started.
+	return &media.Stream{URL: p.url}, nil
+}
+
+func (p *scanCountingChainProvider) scanCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.scans
+}
+
+// A multi-season batch asks for one season's episodes at a time, and each ask
+// ran a full chain scan of its own: search plus GetSeasons across every
+// fallback provider, bounded at 5s each. Ten seasons is ten scans — around a
+// hundred seconds of scanning before the first byte — and nothing tied the
+// seasons together, so a chain that answered differently between scans could
+// hand each season to a different provider.
+//
+// One scan serves the whole batch.
+func TestMultiSeasonBatchScansTheChainOnce(t *testing.T) {
+	hostileEnv(t)
+
+	prevCfg := cfg
+	cfg = &config.Config{Quality: "1080"}
+	t.Cleanup(func() { cfg = prevCfg })
+
+	prevJSON, prevDL := flagJSON, flagDownload
+	flagJSON, flagDownload = false, t.TempDir()
+	t.Cleanup(func() { flagJSON, flagDownload = prevJSON, prevDL })
+
+	fb := &scanCountingChainProvider{
+		stubProvider: &stubProvider{
+			results: []media.SearchResult{{ID: "tv/fallback-1", Title: "Some Show", Type: media.TV}},
+			seasons: []media.Season{{ID: "f1", Number: 1}, {ID: "f2", Number: 2}, {ID: "f3", Number: 3}},
+			episodesBySeason: map[string][]media.Episode{
+				"f1": {{ID: "f1e1", Number: 1}},
+				"f2": {{ID: "f2e1", Number: 1}},
+				"f3": {{ID: "f3e1", Number: 1}},
+			},
+		},
+		url: "http://127.0.0.1:1/never-dialed.m3u8",
+	}
+	withFallbackChain(t, fb)
+
+	primary := &stubProvider{
+		seasons:     []media.Season{{ID: "s1", Number: 1}, {ID: "s2", Number: 2}, {ID: "s3", Number: 3}},
+		episodesErr: errProviderCannotList,
+	}
+	sel := media.SearchResult{ID: "tv/1403", Title: "Some Show", Year: "2013", Type: media.TV}
+
+	// Every download fails (the stream URL is unreachable), so this ends at the
+	// retry prompt, which hostileEnv turns into an error. The listing work is
+	// already done by then and is what is being measured.
+	_ = batchDownloadMultiSeason(primary, sel, primary.seasons)
+
+	if got := fb.scanCount(); got != 1 {
+		t.Fatalf("the chain was scanned %d times for a 3-season batch, want 1 — a 10-season batch is ten full chain scans, and nothing keeps the seasons on one provider", got)
 	}
 }

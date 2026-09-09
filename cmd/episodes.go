@@ -305,12 +305,6 @@ func seasonRequest(r playRef) resolver.Request {
 // list. The answer is a provider's own list, so a number offered from it is a
 // number that provider will honour.
 func fallbackEpisodeList(primary provider.Provider, content media.SearchResult, seasonNumber int) *episodeAnswer {
-	req := resolver.Request{
-		ID:        content.ID,
-		Title:     content.Title,
-		Year:      content.Year,
-		MediaType: content.Type,
-	}
 	if seasonNumber < 0 {
 		// Every caller here has a season in hand. A negative number is not a
 		// request for "whatever is first" — it is a caller that lost track of
@@ -319,7 +313,18 @@ func fallbackEpisodeList(primary provider.Provider, content media.SearchResult, 
 		debugf("fallback episode list: refusing a negative season number %d", seasonNumber)
 		return nil
 	}
-	return firstEpisodeList(fallbackSeasonHits(primary, req), seasonNumber)
+	return firstEpisodeList(fallbackSeasonHits(primary, contentRequest(content)), seasonNumber)
+}
+
+// contentRequest is a selected search result as the resolver sees it: the
+// ID/Title/Year all count towards ranking a chain provider's candidates.
+func contentRequest(content media.SearchResult) resolver.Request {
+	return resolver.Request{
+		ID:        content.ID,
+		Title:     content.Title,
+		Year:      content.Year,
+		MediaType: content.Type,
+	}
 }
 
 // seasonUnspecified is pickSeason's "no season was requested", which is a
