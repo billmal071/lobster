@@ -117,25 +117,20 @@ func (v *VidNest) GetSeasons(id string) ([]media.Season, error) {
 	return seasons, nil
 }
 
-// GetEpisodes returns a reasonable episode list for a season.
-// VidNest backends accept any episode number, so we generate 1-50.
+// GetEpisodes is not answerable by VidNest. Its backends accept any episode
+// number and expose no listing, so the only honest answer is that it has none:
+// the previous generated 1..50 list made every show claim fifty episodes a
+// season, which passed validation and then failed at Watch.
+//
+// GetSeasons above is different, and stays: it probes each season for actual
+// streams and stops when they disappear, so its answer is measured.
+//
+// Returning an error costs playback nothing: VidNest is a StreamProvider, so
+// the resolver reaches it through Watch with an arithmetically built episode
+// ID (tryStreamProviderFallback, internal/resolver/probe.go) rather than a
+// list.
 func (v *VidNest) GetEpisodes(id string, seasonID string) ([]media.Episode, error) {
-	parts := strings.SplitN(seasonID, ":", 2)
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid season ID: %s", seasonID)
-	}
-	tmdbID := parts[0]
-	seasonNum, _ := strconv.Atoi(parts[1])
-
-	episodes := make([]media.Episode, 0, 50)
-	for ep := 1; ep <= 50; ep++ {
-		episodes = append(episodes, media.Episode{
-			Number: ep,
-			Title:  fmt.Sprintf("Episode %d", ep),
-			ID:     fmt.Sprintf("%s:%d:%d", tmdbID, seasonNum, ep),
-		})
-	}
-	return episodes, nil
+	return nil, fmt.Errorf("vidnest: episode listing unavailable; backends expose no episode index")
 }
 
 // GetServers returns one server per backend.

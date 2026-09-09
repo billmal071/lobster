@@ -46,7 +46,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	applyRefBase(cmd, r)
 
 	primary := agentProvider()
-	p, id, seasons, primaryErr := seasonSource(primary, r)
+	p, id, seasons, fromPrimary, primaryErr := seasonSource(primary, r)
 	if len(seasons) == 0 {
 		if primaryErr != nil {
 			return emitErr("providers_failed", exitProvidersFailed, "getting seasons: %v", primaryErr)
@@ -54,21 +54,34 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		return emitErr("no_results", exitNoResults, "no seasons found for %q", r.Title)
 	}
 
-	sel := seasons[0]
-	if flagSeason > 0 {
-		found := false
-		for _, s := range seasons {
-			if s.Number == flagSeason {
-				sel, found = s, true
-				break
-			}
-		}
-		if !found {
-			return emitErr("no_results", exitNoResults, "season %d not found for %q", flagSeason, r.Title)
-		}
+	sel, ok := pickSeason(seasons, flagSeason)
+	if !ok {
+		return emitErr("no_results", exitNoResults, "season %d not found for %q", flagSeason, r.Title)
 	}
 
 	eps, err := p.GetEpisodes(id, sel.ID)
+	if (err != nil || len(eps) == 0) && fromPrimary {
+		// Enumerating seasons and enumerating episodes are different
+		// questions, and a provider can answer the first and not the second:
+		// MovieBox reports a real season count from cached search data while
+		// its episode listing needs authentication, and VidNest measures
+		// seasons by probing for streams but has no episode index at all.
+		// Both now return an error rather than a generated list, so without
+		// this the command would be exit 3 for every show under such a
+		// primary. Re-search the chain exactly as a failed GetSeasons does.
+		//
+		// Only when the primary answered: if seasons already came from the
+		// fallback scan, that scan has run and rerunning it would double this
+		// command's worst-case wait.
+		debugf("episodes: %T enumerated seasons but not episodes (err=%v, episodes=%d); re-searching the fallback chain by title", p, err, len(eps))
+		if fp, fid, fseasons, fok := fallbackSeasonSource(primary, r); fok {
+			if fsel, ok := pickSeason(fseasons, flagSeason); ok {
+				if feps, ferr := fp.GetEpisodes(fid, fsel.ID); ferr == nil && len(feps) > 0 {
+					p, id, seasons, sel, eps, err = fp, fid, fseasons, fsel, feps, nil
+				}
+			}
+		}
+	}
 	if err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "getting episodes: %v", err)
 	}
@@ -91,7 +104,9 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 }
 
 // agentFallbackProviders is the fallback chain, as a package var so tests can
-// supply stubs instead of providers that reach the network.
+// supply stubs instead of providers that reach the network. Both users of the
+// chain go through it: this file's season scan and tryFallbackStream
+// (cmd/fallback.go).
 var agentFallbackProviders = fallbackProviders
 
 // episodesFallbackTimeout bounds the whole fallback season scan. It matches
@@ -101,8 +116,9 @@ var agentFallbackProviders = fallbackProviders
 var episodesFallbackTimeout = multiSearchTimeout
 
 // seasonSource returns the provider that can actually enumerate this ref's
-// seasons, the ID to ask it about, that season list, and the primary's error
-// if it had one.
+// seasons, the ID to ask it about, that season list, whether the answer came
+// from the primary (so a caller knows the fallback scan has not run yet), and
+// the primary's error if it had one.
 //
 // The primary is asked first and almost always answers. It fails for one
 // specific, non-rare reason: a ref's ID need not belong to the primary at all.
@@ -136,13 +152,41 @@ var episodesFallbackTimeout = multiSearchTimeout
 // timeout, is minutes of silence on a degraded chain. Provider order still
 // decides the winner, so the answer does not depend on which provider was
 // quickest.
-func seasonSource(primary provider.Provider, r playRef) (provider.Provider, string, []media.Season, error) {
+func seasonSource(primary provider.Provider, r playRef) (provider.Provider, string, []media.Season, bool, error) {
 	seasons, err := primary.GetSeasons(r.ID)
 	if err == nil && len(seasons) > 0 {
-		return primary, r.ID, seasons, nil
+		return primary, r.ID, seasons, true, nil
 	}
 	debugf("episodes: primary could not enumerate %q (err=%v, seasons=%d); re-searching the fallback chain by title", r.ID, err, len(seasons))
 
+	if p, id, fallbackSeasons, ok := fallbackSeasonSource(primary, r); ok {
+		return p, id, fallbackSeasons, false, nil
+	}
+	return primary, r.ID, nil, true, err
+}
+
+// pickSeason returns the season with the requested number, or the first season
+// when want is 0 (no --season given). ok is false only for a requested number
+// the list does not have.
+func pickSeason(seasons []media.Season, want int) (media.Season, bool) {
+	if len(seasons) == 0 {
+		return media.Season{}, false
+	}
+	if want <= 0 {
+		return seasons[0], true
+	}
+	for _, s := range seasons {
+		if s.Number == want {
+			return s, true
+		}
+	}
+	return media.Season{}, false
+}
+
+// fallbackSeasonSource runs the parallel, deadline-bounded scan of the
+// fallback chain described on seasonSource, returning the first provider in
+// chain order that has this work and can enumerate its seasons.
+func fallbackSeasonSource(primary provider.Provider, r playRef) (provider.Provider, string, []media.Season, bool) {
 	req := resolver.Request{
 		ID:        r.ID,
 		Title:     r.Title,
@@ -172,10 +216,10 @@ func seasonSource(primary provider.Provider, r playRef) (provider.Provider, stri
 	for _, h := range hits {
 		if h != nil {
 			debugf("episodes: %T answers for %q (ID %s)", h.provider, h.title, h.id)
-			return h.provider, h.id, h.seasons, nil
+			return h.provider, h.id, h.seasons, true
 		}
 	}
-	return primary, r.ID, nil, err
+	return nil, "", nil, false
 }
 
 // seasonHit is one fallback provider's answer for a ref.

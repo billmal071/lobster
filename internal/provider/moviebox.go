@@ -423,28 +423,19 @@ func (m *MovieBox) GetSeasons(id string) ([]media.Season, error) {
 	return seasons, nil
 }
 
-// GetEpisodes returns episodes for a given season.
-// Generates a reasonable episode list since the detail endpoint requires authentication.
-// The Watch method uses season.episode format, so exact episode IDs aren't critical.
+// GetEpisodes is not answerable by MovieBox: the detail and season endpoints
+// that carry an episode list require authentication and return 407 (see the
+// comment on getDetailWithSeason above). It used to generate a 1..10 list
+// instead, which a caller cannot distinguish from a measured one — so a show
+// with 22 episodes in season 1 had `--episode 15` refused as out of range.
+//
+// Returning an error costs playback nothing: MovieBox is a StreamProvider, so
+// the resolver reaches it through Watch and builds the episode ID
+// arithmetically (tryStreamProviderFallback, internal/resolver/probe.go)
+// without ever asking for a list. Only listing and validation are affected,
+// and both are better off with "unknown" than with a fabricated number.
 func (m *MovieBox) GetEpisodes(id string, seasonID string) ([]media.Episode, error) {
-	seasonNum, _ := strconv.Atoi(seasonID)
-	if seasonNum == 0 {
-		seasonNum = 1
-	}
-
-	// Generate a reasonable number of episodes per season.
-	numEpisodes := 10
-	episodes := make([]media.Episode, numEpisodes)
-	for i := 0; i < numEpisodes; i++ {
-		epNum := i + 1
-		episodes[i] = media.Episode{
-			Number: epNum,
-			Title:  fmt.Sprintf("Episode %d", epNum),
-			ID:     fmt.Sprintf("%d.%d", seasonNum, epNum),
-		}
-	}
-
-	return episodes, nil
+	return nil, fmt.Errorf("moviebox: episode listing unavailable; the detail endpoint requires authentication")
 }
 
 // GetServers returns a synthetic server for direct streaming.

@@ -231,7 +231,7 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 // content carries the ID and year of the work the user actually selected so the
 // resolver can tell a franchise entry apart from its sequels.
 func tryFallbackStream(primary provider.Provider, content media.SearchResult, season, episode int) (*media.Stream, error) {
-	r := resolver.New(fallbackProviders(primary), sharedHealth(), debugf)
+	r := resolver.New(agentFallbackProviders(primary), sharedHealth(), debugf)
 	req := resolver.Request{
 		ID:        content.ID,
 		Title:     content.Title,

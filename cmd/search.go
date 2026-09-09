@@ -315,11 +315,32 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		stopEps := ui.StartSpinner("Fetching episodes...")
 		episodes, err := p.GetEpisodes(selected.ID, selectedSeason.ID)
 		stopEps()
-		if err != nil {
-			return fmt.Errorf("getting episodes: %w", err)
-		}
-
-		if len(episodes) == 0 {
+		if err != nil || len(episodes) == 0 {
+			// The primary has season data but cannot enumerate this season's
+			// episodes. MovieBox and VidNest are exactly that shape: their
+			// season counts are measured while their episode listings are
+			// not available at all, and they now say so rather than
+			// generating a list nobody can tell from a real one.
+			//
+			// A caller who already knows which episode it wants does not need
+			// the list: the fallback resolver reaches a StreamProvider through
+			// Watch with an episode ID built arithmetically from season and
+			// episode (tryStreamProviderFallback, internal/resolver/probe.go),
+			// so this mirrors the branch above for a primary that cannot
+			// enumerate seasons. Without a requested episode there is nothing
+			// to offer a menu of, so that case still fails.
+			if episode > 0 {
+				debugf("primary provider episodes failed: %v (%d episodes), trying fallbacks", err, len(episodes))
+				fmt.Fprintf(os.Stderr, "Provider has no episode list, trying fallbacks...\n")
+				fbStream, fbErr := tryFallbackStream(p, selected, selectedSeason.Number, episode)
+				if fbErr == nil {
+					return playStream(fbStream, title, selected, selectedSeason.Number, episode)
+				}
+				debugf("fallback stream failed: %v", fbErr)
+			}
+			if err != nil {
+				return fmt.Errorf("getting episodes: %w", err)
+			}
 			return fmt.Errorf("no episodes found")
 		}
 

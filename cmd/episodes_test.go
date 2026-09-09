@@ -211,6 +211,10 @@ func TestEpisodesEpisodeFetchErrorExitsThree(t *testing.T) {
 	p := twoSeasonStub()
 	p.episodesErr = errors.New("upstream 503")
 	withStubProvider(t, p)
+	// An episode-listing failure now re-searches the chain (a primary can
+	// enumerate seasons and not episodes), so the chain must be stubbed here
+	// too or this test reaches the network.
+	withNoFallbackProviders(t)
 	withEpisodesFlags(t, tvRef(t, ""), 1)
 
 	err := episodesRun(episodesCmd, nil)
