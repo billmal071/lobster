@@ -323,15 +323,18 @@ download_dir = "~/Videos/lobster"
 # also makes you a participant in the swarm: your IP is visible to every peer
 # and to the monitoring firms that sit in them, which ordinary streaming never
 # does. This applies to the default install, because "auto" plays movies from
-# YTS — set base = "soap2day" (or any other explicit source) to never join a
-# swarm. Otherwise use a VPN. Needs a 64-bit
+# YTS — set base = "soap2day" (or any other explicit source, or api_url) and
+# leave torrent_fallback false to never join a swarm. Otherwise use a VPN.
+# Needs a 64-bit
 # build. Pieces land in a temp directory and are removed when playback ends.
 
 # Optional: use a consumet API backend instead of the built-in scraper.
 # Self-host from: https://github.com/consumet/api.consumet.org
 # When set, lobster uses this API for search, streaming, etc. It overrides
 # `base` entirely, and counts as an explicit source: movies are not routed to
-# YTS, so a run with api_url set never joins a swarm.
+# YTS. With torrent_fallback left false, such a run never joins a swarm —
+# torrent_fallback = true puts YTS back in the fallback chain whatever api_url
+# says.
 # api_url = "https://your-consumet-instance.example.com"
 
 # Live TV sources. See "Live TV and Sports" above.

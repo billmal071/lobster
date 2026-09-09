@@ -257,7 +257,8 @@ player = "mpv"
 #
 # Any other value is an explicit choice and is used for every title of either
 # type — lobster never overrides it. Same for `--base` on the command line.
-# Set it if you would rather never join a torrent swarm:
+# Set it, and leave torrent_fallback false, if you would rather never join a
+# torrent swarm:
 #   base = "soap2day"
 # Available: auto, soap2day, moviebox, flixhq.to, flixhq.ws, kimcartoon,
 # vaplayer, vidnest, tbcpl, 1shows.org, allanime, yts

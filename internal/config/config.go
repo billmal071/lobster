@@ -62,8 +62,11 @@ type Config struct {
 	// It is not the swarm opt-in, and must not be read as one: the default
 	// Base of "auto" already routes every movie to YTS (cmd/typeroute.go), so
 	// a default install swarms for films whatever this is set to. Naming a
-	// source is what opts out — an explicit non-YTS Base, or an APIURL, which
-	// overrides Base entirely.
+	// source is what stops the *route* reaching YTS — an explicit non-YTS
+	// Base, or an APIURL, which overrides Base entirely — but it is not on its
+	// own an opt-out either: fallbackProviders appends YTS whenever this is
+	// true, regardless of Base or APIURL (cmd/fallback.go). Staying out of a
+	// swarm takes both — a named source and this left false.
 	TorrentFallback bool         `toml:"torrent_fallback"`
 	LiveTV          LiveTVConfig `toml:"live_tv"`
 }
