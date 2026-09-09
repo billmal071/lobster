@@ -625,3 +625,138 @@ func TestSeasonEpisodesRecoversTheListFromTheChain(t *testing.T) {
 		t.Fatalf("listed %d episodes, want the chain's 22", len(eps))
 	}
 }
+
+// Season 0 is a real, reachable season number, not a spare "unspecified"
+// value: consumet maps it straight from ep.Season for specials
+// (internal/provider/consumet.go), and flixhqws/parser reach it through
+// strconv.Atoi, which yields 0 whenever the label does not parse.
+//
+// pickSeason treated any want <= 0 as "give me seasons[0]", and the recovery
+// callers pass a concrete season number. So a user who picked "Season 0" from
+// the menu, under a primary that cannot list its episodes, silently got a
+// different season's episode list with nothing saying the season had changed —
+// a silent season substitution, one level above the episode substitution this
+// path exists to refuse.
+func TestResolveAndPlayDoesNotSubstituteAnotherSeasonForSeasonZero(t *testing.T) {
+	hostileEnv(t)
+	pl := &countingPlayer{stubPlayerImpl: stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}}}
+	playStreamHarness(t, pl)
+
+	// The chain has the show and lists a real season — but season 1, not the
+	// season 0 that was asked for.
+	fb := newListingChainProvider(stubStreamServer(t))
+	withFallbackChain(t, fb)
+
+	// Index 0 of the season menu is Season 0.
+	offered := recordSelections(t, 0)
+
+	primary := &stubProvider{
+		seasons:     []media.Season{{ID: "s0", Number: 0}, {ID: "s1", Number: 1}},
+		episodesErr: errProviderCannotList,
+	}
+	sel := media.SearchResult{ID: "tv/1403", Title: "Some Show", Year: "2013", Type: media.TV}
+
+	err := resolveAndPlay(primary, sel, 0, 0)
+	if err == nil {
+		t.Fatalf("resolveAndPlay = nil; the chain has no season 0 and its season 1 must not stand in for one")
+	}
+	if len(*offered) != 1 {
+		t.Fatalf("menus offered = %d, want only the season menu — an episode menu here is another season's list presented as season 0", len(*offered))
+	}
+	if n := pl.played(); n != 0 {
+		t.Fatalf("player started %d time(s); a season the chain does not have must never play another season's episode", n)
+	}
+}
+
+// shortSeasonLister has the show but undercounts its seasons — VidNest's
+// GetSeasons probes each season for streams and stops at the first one without
+// any, so a show whose later seasons are missing from that backend is reported
+// as having fewer seasons than it does.
+type shortSeasonLister struct{ *stubProvider }
+
+// fiveSeasonLister has the same show and all five of its seasons.
+type fiveSeasonLister struct{ *stubProvider }
+
+func newShortSeasonLister() *shortSeasonLister {
+	return &shortSeasonLister{&stubProvider{
+		results: []media.SearchResult{{ID: "tv/short-1", Title: "Some Show", Type: media.TV}},
+		seasons: []media.Season{{ID: "b1", Number: 1}},
+		episodesBySeason: map[string][]media.Episode{
+			"b1": {{ID: "b1e1", Number: 1, Title: "Pilot"}},
+		},
+	}}
+}
+
+func newFiveSeasonLister() *fiveSeasonLister {
+	return &fiveSeasonLister{&stubProvider{
+		results: []media.SearchResult{{ID: "tv/full-1", Title: "Some Show", Type: media.TV}},
+		seasons: []media.Season{
+			{ID: "f1", Number: 1}, {ID: "f2", Number: 2}, {ID: "f3", Number: 3},
+			{ID: "f4", Number: 4}, {ID: "f5", Number: 5},
+		},
+		episodesBySeason: map[string][]media.Episode{
+			"f5": {{ID: "f5e1", Number: 1, Title: "S5 Premiere"}},
+		},
+	}}
+}
+
+// The round widened "try every hit" for episodes but not for seasons: the
+// season was picked out of hits[0] alone, so a first hit that undercounts
+// seasons made `--season 5` exit no_results for a show a later hit lists in
+// full. Seasons need the same treatment episodes got.
+func TestEpisodesFindsASeasonALaterChainHitHas(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+
+	// The primary cannot enumerate seasons, so the season list comes from the
+	// chain and hits[0] is the one that undercounts.
+	withStubProvider(t, &stubProvider{seasonsErr: errProviderCannotList})
+	withFallbackChain(t, newShortSeasonLister(), newFiveSeasonLister())
+	withEpisodesFlags(t, tvRef(t, ""), 5)
+
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun = %v; a later chain hit has season 5", err)
+	}
+
+	var got struct {
+		Season   int `json:"season"`
+		Episodes []struct {
+			Title string `json:"title"`
+		} `json:"episodes"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+	}
+	if got.Season != 5 {
+		t.Fatalf("season = %d, want the requested 5", got.Season)
+	}
+	if len(got.Episodes) != 1 || got.Episodes[0].Title != "S5 Premiere" {
+		t.Fatalf("episodes = %+v, want season 5's own list", got.Episodes)
+	}
+}
+
+// Same hole with the primary as the season source: it answers "seasons", so
+// the chain was never consulted at all and a season it does not carry was
+// no_results even though the chain has it.
+func TestEpisodesFindsASeasonThePrimaryUndercounts(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+
+	withStubProvider(t, &stubProvider{seasons: []media.Season{{ID: "p1", Number: 1}}})
+	withFallbackChain(t, newFiveSeasonLister())
+	withEpisodesFlags(t, tvRef(t, ""), 5)
+
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun = %v; the chain has season 5", err)
+	}
+
+	var got struct {
+		Season int `json:"season"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+	}
+	if got.Season != 5 {
+		t.Fatalf("season = %d, want the requested 5", got.Season)
+	}
+}

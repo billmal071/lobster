@@ -57,7 +57,27 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	}
 
 	p, seasons := src.provider, src.seasons
-	sel, ok := pickSeason(seasons, flagSeason)
+	// --season shares flagSeason with play, whose default is 0 and which
+	// requires a positive number, so this command cannot tell "--season 0" from
+	// "no --season" and keeps reading both as "the first season". The
+	// translation stops there: everything downstream sees the sentinel, so
+	// pickSeason's 0 means season zero for the recovery callers, which do pass
+	// a concrete number.
+	wantSeason := flagSeason
+	if wantSeason <= 0 {
+		wantSeason = seasonUnspecified
+	}
+	sel, ok := pickSeason(seasons, wantSeason)
+	if !ok {
+		// One season list is not the show. VidNest's GetSeasons probes each
+		// season for streams and stops at the first one it cannot reach, so
+		// whoever answered here can genuinely have fewer seasons than the show
+		// does — and `--season 5` was no_results for a show another chain
+		// member lists in full. Episodes already ask every hit; seasons did
+		// not.
+		src, seasons, sel, ok = seasonAcrossHits(primary, r, src, wantSeason)
+		p = src.provider
+	}
 	if !ok {
 		return emitErr("no_results", exitNoResults, "season %d not found for %q", flagSeason, r.Title)
 	}
@@ -88,7 +108,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		if src.fromPrimary {
 			alts = fallbackSeasonHits(primary, seasonRequest(r))
 		}
-		if a := firstEpisodeList(alts, flagSeason); a != nil {
+		if a := firstEpisodeList(alts, wantSeason); a != nil {
 			debugf("episodes: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), a.season.Number)
 			p, seasons, sel, eps, err = a.hit.provider, a.hit.seasons, a.season, a.episodes, nil
 		}
@@ -219,6 +239,35 @@ func seasonSource(primary provider.Provider, r playRef) seasonAnswer {
 	return seasonAnswer{provider: primary, id: r.ID, fromPrimary: true, err: err}
 }
 
+// seasonAcrossHits looks for wantSeason in the chain hits src did not pick,
+// returning the hit that has it as the new answer. It reports ok false when
+// none does, leaving the caller's own answer untouched.
+//
+// The scan only has to run when the season list came from the primary; a
+// chain-sourced answer already carries its alternatives.
+func seasonAcrossHits(primary provider.Provider, r playRef, src seasonAnswer, wantSeason int) (seasonAnswer, []media.Season, media.Season, bool) {
+	alts := src.alts
+	if src.fromPrimary {
+		alts = fallbackSeasonHits(primary, seasonRequest(r))
+	}
+	for i, h := range alts {
+		sel, ok := pickSeason(h.seasons, wantSeason)
+		if !ok {
+			continue
+		}
+		debugf("episodes: %T has season %d, which %T does not", h.provider, sel.Number, src.provider)
+		// The hits after this one stay available, so a provider that has the
+		// season but cannot list its episodes still falls through to the next.
+		return seasonAnswer{
+			provider: h.provider,
+			id:       h.id,
+			seasons:  h.seasons,
+			alts:     alts[i+1:],
+		}, h.seasons, sel, true
+	}
+	return src, src.seasons, media.Season{}, false
+}
+
 // seasonAnswer is who ended up answering seasonSource, plus the chain hits it
 // did not pick. alts exists so the caller can move on to the next provider
 // when the chosen one turns out to enumerate seasons but not episodes, without
@@ -246,7 +295,8 @@ func seasonRequest(r playRef) resolver.Request {
 }
 
 // fallbackEpisodeList finds a chain provider that has this work and can list
-// the requested season's episodes. seasonNumber 0 means the first season.
+// the requested season's episodes. seasonNumber is a concrete number — season
+// 0 means season 0, and a chain provider that does not have it is no answer.
 //
 // It is the same move `episodes` makes, exposed for the playback paths: a
 // primary that enumerates seasons but not episodes leaves every list-shaped
@@ -261,17 +311,37 @@ func fallbackEpisodeList(primary provider.Provider, content media.SearchResult, 
 		Year:      content.Year,
 		MediaType: content.Type,
 	}
+	if seasonNumber < 0 {
+		// Every caller here has a season in hand. A negative number is not a
+		// request for "whatever is first" — it is a caller that lost track of
+		// which season it was on, and answering it with some other season is
+		// the substitution this path exists to refuse.
+		debugf("fallback episode list: refusing a negative season number %d", seasonNumber)
+		return nil
+	}
 	return firstEpisodeList(fallbackSeasonHits(primary, req), seasonNumber)
 }
 
+// seasonUnspecified is pickSeason's "no season was requested", which is a
+// distinct value rather than 0.
+//
+// Season 0 is a real, reachable number: consumet maps it straight from
+// ep.Season for specials (internal/provider/consumet.go), and flixhqws and
+// parser reach it through strconv.Atoi, which returns 0 whenever the label
+// does not parse. While want <= 0 meant "first season", a caller asking for
+// season 0 — and the recovery callers all pass a concrete number — was handed
+// whatever season happened to be first, with nothing saying the season had
+// changed.
+const seasonUnspecified = -1
+
 // pickSeason returns the season with the requested number, or the first season
-// when want is 0 (no --season given). ok is false only for a requested number
-// the list does not have.
+// when want is seasonUnspecified. ok is false only for a requested number the
+// list does not have — season 0 included.
 func pickSeason(seasons []media.Season, want int) (media.Season, bool) {
 	if len(seasons) == 0 {
 		return media.Season{}, false
 	}
-	if want <= 0 {
+	if want == seasonUnspecified {
 		return seasons[0], true
 	}
 	for _, s := range seasons {

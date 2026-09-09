@@ -159,6 +159,11 @@ func TestEpisodesUnknownSeasonExitsTwo(t *testing.T) {
 	captureAgentOut(t)
 
 	withStubProvider(t, twoSeasonStub())
+	// A season the source does not have now sends the command to the chain,
+	// since a season list can undercount the show (seasonAcrossHits). Empty it:
+	// the real chain reaches the network, and this test took 2.18s the moment
+	// that lookup was added.
+	withNoFallbackProviders(t)
 	withEpisodesFlags(t, tvRef(t, ""), 5)
 
 	err := episodesRun(episodesCmd, nil)
