@@ -546,3 +546,57 @@ func TestEpisodesFallbackScanIsBounded(t *testing.T) {
 		t.Fatalf("episodes = %+v, want the healthy fallback's season 1", got.Episodes)
 	}
 }
+
+// slowListerProvider enumerates seasons at once and then wedges in
+// GetEpisodes, which is the shape a degraded upstream actually has: the season
+// list is often cached or comes from search data while the episode listing is
+// a fresh request against a 30s HTTP client timeout.
+type slowListerProvider struct {
+	*stubProvider
+	delay time.Duration
+}
+
+func (p *slowListerProvider) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
+	time.Sleep(p.delay)
+	return p.stubProvider.GetEpisodes(id, seasonID)
+}
+
+// Every other chain call in episodes.go goes through seasonsWithContext or
+// episodesWithContext, and one did not: the first GetEpisodes, made directly on
+// whichever provider seasonSource picked. When that provider came from the
+// chain rather than from the primary, the call had no deadline at all — with
+// the real 5s scan deadline and a 30s HTTP timeout, `episodes` could sit ~30s
+// on it. Agent-facing commands must stay bounded.
+func TestEpisodesFirstListingCallIsBoundedForAChainProvider(t *testing.T) {
+	hostileEnv(t)
+	captureAgentOut(t)
+
+	prevTimeout := episodesFallbackTimeout
+	episodesFallbackTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { episodesFallbackTimeout = prevTimeout })
+
+	// The primary cannot enumerate seasons, so the answering provider — and
+	// therefore that first GetEpisodes call — comes from the chain.
+	withStubProvider(t, &stubProvider{seasonsErr: errProviderCannotList})
+
+	slow := &slowListerProvider{
+		stubProvider: &stubProvider{
+			results: []media.SearchResult{{ID: "tv/slow-1", Title: "Some Show", Type: media.TV}},
+			seasons: []media.Season{{ID: "s1", Number: 1}},
+			episodesBySeason: map[string][]media.Episode{
+				"s1": {{ID: "s1e1", Number: 1, Title: "Pilot"}},
+			},
+		},
+		delay: 2 * time.Second,
+	}
+	withFallbackChain(t, slow)
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+
+	start := time.Now()
+	_ = episodesRun(episodesCmd, nil)
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Fatalf("episodesRun took %v with a chain provider slow to list episodes; that call is not bounded by episodesFallbackTimeout (%v)", elapsed, episodesFallbackTimeout)
+	}
+}

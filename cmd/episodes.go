@@ -62,7 +62,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		return emitErr("no_results", exitNoResults, "season %d not found for %q", flagSeason, r.Title)
 	}
 
-	eps, err := p.GetEpisodes(src.id, sel.ID)
+	eps, err := listSeasonEpisodes(p, src, sel)
 	if err != nil || len(eps) == 0 {
 		// Enumerating seasons and enumerating episodes are different
 		// questions, and a provider can answer the first and not the second:
@@ -113,6 +113,24 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		"episodes": out,
 		"provider": providerLabel(p),
 	})
+}
+
+// listSeasonEpisodes makes the first episode-listing call, under a deadline
+// whenever the provider is a chain member rather than the configured primary.
+//
+// Every other chain call in this file goes through seasonsWithContext or
+// episodesWithContext; this one did not, and a chain provider slow to list
+// episodes could hold `episodes` for the HTTP client's own timeout — around
+// 30s against the 5s the command otherwise promises. The primary keeps its
+// unbounded call: it is the user's own configured provider, it is asked
+// exactly once, and no fan-out is waiting on it.
+func listSeasonEpisodes(p provider.Provider, src seasonAnswer, sel media.Season) ([]media.Episode, error) {
+	if src.fromPrimary {
+		return p.GetEpisodes(src.id, sel.ID)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), episodesFallbackTimeout)
+	defer cancel()
+	return episodesWithContext(ctx, p, src.id, sel.ID)
 }
 
 // providerLabel names a provider for the JSON envelope. provider.Provider has
