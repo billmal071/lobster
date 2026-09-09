@@ -29,7 +29,9 @@ type Config struct {
 	// which means "no preference": lobster maps it to a live general-purpose
 	// source and is free to pick a different one per content type (see
 	// cmd/typeroute.go). Any other value is an explicit choice and is used
-	// verbatim for every title, whatever its type.
+	// verbatim for every title, whatever its type. A non-empty APIURL is an
+	// explicit choice too, and overrides this field entirely (newProvider,
+	// cmd/provider.go).
 	Base                   string              `toml:"base"`
 	APIURL                 string              `toml:"api_url"`
 	Player                 string              `toml:"player"`
@@ -59,8 +61,9 @@ type Config struct {
 	//
 	// It is not the swarm opt-in, and must not be read as one: the default
 	// Base of "auto" already routes every movie to YTS (cmd/typeroute.go), so
-	// a default install swarms for films whatever this is set to. Setting an
-	// explicit non-YTS Base is what opts out.
+	// a default install swarms for films whatever this is set to. Naming a
+	// source is what opts out — an explicit non-YTS Base, or an APIURL, which
+	// overrides Base entirely.
 	TorrentFallback bool         `toml:"torrent_fallback"`
 	LiveTV          LiveTVConfig `toml:"live_tv"`
 }

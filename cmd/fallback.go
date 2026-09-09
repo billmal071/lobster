@@ -226,9 +226,10 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 	// choosing "auto" is a consequence of the documented default; one reached
 	// because a scraper broke is not, which is why this stays off until asked.
 	//
-	// Opting out of swarming altogether is a base, not this flag:
-	// `base = "soap2day"` (or any explicit non-YTS base) with
-	// torrent_fallback off never reaches a magnet.
+	// Opting out of swarming altogether is a source, not this flag:
+	// `base = "soap2day"` — or any explicit non-YTS base, or an api_url,
+	// which overrides base entirely — with torrent_fallback off never
+	// reaches a magnet.
 	if _, ok := primary.(*provider.YTS); !ok {
 		if cfg != nil && cfg.TorrentFallback {
 			fallbacks = append(fallbacks, provider.NewYTS())
