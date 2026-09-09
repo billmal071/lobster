@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
@@ -100,7 +102,27 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		"seasons":  seasonNums,
 		"season":   sel.Number,
 		"episodes": out,
+		"provider": providerLabel(p),
 	})
+}
+
+// providerLabel names a provider for the JSON envelope. provider.Provider has
+// no Name method — cmd/fallback_providers_test.go reaches for %T for the same
+// reason — so the concrete type is reduced to a lowercase token:
+// *provider.VaPlayer becomes "vaplayer".
+//
+// It is an attribution, not a --base value: episodes answers from whichever
+// provider could enumerate the ref, which is often not the configured primary
+// and need not be reachable as a base at all. Naming it is what makes a
+// listing checkable — a run that looked like one provider's answer was
+// another's, which is how two providers shipped invented episode lists without
+// anyone noticing.
+func providerLabel(p provider.Provider) string {
+	name := fmt.Sprintf("%T", p)
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		name = name[i+1:]
+	}
+	return strings.ToLower(name)
 }
 
 // agentFallbackProviders is the fallback chain, as a package var so tests can

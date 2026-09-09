@@ -101,8 +101,14 @@ lobster episodes --ref "eyJpZCI6..." --season 2
 
 ```json
 {"schema": 1, "title": "Some Show", "seasons": [1, 2, 3], "season": 2,
- "episodes": [{"number": 1, "title": "Pilot"}]}
+ "provider": "vaplayer", "episodes": [{"number": 1, "title": "Pilot"}]}
 ```
+
+`provider` names the source that answered. It is often not the base the ref
+carries: a ref that the configured provider cannot enumerate is re-searched
+across the fallback chain, and the listing comes from whichever provider has
+the show. Report it when a listing looks wrong — a season with an implausible
+episode count is a provider problem, not a ref problem.
 
 Then:
 

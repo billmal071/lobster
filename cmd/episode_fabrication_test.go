@@ -273,3 +273,48 @@ func TestResolveAndPlayRefusesASeasonTheListLacks(t *testing.T) {
 		t.Errorf("player started %d time(s); a missing season must never play different content", n)
 	}
 }
+
+// fallbackStubProvider is a distinct Go type from stubProvider so the envelope
+// can be checked to name the provider that actually answered rather than the
+// configured primary — the two are indistinguishable when both are the same
+// stub type.
+type fallbackStubProvider struct{ *stubProvider }
+
+// seasonSource silently re-searches the chain and returns whichever provider
+// replies, and the envelope did not say which. That opacity is what made the
+// fabricated episode lists invisible: a listing that looked like the primary's
+// answer was another provider's. The envelope must name the answering
+// provider.
+func TestEpisodesNamesTheAnsweringProvider(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+
+	// The primary cannot enumerate this ref at all, so the answer comes from
+	// the chain — the case where naming it matters.
+	primary := &stubProvider{seasonsErr: errProviderCannotList}
+	withStubProvider(t, primary)
+
+	fb := &fallbackStubProvider{&stubProvider{
+		results: []media.SearchResult{{ID: "tv/fallback-1", Title: "Some Show", Type: media.TV}},
+		seasons: []media.Season{{ID: "f1", Number: 1}},
+		episodesBySeason: map[string][]media.Episode{
+			"f1": {{ID: "f1e1", Number: 1, Title: "Pilot"}},
+		},
+	}}
+	withFallbackChain(t, fb)
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+
+	var got struct {
+		Provider string `json:"provider"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+	}
+	if got.Provider != "fallbackstubprovider" {
+		t.Fatalf("provider = %q, want %q — the envelope must name the provider that answered, not the configured primary", got.Provider, "fallbackstubprovider")
+	}
+}
