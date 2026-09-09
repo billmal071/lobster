@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"strconv"
+	"strings"
 
 	"lobster/internal/config"
 	"lobster/internal/media"
@@ -57,7 +59,7 @@ func baseIsAuto() bool { return cfg == nil || cfg.Base == config.BaseAuto }
 // (streamToResultChecked, cmd/fallback.go), so routing a download to it would
 // turn a working download into an error message.
 //
-// The YTS ID is looked up by title rather than assumed, because IDs are not
+// The YTS ID is looked up by title and year rather than assumed, because IDs are not
 // portable: YTS's are "yts/<numeric>" and it rejects anything else
 // (movieByID). The lookup borrows seasonSource's shape (cmd/episodes.go) —
 // rank with resolver.Candidates, then admit only on resolver.Matches, under a
@@ -66,6 +68,37 @@ func baseIsAuto() bool { return cfg == nil || cfg.Base == config.BaseAuto }
 // would be played under the selected title. When nothing matches, or the
 // lookup times out, the original provider is returned unchanged — so a title
 // YTS does not carry still plays from wherever it was found.
+//
+// The year check on top of Matches is the remake gate. Matches compares ID,
+// media type and normalized title and never looks at Year (internal/resolver/
+// probe.go), and Candidates ranks year-aware but applies no threshold — so a
+// YTS catalogue holding only Dune (1984) both ranks first for and is admitted
+// as a selection of Dune (2021). Since only the ID moves, the swap is
+// invisible downstream: the wrong film is played, filed and resumed under the
+// right title. Requiring the years to agree is the only place that can catch
+// it, and a missing or unparsable year on either side refuses to route at all
+// — the cost is a stream from the primary, which is what an unrouted movie
+// gets anyway.
+// yearsAgree reports whether two release years describe the same work,
+// allowing one year of slack: catalogues disagree by a year over festival
+// versus general release, and over a December film listed under the following
+// year. An empty or unparsable year on either side is not a disagreement but
+// an absence of evidence, and this returns false for it — the caller is
+// choosing whether to swap one film for another, where "we cannot tell" must
+// mean "do not".
+func yearsAgree(a, b string) bool {
+	ai, err1 := strconv.Atoi(strings.TrimSpace(a))
+	bi, err2 := strconv.Atoi(strings.TrimSpace(b))
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	d := ai - bi
+	if d < 0 {
+		d = -d
+	}
+	return d <= 1
+}
+
 func routeByType(p provider.Provider, sel media.SearchResult) (provider.Provider, media.SearchResult) {
 	if !baseIsAuto() {
 		return p, sel
@@ -117,6 +150,11 @@ func routeByType(p provider.Provider, sel media.SearchResult) (provider.Provider
 	for _, c := range resolver.Candidates(results, req) {
 		if !resolver.Matches(c, req) {
 			debugf("route: YTS offered %q, which is not %q", c.Title, sel.Title)
+			continue
+		}
+		if !yearsAgree(c.Year, sel.Year) {
+			debugf("route: YTS offered %q (%s), but the selection is from %s; keeping %T",
+				c.Title, c.Year, sel.Year, p)
 			continue
 		}
 		// Only the ID moves. Title, Year and Poster stay as the user saw them

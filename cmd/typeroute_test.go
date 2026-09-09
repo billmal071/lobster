@@ -177,8 +177,8 @@ func TestRouteByTypeLeavesAnExplicitBaseAlone(t *testing.T) {
 // A title YTS does not carry must keep playing from wherever it was found.
 // The input that would violate this is YTS answering about a *different* film,
 // not answering emptily: resolver.Candidates applies no score threshold, so
-// without the resolver.Matches gate this near-miss would be played under the
-// selected title and nothing downstream could detect the swap.
+// without the admission gate this near-miss would be played under the selected
+// title and nothing downstream could detect the swap.
 func TestRouteByTypeKeepsThePrimaryWhenYTSAnswersAboutADifferentFilm(t *testing.T) {
 	yts := &ytsCatalogStub{results: []media.SearchResult{
 		{ID: "yts/2222", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie},
@@ -195,6 +195,108 @@ func TestRouteByTypeKeepsThePrimaryWhenYTSAnswersAboutADifferentFilm(t *testing.
 	}
 	if routed.ID != "movie/the-matrix-19" {
 		t.Fatalf("routed ID = %q, want the selection untouched when YTS has no match", routed.ID)
+	}
+}
+
+// The remake case, which a differently-TITLED near miss cannot express:
+// resolver.Matches compares ID, media type and normalized title and never
+// looks at Year, so a YTS catalogue holding only Dune (1984) satisfies it for
+// a selection of Dune (2021). Candidates ranks year-aware, but ranking is not
+// filtering — the wrong film is ranked first AND admitted, then filed and
+// resumed under the right title. Nothing downstream can tell.
+func TestRouteByTypeRefusesAYTSFilmFromAnotherYear(t *testing.T) {
+	yts := &ytsCatalogStub{results: []media.SearchResult{
+		{ID: "yts/1984", Title: "Dune", Year: "1984", Type: media.Movie},
+	}}
+	withYTSRoute(t, "auto", yts)
+
+	primary := &stubProvider{}
+	sel := media.SearchResult{ID: "movie/dune-2021", Title: "Dune", Year: "2021", Type: media.Movie}
+
+	got, routed := routeByType(primary, sel)
+	if got != provider.Provider(primary) {
+		t.Fatalf("routeByType routed Dune (2021) to %T, which only carries Dune (1984)", got)
+	}
+	if routed.ID != "movie/dune-2021" {
+		t.Fatalf("routed ID = %q, want the selection untouched: the user picked the 2021 film", routed.ID)
+	}
+}
+
+// The same catalogue, and the right film is in it too. The route must pick
+// that one rather than whichever the ranking put first, so the guarantee is
+// "the years agree", not "never route a title with a remake".
+func TestRouteByTypeRoutesToTheRightYearWhenBothAreOffered(t *testing.T) {
+	yts := &ytsCatalogStub{results: []media.SearchResult{
+		{ID: "yts/1984", Title: "Dune", Year: "1984", Type: media.Movie},
+		{ID: "yts/2021", Title: "Dune", Year: "2021", Type: media.Movie},
+	}}
+	withYTSRoute(t, "auto", yts)
+
+	primary := &stubProvider{}
+	sel := media.SearchResult{ID: "movie/dune-2021", Title: "Dune", Year: "2021", Type: media.Movie}
+
+	got, routed := routeByType(primary, sel)
+	if got != provider.Provider(yts) {
+		t.Fatalf("routeByType returned %T, want YTS: it carries the exact film", got)
+	}
+	if routed.ID != "yts/2021" {
+		t.Fatalf("routed ID = %q, want yts/2021 — the 1984 film is a different work", routed.ID)
+	}
+}
+
+// A release can be dated a year apart between catalogues (festival vs general
+// release, or a December film listed under the following year), so an exact
+// year match would refuse films that are genuinely the same work.
+func TestRouteByTypeAllowsAOneYearDisagreement(t *testing.T) {
+	yts := &ytsCatalogStub{results: []media.SearchResult{
+		{ID: "yts/7777", Title: "Parasite", Year: "2019", Type: media.Movie},
+	}}
+	withYTSRoute(t, "auto", yts)
+
+	primary := &stubProvider{}
+	sel := media.SearchResult{ID: "movie/parasite-1", Title: "Parasite", Year: "2020", Type: media.Movie}
+
+	got, routed := routeByType(primary, sel)
+	if got != provider.Provider(yts) {
+		t.Fatalf("routeByType returned %T for a one-year disagreement, want YTS", got)
+	}
+	if routed.ID != "yts/7777" {
+		t.Fatalf("routed ID = %q, want yts/7777", routed.ID)
+	}
+}
+
+// With no year on the selection there is nothing to check the candidate
+// against, and the ranking alone would hand back Dune (1984) for a query that
+// said only "Dune". Refusing costs a slower stream from the primary; admitting
+// costs the wrong film.
+func TestRouteByTypeRefusesToRouteWhenAYearIsMissing(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		selYear string
+		ytsYear string
+	}{
+		{"the selection carries no year", "", "1984"},
+		{"the YTS row carries no year", "2021", ""},
+		{"neither side carries a year", "", ""},
+		{"a year that is not a number", "2021", "n/a"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			yts := &ytsCatalogStub{results: []media.SearchResult{
+				{ID: "yts/1984", Title: "Dune", Year: c.ytsYear, Type: media.Movie},
+			}}
+			withYTSRoute(t, "auto", yts)
+
+			primary := &stubProvider{}
+			sel := media.SearchResult{ID: "movie/dune-2021", Title: "Dune", Year: c.selYear, Type: media.Movie}
+
+			got, routed := routeByType(primary, sel)
+			if got != provider.Provider(primary) {
+				t.Fatalf("routeByType routed to %T with no year to compare; it cannot know which Dune this is", got)
+			}
+			if routed.ID != "movie/dune-2021" {
+				t.Fatalf("routed ID = %q, want the selection untouched", routed.ID)
+			}
+		})
 	}
 }
 
