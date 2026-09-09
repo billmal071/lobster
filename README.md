@@ -317,6 +317,11 @@ download_dir = "~/Videos/lobster"
 # Available: auto, moviebox, flixhq.to, flixhq.ws, soap2day, kimcartoon,
 # vaplayer, vidnest, tbcpl, 1shows.org, allanime, yts
 # All other providers are automatically used as fallbacks.
+# What each value covers, and which of them cannot list a series' episodes, is
+# in GUIDE.md -> "Content sources"; `lobster doctor` reports which are working
+# right now. Changing base loses in-progress resume positions, because history
+# is keyed on the provider's own ID — see GUIDE.md -> "Changing source loses
+# your resume positions".
 # base = "auto"
 
 # yts is BitTorrent, not HTTP streaming. It plays while downloading, but it
@@ -325,8 +330,9 @@ download_dir = "~/Videos/lobster"
 # does. This applies to the default install, because "auto" plays movies from
 # YTS — set base = "soap2day" (or any other explicit source, or api_url) and
 # leave torrent_fallback false to never join a swarm. Otherwise use a VPN.
-# Needs a 64-bit
-# build. Pieces land in a temp directory and are removed when playback ends.
+# Needs a 64-bit build, or the classic storage backend, which lobster selects
+# for you on a run that may stream a torrent (GUIDE.md -> "Torrent storage
+# backend"). Pieces land in a temp directory and are removed when playback ends.
 
 # Optional: use a consumet API backend instead of the built-in scraper.
 # Self-host from: https://github.com/consumet/api.consumet.org

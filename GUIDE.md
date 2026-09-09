@@ -262,6 +262,7 @@ player = "mpv"
 #   base = "soap2day"
 # Available: auto, soap2day, moviebox, flixhq.to, flixhq.ws, kimcartoon,
 # vaplayer, vidnest, tbcpl, 1shows.org, allanime, yts
+# See "Content sources" below for what each one covers.
 base = "auto"
 
 # Preferred streaming server (Vidcloud, UpCloud)
@@ -302,6 +303,67 @@ download_dir = "~/Videos/lobster"
 # the swarm, so your IP is visible to its peers for the whole download.
 torrent_fallback = false
 ```
+
+### Content sources
+
+`base` (and `--base`) names the *primary* source: the one searched first, the
+one asked to enumerate a series' seasons and episodes, and the starting point
+for stream resolution. It does not pin the stream — every playback path still
+falls back to the rest of the chain when the primary cannot serve a title, so
+naming a source that does not carry something is not fatal, just slower.
+
+This table is about **scope** — what a source covers and what it structurally
+cannot do. It says nothing about whether a site is up today; that changes week
+to week, and `lobster doctor` is the live answer ("Check which providers work,
+and where the others break"). Run it before concluding a source is broken.
+
+| `base` | Covers | Worth knowing |
+| --- | --- | --- |
+| `auto` (default) | Films and series | No preference: a film is looked up on YTS by title and year and played from there when both agree, and a series always goes to a scraping source, because YTS has no TV catalogue. Everything else — series, and films YTS has no match for — is served by `soap2day`, the general source `auto` maps to. An explicit `base`, `--base`, or an `api_url` overrides all of this. |
+| `soap2day` | Films and series | The general-purpose source `auto` falls back to. Resolves its own streams rather than deferring to the fallback chain. |
+| `vaplayer` | Films and series | General-purpose, API-based. |
+| `flixhq.to`, `flixhq.ws` | Films and series | Scraper-based. `flixhq.ws` was the default before `auto`. Both check their domain at startup and try known alternates (plus any `domain_overrides`) when it is unreachable. |
+| `tbcpl`, `1shows.org` | Films and series | The same provider against the same site: `tbcpl` resolves to `https://www.1shows.org`, `1shows.org` to `https://1shows.org`. Honours `audio_language` for multi-dub releases. |
+| `kimcartoon` | Cartoons and anime | Domain-checked like FlixHQ. |
+| `allanime` | Anime | No longer part of the automatic fallback chain — its sources endpoint is crypto-gated behind a bot challenge — so it is reachable only by naming it here. `lobster doctor` reports whether it answers. |
+| `moviebox` | Films | **Cannot enumerate episodes.** Its season listing returns ten placeholder rows without querying anything, so a series' episode list is fiction: a 22-episode season lists as 10. Fine for films. |
+| `vidnest` | Films | **Cannot enumerate episodes**, the same way: every season lists episodes 1–50 whether they exist or not. Fine for films. |
+| `yts` | Films only | No TV catalogue at all, so a series named under `--base yts` is answered by the fallback chain instead — `--base yts` pins nothing for a series. Resolves to a **magnet**, so playback joins a BitTorrent swarm and your IP is visible to its peers; lobster serves it over loopback, so `--download` works too, but the swarm is joined either way. If no peer answers within 90 seconds the run gives up with "the swarm may be dead". |
+
+**A value lobster does not recognise is not an error.** Values are matched by
+substring, so anything still containing a known name works — `flixhq.xx` is
+read as `flixhq`, `soap2days` as `soap2day`. Anything else falls through to
+`moviebox`, the one source that cannot enumerate episodes: `--base sopa2day`
+plays films but reports every season as ten episodes. If a series suddenly
+lists exactly ten, check the spelling of `base` first.
+
+`api_url` is the one way to name a source that does not go through `base` at
+all: when it is set it replaces `base` entirely, and the value of `base` is
+ignored.
+
+### Changing source loses your resume positions
+
+Watch history is keyed on the provider's own ID, and IDs are not portable
+between providers. Changing `base` — including the upgrade that made `auto`
+the default, which moved the primary from `flixhq.ws` to `soap2day` — means
+in-progress titles are looked up under an ID that is not in your history:
+they restart from zero, and finishing one adds a second row for the same
+title rather than updating the first.
+
+The old rows are not deleted — they stay in `history.tsv` and are still listed
+by `lobster history` — but they are no longer reachable. `lobster history`
+re-searches the *current* primary and plays the row whose ID matches the saved
+one; under a different `base` no result carries that ID, so it drops you into
+the picker for that title and playback starts from the beginning.
+
+To keep existing positions on the source you were using before, pin it:
+
+```toml
+base = "flixhq.ws"
+```
+
+Resuming *across* sources needs the history file to identify a title by
+something portable rather than by provider ID, which is a change of its own.
 
 ### Torrent storage backend
 
@@ -385,7 +447,8 @@ tbcpl_include_untrusted = false
 -x, --debug                 Debug logging to stderr
     --base <source>         Content source (default: auto — YTS for movies,
                             a scraping source for series). An explicit value
-                            is used for both types.
+                            is used for both types. See "Content sources"
+                            above for what each value covers.
 ```
 
 ## Troubleshooting

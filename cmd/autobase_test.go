@@ -88,3 +88,19 @@ func TestALoudlySpelledAutoIsAutoForEveryReaderOfBase(t *testing.T) {
 		t.Errorf("newProvider(base=%q) = %T, want *provider.Soap2Day; the fall-through is MovieBox, which fabricates episode lists", c.Base, p)
 	}
 }
+
+// newProvider matches by substring and has no "unknown base" arm, so a typo
+// does not fail — it falls through to MovieBox, which reports a 22-episode
+// season as 10 fabricated rows. GUIDE.md's "Content sources" table warns about
+// exactly this, so pin the behaviour the warning describes.
+func TestAnUnrecognisedBaseFallsThroughToMovieBox(t *testing.T) {
+	// Chosen not to contain any recognised name as a substring: "soap2days"
+	// and "flixhq.xx" would both still match, because the test is Contains,
+	// not equality.
+	for _, base := range []string{"sopa2day", "flixq.to", "nonesuch"} {
+		withBase(t, base)
+		if _, ok := newProvider().(*provider.MovieBox); !ok {
+			t.Fatalf("newProvider(base=%q) = %T, want *provider.MovieBox", base, newProvider())
+		}
+	}
+}

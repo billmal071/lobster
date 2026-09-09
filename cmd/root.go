@@ -85,7 +85,11 @@ func registerPersistentFlags(c *cobra.Command) {
 	// child re-applies this default itself.
 	fs.BoolVarP(&flagContinue, "continue", "c", true, "Auto-resume from history (--continue=false to start fresh)")
 	fs.BoolVarP(&flagJSON, "json", "j", false, "Output stream metadata as JSON")
-	fs.StringVar(&flagBase, "base", "", "Content source: auto | flixhq.to | flixhq.ws | kimcartoon.com.co | soap2day | moviebox | vaplayer | vidnest | tbcpl | 1shows.org | allanime | yts")
+	// Kept to one line and in step with GUIDE.md's "Content sources" table,
+	// which is where each value's scope and limits are written down; an
+	// unrecognised value is not rejected but falls through to moviebox
+	// (newProvider, cmd/provider.go), which is worth knowing before typing one.
+	fs.StringVar(&flagBase, "base", "", "Content source: auto | soap2day | vaplayer | flixhq.to | flixhq.ws | tbcpl | 1shows.org | kimcartoon | allanime | moviebox | vidnest | yts (see GUIDE.md)")
 	fs.BoolVarP(&flagDebug, "debug", "x", false, "Debug logging to stderr")
 }
 
