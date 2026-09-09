@@ -274,12 +274,27 @@ func (d *downloadDialog) handleRangeInput(msg tea.KeyMsg) (bool, tea.Cmd) {
 	}
 }
 
+// EpisodeListFallback, when set, is asked for a season's episodes after the
+// provider itself could not list them. cmd wires it to the fallback chain; the
+// tui package must not reach the chain directly, because building it needs the
+// configured primary and the health store.
+//
+// It exists because a provider can enumerate seasons and not episodes —
+// MovieBox and VidNest both do — which left this dialog showing an error where
+// another provider had the list.
+var EpisodeListFallback func(prov provider.Provider, item media.SearchResult, seasonNumber int) ([]media.Episode, error)
+
 func (d *downloadDialog) fetchEpisodes(seasonIdx int) tea.Cmd {
 	prov := d.provider
-	id := d.item.ID
-	seasonID := d.seasons[seasonIdx].ID
+	item := d.item
+	season := d.seasons[seasonIdx]
 	return func() tea.Msg {
-		episodes, err := prov.GetEpisodes(id, seasonID)
+		episodes, err := prov.GetEpisodes(item.ID, season.ID)
+		if (err != nil || len(episodes) == 0) && EpisodeListFallback != nil {
+			if eps, ferr := EpisodeListFallback(prov, item, season.Number); ferr == nil && len(eps) > 0 {
+				return dlEpisodesMsg{episodes: eps}
+			}
+		}
 		if err != nil {
 			return dlEpisodesMsg{err: err}
 		}

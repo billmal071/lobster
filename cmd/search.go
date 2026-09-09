@@ -49,6 +49,11 @@ func searchRun(cmd *cobra.Command, args []string) error {
 		}
 
 		for {
+			// The dialog cannot build the chain itself: that needs the
+			// configured primary and the health store, both of which live
+			// here. Without this its download dialog is an error message for
+			// any primary that cannot enumerate episodes.
+			tui.EpisodeListFallback = tuiEpisodeListFallback
 			selected, lineup, startIdx, selectedProvider, err := tui.StartApp(p, cfg, liveTVSources(), mgr, fallbackSearchProviders(p)...)
 			if err != nil {
 				return err
@@ -217,6 +222,16 @@ func printDetail(r media.SearchResult, d *media.ContentDetail) {
 	output := poster.RenderSideBySide(r.Poster, posterCols, posterRows, lines)
 	fmt.Fprintln(os.Stderr, " "+output)
 	fmt.Fprintln(os.Stderr)
+}
+
+// tuiEpisodeListFallback is tui.EpisodeListFallback: the chain's answer for a
+// season the TUI's own provider could not list.
+func tuiEpisodeListFallback(prov provider.Provider, item media.SearchResult, seasonNumber int) ([]media.Episode, error) {
+	a := fallbackEpisodeList(prov, item, seasonNumber)
+	if a == nil {
+		return nil, fmt.Errorf("no fallback provider could list season %d of %q", seasonNumber, item.Title)
+	}
+	return a.episodes, nil
 }
 
 // episodeIndex is the position of the episode numbered n, or -1. It is the
