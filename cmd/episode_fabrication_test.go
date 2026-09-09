@@ -571,10 +571,18 @@ func TestResolveAndPlayKeepsPlaylistContinuityViaTheChain(t *testing.T) {
 
 // A chain provider's list can be real and still short of the show — a
 // currently-airing season, or a season it only partly carries. Building the
-// session on it and playing the nearest entry would be the silent
-// substitution this whole path exists to prevent, so a requested number the
-// list lacks must go to the resolver, which needs no list, and must never play
-// a different episode.
+// session on it and playing the nearest entry would be the silent substitution
+// this whole path exists to prevent, so a requested number the list lacks must
+// go to the resolver, which needs no list.
+//
+// What that buys is that cmd asks for exactly the number it was given: the
+// resolver formats "id:season:episode" and hands it to Watch
+// (tryStreamProviderFallback, internal/resolver/probe.go). It is not a promise
+// that the right episode comes back. The residual risk sits one layer down, in
+// backends that answer any episode number they are handed — VidNest's own
+// GetEpisodes doc says exactly that — and nothing at this level can check it.
+// The guarantee here is narrower and worth having: cmd never substitutes a
+// number of its own.
 func TestResolveAndPlayDoesNotSubstituteWhenTheChainsListIsShort(t *testing.T) {
 	hostileEnv(t)
 	pl := &countingPlayer{stubPlayerImpl: stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}}}
