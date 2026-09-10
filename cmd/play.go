@@ -152,10 +152,23 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 		//
 		// A chain hit that has the season is not a verdict of its own, only a
 		// reason not to refuse here: resolveAndPlay repeats the move and picks
-		// the provider that will actually serve the episode. That is two
-		// chain scans on this path, each bounded at episodesFallbackTimeout,
-		// and only on a request the command used to refuse outright — the
-		// ordinary play, where the primary lists the season, still runs none.
+		// the provider that will actually serve the episode.
+		//
+		// Count the scans honestly, because it is more than the two this
+		// comment used to claim: this gate runs one, resolveAndPlay's season
+		// recovery runs another, and if the recovered provider then cannot
+		// list episodes, fallbackEpisodeList runs a third and the resolver hop
+		// a fourth. Each is separately bounded at episodesFallbackTimeout, so
+		// the worst case is around four times that, not two. They are not
+		// merged behind one shared deadline on purpose: a single wedged
+		// provider first in chain order would spend the whole budget in the
+		// first phase and starve a healthy provider's already-found list,
+		// turning a working answer into a deadline error
+		// (TestEpisodesFallbackScanIsBounded shows it).
+		//
+		// All of it happens only on a request the command used to refuse
+		// outright — the ordinary play, where the primary lists the season,
+		// still runs none.
 		if _, _, _, ok := seasonAcrossHits(p, seasonRequest(r), seasonAnswer{
 			provider: p, id: r.ID, seasons: seasons, fromPrimary: true,
 		}, season); ok {

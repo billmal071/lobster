@@ -188,9 +188,18 @@ func providerLabel(p provider.Provider) string {
 }
 
 // agentFallbackProviders is the fallback chain, as a package var so tests can
-// supply stubs instead of providers that reach the network. Both users of the
-// chain go through it: this file's season scan and tryFallbackStream
-// (cmd/fallback.go).
+// supply stubs instead of providers that reach the network. This file's season
+// scan and tryFallbackStream (cmd/fallback.go) go through it.
+//
+// Not every caller does: fallbackSearchProviders (cmd/multisearch.go) calls
+// fallbackProviders directly, so `find`'s fan-out is not stubbed by this seam.
+// Worth knowing before writing a test that assumes installing a chain here
+// means nothing in the run reaches the network — it does not.
+//
+// Note also that a stub installed here is usually handed its primary and
+// ignores it, while the real fallbackProviders excludes that primary by
+// concrete type. A test that turns on WHICH provider a chain was built from
+// has to record the argument (withRecordingFallbackChain, in the tests).
 var agentFallbackProviders = fallbackProviders
 
 // episodesFallbackTimeout bounds the whole fallback season scan. It matches
