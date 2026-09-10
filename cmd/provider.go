@@ -72,7 +72,10 @@ func newProvider() provider.Provider {
 	if strings.Contains(base, "vaplayer") {
 		return provider.NewVaPlayer()
 	}
-	if strings.Contains(base, "yts") {
+	// config.IsYTSBase, shared with mayStreamTorrent (cmd/root.go), so the
+	// reader that decides "this run may open a magnet" and the reader that
+	// actually builds the magnet source can never disagree about a spelling.
+	if config.IsYTSBase(base) {
 		return provider.NewYTS()
 	}
 	if strings.Contains(base, "allanime") {

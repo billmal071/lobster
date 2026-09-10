@@ -195,6 +195,38 @@ func NormalizeBase(base string) string {
 	return strings.ToLower(strings.TrimSpace(base))
 }
 
+// IsYTSBase reports whether a base value names YTS, the one source that
+// resolves to a magnet rather than an HTTP stream.
+//
+// One predicate, because two readers disagreeing about the spelling of a base
+// is the bug NormalizeBase was written for, one level up. cmd.newProvider
+// selects YTS by substring (a base is allowed to be a domain: the note under
+// GUIDE.md's source table promises that "values are matched by substring, so
+// anything still containing a known name works", giving `yts.mx` the same
+// standing it gives `flixhq.xx`), while cmd.mayStreamTorrent tested it for
+// equality with "yts" — so `base = "yts.mx"` got the real YTS provider and a
+// magnet while mayStreamTorrent answered false, which skips the re-exec onto
+// the storage backend that cannot SIGBUS and silences applyRefBase's late-ref
+// warning.
+// Both call this now, so a new YTS spelling cannot be known to one and not the
+// other.
+//
+// Substring, not equality, to match what newProvider actually does. It agrees
+// with newProvider exactly for every value that reaches it today — no base
+// newProvider matches ahead of YTS contains "yts", which
+// TestEveryReaderOfBaseAgreesAboutYTS pins against the whole documented table. A
+// hypothetical future base that contained both would get the other provider
+// and a true answer here, which costs one needless re-exec: the direction this
+// function is documented to fail in (cmd.mayStreamTorrent).
+//
+// The input is normalized here rather than assumed, because callers see Base
+// at different points: cmd.newProvider reads a cfg.Base that Validate has
+// already canonicalised, while cmd.mayStreamTorrent is handed a *Config
+// directly and is asked before some of them are validated.
+func IsYTSBase(base string) bool {
+	return strings.Contains(NormalizeBase(base), "yts")
+}
+
 // Validate checks config values are within acceptable bounds.
 func (c *Config) Validate() error {
 	validPlayers := map[string]bool{

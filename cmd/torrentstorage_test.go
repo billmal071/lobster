@@ -23,6 +23,13 @@ func TestMayStreamTorrent(t *testing.T) {
 		// below is what covers a cfg assembled without Validate — which is
 		// what every fixture in this file is.
 		{"yts spelled loudly", &config.Config{Base: "YTS"}, true},
+		// newProvider matches by substring, so `base = "yts.mx"` — documented
+		// as a valid value in GUIDE.md's source table — builds the real YTS
+		// provider and resolves magnets. An equality test here answered false
+		// for it: no re-exec, the mmap backend, and the SIGBUS the re-exec
+		// exists to prevent. Both readers now go through config.IsYTSBase.
+		{"a yts domain is still a yts base", &config.Config{Base: "yts.mx"}, true},
+		{"a yts domain spelled loudly", &config.Config{Base: "  YTS.MX  "}, true},
 		{"the fallback can reach yts from any base", &config.Config{Base: "flixhq.to", TorrentFallback: true}, true},
 		{"an http provider with no fallback never streams", &config.Config{Base: "flixhq.to"}, false},
 		{"an empty base with no fallback never streams", &config.Config{}, false},

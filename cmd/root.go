@@ -302,7 +302,12 @@ func mayStreamTorrent(c *config.Config) bool {
 	// playback and for --download alike, which serves the torrent over
 	// loopback and fetches from there — so this is read before the --download
 	// arm below.
-	if strings.EqualFold(c.Base, "yts") {
+	//
+	// config.IsYTSBase, not a comparison of our own: newProvider selects YTS
+	// by substring, so `base = "yts.mx"` (a documented value, GUIDE.md's
+	// source table) is a real YTS primary. An equality test here missed it and
+	// left that run on the mmap backend.
+	if config.IsYTSBase(c.Base) {
 		return true
 	}
 	// The auto arm mirrors routeByType's own conditions (cmd/typeroute.go),

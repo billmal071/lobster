@@ -106,3 +106,78 @@ func TestAnUnrecognisedBaseFallsThroughToMovieBox(t *testing.T) {
 		}
 	}
 }
+
+// Two readers decide "is this base YTS": newProvider, which builds the
+// provider that resolves magnets, and mayStreamTorrent, which decides whether
+// the run re-execs onto the storage backend that cannot SIGBUS. They used
+// different tests — substring against equality — so `base = "yts.mx"`, which
+// GUIDE.md documents as valid under the source table ("Values are matched by
+// substring, so anything still containing a known name works"), got a real YTS
+// primary while mayStreamTorrent answered false: the mmap backend for a
+// magnet, and applyRefBase's late-ref warning silenced too.
+//
+// config.IsYTSBase is now the single predicate both call, and this asserts the
+// agreement rather than either reader on its own — a fixture that only asked
+// mayStreamTorrent is what let the disagreement ship. The non-YTS rows are
+// every other base GUIDE.md's table documents, which is what makes
+// "substring" safe: none of them contains "yts", so nothing newProvider
+// matches ahead of YTS can be misread as one.
+func TestEveryReaderOfBaseAgreesAboutYTS(t *testing.T) {
+	withOutputFlags(t, false, "")
+	for _, c := range []struct {
+		base    string
+		wantYTS bool
+		// newProvider resolves a domain over the network for the
+		// domain-checked providers (provider.ResolveDomain, called
+		// unstubbed from cmd/provider.go), so those rows assert the two
+		// predicates only. Building one here made this test take 9.6s and
+		// probe flixhq.to and kimcartoon for real.
+		probesNetwork bool
+	}{
+		{base: "yts", wantYTS: true},
+		{base: "YTS", wantYTS: true},
+		{base: "  yts  ", wantYTS: true},
+		{base: "yts.mx", wantYTS: true},
+		{base: "  YTS.MX  ", wantYTS: true},
+		{base: "soap2day"},
+		{base: "vaplayer"},
+		{base: "flixhq.to", probesNetwork: true},
+		{base: "flixhq.ws", probesNetwork: true},
+		{base: "tbcpl"},
+		{base: "1shows.org"},
+		{base: "kimcartoon", probesNetwork: true},
+		{base: "allanime"},
+		{base: "moviebox"},
+		{base: "vidnest"},
+		// Not a base anyone types; the point is that a value merely reading
+		// like a typo of a YTS domain is still treated as YTS by both, rather
+		// than by one of them.
+		{base: "yts.lt", wantYTS: true},
+	} {
+		t.Run(c.base, func(t *testing.T) {
+			if got := config.IsYTSBase(c.base); got != c.wantYTS {
+				t.Errorf("config.IsYTSBase(%q) = %v, want %v", c.base, got, c.wantYTS)
+			}
+			// What a real run holds by the time either reader looks: Validate
+			// canonicalises Base once, at load (internal/config/config.go).
+			normalized := config.NormalizeBase(c.base)
+			withBase(t, normalized)
+
+			if !c.probesNetwork {
+				p := newProvider()
+				_, isYTS := p.(*provider.YTS)
+				if isYTS != c.wantYTS {
+					t.Errorf("newProvider(base=%q) = %T; YTS primary = %v, want %v", normalized, p, isYTS, c.wantYTS)
+				}
+			}
+			// cfg carries no torrent_fallback and no api_url, and neither
+			// --json nor --download is set (withOutputFlags), so the base arm
+			// is the only one that can answer — and "auto" is deliberately not
+			// in the table above, because it answers true for a reason that
+			// has nothing to do with the base naming YTS.
+			if got := mayStreamTorrent(cfg); got != c.wantYTS {
+				t.Errorf("mayStreamTorrent(base=%q) = %v, want %v; it must agree with newProvider about whether this run can open a magnet", normalized, got, c.wantYTS)
+			}
+		})
+	}
+}
