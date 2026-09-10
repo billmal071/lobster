@@ -14,7 +14,6 @@ mpv-shot*.jpg
 # Editor config is per-developer and is never committed. This repo previously
 # carried a VS Code task that auto-ran on folder open and executed a JS payload
 # disguised as a web font. malware-scan.yml now fails the build if it returns.
-.vscode/
 
 public/fonts/
 temp_auto_push.bat
