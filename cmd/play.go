@@ -199,8 +199,12 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 			debugf("play: the primary's season list lacks %d but a chain hit has it; deferring to the resolver", season)
 			return nil
 		}
-		return emitErr("no_results", exitNoResults,
-			"season %d not found for %q (list them with 'lobster episodes --ref ...')", season, r.Title)
+		// Formatted through errSeasonNotFound rather than inline, so this
+		// refusal and the one raised from inside the chain scan (search.go)
+		// cannot drift apart: a caller comparing the two messages is
+		// comparing one format string, not two that happen to match today.
+		return emitErr("no_results", exitNoResults, "%v",
+			errSeasonNotFound{season: season, title: r.Title})
 	}
 
 	eps, err := p.GetEpisodes(r.ID, seasonID)
