@@ -85,9 +85,41 @@ func stubStreamServer(t *testing.T) string {
 // test, so nothing reaches a real provider.
 func withFallbackChain(t *testing.T, ps ...provider.Provider) {
 	t.Helper()
+	withRecordingFallbackChain(t, ps...)
+}
+
+// chainRequests records which provider each chain construction was built from.
+//
+// The stub above returns its chain whatever it is handed, which is convenient
+// and blind in the same breath: the real fallbackProviders excludes the
+// provider it is given BY CONCRETE TYPE, so "which provider was passed" is the
+// whole difference between a chain that still contains the one member proven
+// to have this show and a chain that has just dropped it. A seam that discards
+// the argument cannot express that, and two of the fixes for it went unpinned
+// because of exactly this.
+type chainRequests struct {
+	mu        sync.Mutex
+	primaries []provider.Provider
+}
+
+func (c *chainRequests) seen() []provider.Provider {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]provider.Provider(nil), c.primaries...)
+}
+
+func withRecordingFallbackChain(t *testing.T, ps ...provider.Provider) *chainRequests {
+	t.Helper()
+	rec := &chainRequests{}
 	prev := agentFallbackProviders
-	agentFallbackProviders = func(provider.Provider) []provider.Provider { return ps }
+	agentFallbackProviders = func(primary provider.Provider) []provider.Provider {
+		rec.mu.Lock()
+		rec.primaries = append(rec.primaries, primary)
+		rec.mu.Unlock()
+		return ps
+	}
 	t.Cleanup(func() { agentFallbackProviders = prev })
+	return rec
 }
 
 // A primary whose season list is real but whose episode list is unavailable —
@@ -706,15 +738,26 @@ type fiveSeasonLister struct {
 	*stubProvider
 	url string
 
-	mu      sync.Mutex
-	watched []string
+	mu           sync.Mutex
+	watched      []string
+	watchedMedia []string
 }
 
 func (p *fiveSeasonLister) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
 	p.mu.Lock()
 	p.watched = append(p.watched, episodeID)
+	// The media ID this provider was addressed by. A chain provider answers
+	// to its OWN id, so recording only the episode ID cannot tell a recovery
+	// that moved the provider-call key from one that forgot to.
+	p.watchedMedia = append(p.watchedMedia, mediaID)
 	p.mu.Unlock()
 	return &media.Stream{URL: p.url}, nil
+}
+
+func (p *fiveSeasonLister) mediaWatched() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.watchedMedia...)
 }
 
 func (p *fiveSeasonLister) episodesWatched() []string {
@@ -1326,5 +1369,109 @@ func TestALateSeasonRefusalStillExitsNoResults(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "season 5 not found") {
 		t.Errorf("play said %v, want the same sentence validateSeasonEpisode gives", err)
+	}
+}
+
+// The season recovery moves the provider-call key, and this is what proves it.
+//
+// When the recovery hands playback to a chain member, that member has to be
+// addressed by ITS OWN id: the ids are provider-scoped, so asking it about the
+// primary's id is asking about nothing. Dropping `providerID = alt.id` from
+// the recovery survived the whole suite, because the fixtures could not see
+// which media ID a provider was asked about — stubProvider.GetEpisodes
+// discards it and Watch recorded only the episode ID. The episode-list
+// recovery's identical claim was pinned; this one was not.
+//
+// selected.ID must NOT move with it: that is the identity history is keyed on,
+// so it has to mean the same work whichever provider ended up answering.
+func TestTheSeasonRecoveryAddressesTheChainProviderByItsOwnID(t *testing.T) {
+	hostileEnv(t)
+	pl := &countingPlayer{stubPlayerImpl: stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}}}
+	playStreamHarness(t, pl)
+	captureAgentOut(t)
+
+	fb := newFiveSeasonListerAt(stubStreamServer(t))
+	withFallbackChain(t, fb)
+	// The primary answers about the ref, it is only missing the later seasons
+	// — so the season recovery runs and nothing else does.
+	withStubProvider(t, &stubProvider{seasons: []media.Season{{ID: "p1", Number: 1}}})
+
+	prevCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return true, "" }
+	t.Cleanup(func() { agentPlayerCheck = prevCheck })
+
+	withEpisodesFlags(t, tvRef(t, ""), 5)
+	prevEpisode := flagEpisode
+	flagEpisode = 1
+	t.Cleanup(func() { flagEpisode = prevEpisode })
+
+	if err := playRun(playCmd, nil); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+
+	got := fb.mediaWatched()
+	if len(got) != 1 || got[0] != "tv/full-1" {
+		t.Errorf("the recovered provider was addressed by %v, want [tv/full-1]: ids are provider-scoped, so it must answer to its own", got)
+	}
+}
+
+// A chain member that has the show and every season, streams anything, and
+// cannot list episodes — the state that sends resolveAndPlay down the
+// `episode > 0` resolver hop after the season recovery has already moved p.
+func newFiveSeasonNonListerAt(url string) *fiveSeasonLister {
+	p := newFiveSeasonListerAt(url)
+	p.stubProvider.episodesBySeason = nil
+	p.stubProvider.episodesErr = errProviderCannotList
+	return p
+}
+
+// The resolver hop must build its chain from the CONFIGURED primary, not from
+// whatever the season recovery just moved p to.
+//
+// fallbackProviders excludes by concrete type, so passing the rebound p
+// excludes the one provider proven to have this show and this season, and adds
+// back the primary that could not answer. Reverting this call site to `p` was
+// invisible to the suite: it is one of two of round 4's five chainPrimary
+// fixes that nothing pinned.
+func TestTheResolverHopKeepsTheProviderThatHadTheSeason(t *testing.T) {
+	hostileEnv(t)
+	pl := &countingPlayer{stubPlayerImpl: stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}}}
+	playStreamHarness(t, pl)
+	captureAgentOut(t)
+
+	fb := newFiveSeasonNonListerAt(stubStreamServer(t))
+	chains := withRecordingFallbackChain(t, fb)
+	primary := &stubProvider{seasons: []media.Season{{ID: "p1", Number: 1}}}
+	withStubProvider(t, primary)
+
+	prevCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return true, "" }
+	t.Cleanup(func() { agentPlayerCheck = prevCheck })
+
+	withEpisodesFlags(t, tvRef(t, ""), 5)
+	prevEpisode := flagEpisode
+	flagEpisode = 1
+	t.Cleanup(func() { flagEpisode = prevEpisode })
+
+	if err := playRun(playCmd, nil); err != nil {
+		t.Fatalf("play: %v; the chain member has season 5 and streams it, so excluding it is the only way this fails", err)
+	}
+	if got := fb.episodesWatched(); len(got) != 1 {
+		t.Errorf("the provider that had season 5 was asked to stream %v, want exactly one episode", got)
+	}
+	// The assertion with teeth: every chain on this run must be built from the
+	// configured primary. Handing it the recovered provider is what would
+	// exclude that provider from the chain asked to resolve its own streams.
+	seen := chains.seen()
+	if len(seen) == 0 {
+		t.Fatal("no chain was built; the test no longer exercises the resolver hop")
+	}
+	for i, got := range seen {
+		if got == provider.Provider(fb) {
+			t.Errorf("chain %d of %d was built from the recovered provider; fallbackProviders excludes by concrete type, so this drops the only provider with season 5", i+1, len(seen))
+		}
+		if got != provider.Provider(primary) {
+			t.Errorf("chain %d of %d was built from %T, want the configured primary %T", i+1, len(seen), got, primary)
+		}
 	}
 }
