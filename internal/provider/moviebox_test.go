@@ -181,19 +181,21 @@ func TestMovieBoxGetSeasons(t *testing.T) {
 	}
 }
 
-func TestMovieBoxGetEpisodes(t *testing.T) {
+// MovieBox cannot enumerate episodes: its detail and season endpoints require
+// authentication and answer 407 (see the comment at moviebox.go:283). It used
+// to answer with a locally generated 1..10 list anyway, which callers cannot
+// tell from a measured one — season 1 of Marvel's Agents of S.H.I.E.L.D. has
+// 22 episodes, and `play --episode 15` was refused as out of range on that
+// invented evidence. An unanswerable question must return an error.
+func TestMovieBoxGetEpisodesRefusesToInvent(t *testing.T) {
 	m := NewMovieBox()
 
 	episodes, err := m.GetEpisodes("123", "2")
-	if err != nil {
-		t.Fatalf("GetEpisodes returned error: %v", err)
+	if err == nil {
+		t.Fatalf("GetEpisodes returned %d episodes and a nil error; MovieBox cannot enumerate episodes and must say so", len(episodes))
 	}
-
-	if len(episodes) != 10 {
-		t.Fatalf("expected 10 episodes, got %d", len(episodes))
-	}
-	if episodes[0].ID != "2.1" {
-		t.Errorf("expected episode ID '2.1', got %s", episodes[0].ID)
+	if len(episodes) != 0 {
+		t.Errorf("GetEpisodes returned %d episodes alongside an error; want none", len(episodes))
 	}
 }
 

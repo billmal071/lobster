@@ -15,9 +15,16 @@ import (
 type stubPlayerImpl struct {
 	result player.PlayResult
 	err    error
+
+	// lastPos is the start position the player was actually handed. Without
+	// it the stub discards the one value a resume lookup produces, so every
+	// "it resumes from where you stopped" assertion built on this fixture is
+	// blind to a lookup that returned nothing.
+	lastPos float64
 }
 
-func (s *stubPlayerImpl) Play(*media.Stream, string, float64, []string) (player.PlayResult, error) {
+func (s *stubPlayerImpl) Play(_ *media.Stream, _ string, pos float64, _ []string) (player.PlayResult, error) {
+	s.lastPos = pos
 	return s.result, s.err
 }
 func (s *stubPlayerImpl) Name() string    { return "stub" }

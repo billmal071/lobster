@@ -1,11 +1,16 @@
 package cmd
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/spf13/cobra"
 
+	"lobster/internal/config"
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/provider"
+	"lobster/internal/torrentstream"
 )
 
 // agentResolveAndPlay is the playback entry point, as a package var so tests
@@ -79,9 +84,31 @@ func init() {
 // nothing under episodes, because a MovieBox provider was handed a FlixHQ ID
 // and reported "no seasons found". The two commands must agree on what one ref
 // means.
+// The storage backend is a startup decision (loadConfig, cmd/root.go) and this
+// runs inside RunE, so a ref that moves the run onto a torrent source arrives
+// after that decision has been made — with `base = "soap2day"` and
+// torrent_fallback off it was made as "this run will not stream a torrent", and
+// playStream then serves the magnet on the memory-mapped backend. Re-execing
+// here is not an option (argv would be replayed, and the player check has
+// already run), so the run says what it is doing instead. Only for a command
+// that can actually play: episodes shares this function and never streams.
 func applyRefBase(cmd *cobra.Command, r playRef) {
-	if r.Base != "" && cfg != nil && !cmd.Flags().Changed("base") {
-		cfg.Base = r.Base
+	// A ref is the third input for base, and the only one that never passes
+	// through config.Validate: decodeRef checks Type strictly and Base not at
+	// all, and this assignment happens inside RunE, long after the last
+	// Validate(). Canonicalize through the same routine Validate uses, before
+	// the comparison — otherwise a ref stamped " yts " gets real YTS from
+	// newProvider's substring match while mayStreamTorrent's EqualFold says
+	// no, and the warning below never fires on the one case it exists for.
+	// It also makes `changed` mean "this run moved" rather than "the token
+	// was spelled differently".
+	base := config.NormalizeBase(r.Base)
+	if base != "" && cfg != nil && !cmd.Flags().Changed("base") {
+		changed := cfg.Base != base
+		cfg.Base = base
+		if changed && reachesPlayback(cmd) {
+			torrentstream.WarnLateStorageRisk(mayStreamTorrent(cfg), warnf)
+		}
 	}
 }
 
@@ -133,11 +160,51 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 		}
 	}
 	if !found {
-		// A real, non-empty season list that lacks this number. This is the
-		// silent-S1E1 bug: resolveAndPlay would leave seasonIdx at 0 and play
-		// season one while reporting success.
-		return emitErr("no_results", exitNoResults,
-			"season %d not found for %q (list them with 'lobster episodes --ref ...')", season, r.Title)
+		// A real, non-empty season list that lacks this number. That is either
+		// the silent-S1E1 bug — resolveAndPlay would leave seasonIdx at 0 and
+		// play season one while reporting success — or a primary that
+		// undercounts, which is a different thing entirely.
+		//
+		// VidNest's GetSeasons probes each season for streams and stops at the
+		// first it cannot reach, so a real, non-empty list is not proof the
+		// show ends there. `episodes` asks the chain before refusing
+		// (seasonAcrossHits), and if this gate refused on the primary's list
+		// alone the two commands would contradict each other on one ref:
+		// `episodes --season 5` printing the season, `play --season 5`
+		// answering no_results and pointing the caller back at the command
+		// that had just listed it.
+		//
+		// A chain hit that has the season is not a verdict of its own, only a
+		// reason not to refuse here: resolveAndPlay repeats the move and picks
+		// the provider that will actually serve the episode.
+		//
+		// Count the scans honestly, because it is more than the two this
+		// comment used to claim: this gate runs one, resolveAndPlay's season
+		// recovery runs another, and if the recovered provider then cannot
+		// list episodes, fallbackEpisodeList runs a third and the resolver hop
+		// a fourth. Each is separately bounded at episodesFallbackTimeout, so
+		// the worst case is around four times that, not two. They are not
+		// merged behind one shared deadline on purpose: a single wedged
+		// provider first in chain order would spend the whole budget in the
+		// first phase and starve a healthy provider's already-found list,
+		// turning a working answer into a deadline error
+		// (TestEpisodesFallbackScanIsBounded shows it).
+		//
+		// All of it happens only on a request the command used to refuse
+		// outright — the ordinary play, where the primary lists the season,
+		// still runs none.
+		if _, _, _, ok := seasonAcrossHits(p, seasonRequest(r), seasonAnswer{
+			provider: p, id: r.ID, seasons: seasons, fromPrimary: true,
+		}, season); ok {
+			debugf("play: the primary's season list lacks %d but a chain hit has it; deferring to the resolver", season)
+			return nil
+		}
+		// Formatted through errSeasonNotFound rather than inline, so this
+		// refusal and the one raised from inside the chain scan (search.go)
+		// cannot drift apart: a caller comparing the two messages is
+		// comparing one format string, not two that happen to match today.
+		return emitErr("no_results", exitNoResults, "%v",
+			errSeasonNotFound{season: season, title: r.Title})
 	}
 
 	eps, err := p.GetEpisodes(r.ID, seasonID)
@@ -211,6 +278,13 @@ func playRun(cmd *cobra.Command, args []string) error {
 		p = agentProvider()
 	}
 	if err := agentResolveAndPlay(p, sel, flagSeason, flagEpisode); err != nil {
+		// A season that does not exist is not a provider outage: it is the
+		// same answer validateSeasonEpisode gives above, reached later because
+		// the primary could not enumerate up front. Report it identically.
+		var notFound errSeasonNotFound
+		if errors.As(err, &notFound) {
+			return emitErr("no_results", exitNoResults, "%v", notFound)
+		}
 		return emitErr("providers_failed", exitProvidersFailed, "%v", err)
 	}
 
@@ -218,4 +292,26 @@ func playRun(cmd *cobra.Command, args []string) error {
 		"status": "finished",
 		"title":  r.Title,
 	})
+}
+
+// errSeasonNotFound is "that season does not exist", raised from inside
+// resolveAndPlay rather than from validateSeasonEpisode's up-front check.
+//
+// It exists so one refusal reports one thing. Both gates produce the same
+// sentence, but playRun's catch-all maps a plain error to providers_failed
+// (exit 3), so the same "season 5 not found" came back as no_results from the
+// early check and as providers_failed from the late one — and which gate
+// catches it is not a property of the request. validateSeasonEpisode defers to
+// the resolver whenever the primary cannot enumerate, and the two gates run
+// two independent chain scans with their own deadlines, so a provider that
+// answers the first and times out in the second flips the exit code on
+// identical input. An agent branching on "providers are down" versus "ask for
+// a different season" would branch wrongly at random.
+type errSeasonNotFound struct {
+	season int
+	title  string
+}
+
+func (e errSeasonNotFound) Error() string {
+	return fmt.Sprintf("season %d not found for %q (list them with 'lobster episodes --ref ...')", e.season, e.title)
 }
