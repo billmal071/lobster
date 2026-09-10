@@ -87,8 +87,15 @@ func parseEpisodeRange(input string, episodes []media.Episode) ([]media.Episode,
 	return matched, nil
 }
 
-// batchDownload downloads multiple episodes sequentially with skip-on-fail and retry.
-func batchDownload(p provider.Provider, selected media.SearchResult, episodes []media.Episode, season media.Season) error {
+// batchDownload downloads multiple episodes sequentially with skip-on-fail and
+// retry.
+//
+// chainPrimary is the configured primary, not whichever provider produced the
+// episode list: downloads resolve their streams through the fallback chain,
+// which is built by excluding its argument, so passing a provider the
+// episode-list recovery moved to would exclude the one source proven to have
+// these episodes.
+func batchDownload(chainPrimary provider.Provider, selected media.SearchResult, episodes []media.Episode, season media.Season) error {
 	if flagJSON {
 		return fmt.Errorf("--json is not supported with batch downloads")
 	}
@@ -106,7 +113,7 @@ func batchDownload(p provider.Provider, selected media.SearchResult, episodes []
 		epLabel := formatEpisodeLabel(ep)
 		fmt.Fprintf(os.Stderr, "[%d/%d] Downloading %s...\n", i+1, total, epLabel)
 
-		if err := downloadSingleEpisode(p, selected, ep, season.Number, outputDir, epLabel); err != nil {
+		if err := downloadSingleEpisode(chainPrimary, selected, ep, season.Number, outputDir, epLabel); err != nil {
 			fmt.Fprintf(os.Stderr, "  Failed: %v\n", err)
 			failed = append(failed, ep)
 		}
@@ -130,7 +137,7 @@ func batchDownload(p provider.Provider, selected media.SearchResult, episodes []
 			epLabel := formatEpisodeLabel(ep)
 			fmt.Fprintf(os.Stderr, "[%d/%d] Retrying %s...\n", i+1, len(retrying), epLabel)
 
-			if err := downloadSingleEpisode(p, selected, ep, season.Number, outputDir, epLabel); err != nil {
+			if err := downloadSingleEpisode(chainPrimary, selected, ep, season.Number, outputDir, epLabel); err != nil {
 				fmt.Fprintf(os.Stderr, "  Failed: %v\n", err)
 				failed = append(failed, ep)
 			}
@@ -142,10 +149,12 @@ func batchDownload(p provider.Provider, selected media.SearchResult, episodes []
 	return nil
 }
 
-// downloadSingleEpisode resolves and downloads one episode via fallback providers.
-func downloadSingleEpisode(p provider.Provider, selected media.SearchResult, ep media.Episode, seasonNum int, outputDir, title string) error {
+// downloadSingleEpisode resolves and downloads one episode via fallback
+// providers. chainPrimary is the provider to build that chain around — see
+// batchDownload.
+func downloadSingleEpisode(chainPrimary provider.Provider, selected media.SearchResult, ep media.Episode, seasonNum int, outputDir, title string) error {
 	debugf("resolving stream via fallback providers for %s", title)
-	stream, err := tryFallbackStream(p, selected, seasonNum, ep.Number)
+	stream, err := tryFallbackStream(chainPrimary, selected, seasonNum, ep.Number)
 	if err != nil {
 		return fmt.Errorf("all providers failed: %w", err)
 	}
@@ -291,8 +300,62 @@ func parseSeasonRange(input string, seasons []media.Season) ([]media.Season, err
 	return matched, nil
 }
 
+// seasonLister lists a season's episodes, asking the fallback chain when the
+// provider cannot answer, and scanning that chain at most once however many
+// seasons it is asked about.
+//
+// A primary can enumerate seasons and not episodes — MovieBox and VidNest both
+// do — and a multi-season batch then recorded one synthetic failure per season
+// and downloaded nothing, for a show the chain could list in full. The list is
+// all that is needed here: downloads resolve their streams by title, season
+// and episode number through makeStreamResolver, not by episode ID, so a list
+// borrowed from another provider costs the download nothing.
+//
+// The scan is held across seasons because it is neither cheap nor stable. It
+// is a search plus a GetSeasons call against every fallback provider, bounded
+// at episodesFallbackTimeout, so a ten-season batch was ten of them — around a
+// hundred seconds of scanning before the first byte. And a chain that answered
+// differently between scans would hand different seasons of one show to
+// different providers, which is not something the download summary would ever
+// mention.
+type seasonLister struct {
+	primary  provider.Provider
+	selected media.SearchResult
+	hits     []*seasonHit
+	scanned  bool
+}
+
+func newSeasonLister(p provider.Provider, selected media.SearchResult) *seasonLister {
+	return &seasonLister{primary: p, selected: selected}
+}
+
+func (l *seasonLister) episodes(season media.Season) ([]media.Episode, error) {
+	episodes, err := l.primary.GetEpisodes(l.selected.ID, season.ID)
+	if err == nil && len(episodes) > 0 {
+		return episodes, nil
+	}
+	if season.Number < 0 {
+		return episodes, err
+	}
+	if !l.scanned {
+		l.scanned = true
+		l.hits = fallbackSeasonHits(l.primary, contentRequest(l.selected))
+	}
+	if a := firstEpisodeList(l.hits, season.Number); a != nil {
+		debugf("batch: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), season.Number)
+		return a.episodes, nil
+	}
+	return episodes, err
+}
+
 // batchDownloadMultiSeason downloads all episodes from multiple seasons.
-func batchDownloadMultiSeason(p provider.Provider, selected media.SearchResult, seasons []media.Season) error {
+//
+// primary is the configured provider in both of its roles here: it is asked
+// for each season's episode list, and it is the provider the download chain is
+// built around. This path is reached from the season menu, before the
+// episode-list recovery can move anything, so the two never diverge — unlike
+// batchDownload, which is reached after it.
+func batchDownloadMultiSeason(primary provider.Provider, selected media.SearchResult, seasons []media.Season) error {
 	if flagJSON {
 		return fmt.Errorf("--json is not supported with batch downloads")
 	}
@@ -306,11 +369,13 @@ func batchDownloadMultiSeason(p provider.Provider, selected media.SearchResult, 
 	var downloaded int
 	var failed []failedEpisode
 
+	lister := newSeasonLister(primary, selected)
+
 	for _, season := range seasons {
 		fmt.Fprintf(os.Stderr, "\n=== Season %d ===\n", season.Number)
 
 		stopEps := ui.StartSpinner(fmt.Sprintf("Fetching Season %d episodes...", season.Number))
-		episodes, err := p.GetEpisodes(selected.ID, season.ID)
+		episodes, err := lister.episodes(season)
 		stopEps()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to fetch Season %d episodes: %v\n", season.Number, err)
@@ -333,7 +398,7 @@ func batchDownloadMultiSeason(p provider.Provider, selected media.SearchResult, 
 			fmt.Fprintf(os.Stderr, "Downloading Season %d, Episode %d of %d: %s\n",
 				season.Number, i+1, len(episodes), epLabel)
 
-			if err := downloadSingleEpisode(p, selected, ep, season.Number, outputDir, epLabel); err != nil {
+			if err := downloadSingleEpisode(primary, selected, ep, season.Number, outputDir, epLabel); err != nil {
 				fmt.Fprintf(os.Stderr, "  Failed: %v\n", err)
 				failed = append(failed, failedEpisode{SeasonNum: season.Number, Episode: ep})
 			} else {
@@ -362,7 +427,7 @@ func batchDownloadMultiSeason(p provider.Provider, selected media.SearchResult, 
 			fmt.Fprintf(os.Stderr, "[%d/%d] Retrying %s...\n", i+1, len(retrying), epLabel)
 
 			outputDir := buildTVSeasonDownloadDir(baseDir, selected.Title, fe.SeasonNum)
-			if err := downloadSingleEpisode(p, selected, fe.Episode, fe.SeasonNum, outputDir, epLabel); err != nil {
+			if err := downloadSingleEpisode(primary, selected, fe.Episode, fe.SeasonNum, outputDir, epLabel); err != nil {
 				fmt.Fprintf(os.Stderr, "  Failed: %v\n", err)
 				failed = append(failed, fe)
 			} else {

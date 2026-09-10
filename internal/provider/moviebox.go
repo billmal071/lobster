@@ -423,28 +423,36 @@ func (m *MovieBox) GetSeasons(id string) ([]media.Season, error) {
 	return seasons, nil
 }
 
-// GetEpisodes returns episodes for a given season.
-// Generates a reasonable episode list since the detail endpoint requires authentication.
-// The Watch method uses season.episode format, so exact episode IDs aren't critical.
+// GetEpisodes is not answerable by MovieBox: the detail and season endpoints
+// that carry an episode list require authentication and return 407 (see the
+// comment on getDetailWithSeason above). It used to generate a 1..10 list
+// instead, which a caller cannot distinguish from a measured one — so a show
+// with 22 episodes in season 1 had `--episode 15` refused as out of range.
+//
+// What that costs depends on which side of the chain MovieBox is on.
+//
+// As a fallback it costs nothing: MovieBox is a StreamProvider, so the
+// resolver reaches it through Watch with an episode ID built arithmetically
+// from season and episode (tryStreamProviderFallback,
+// internal/resolver/probe.go) and never asks for a list.
+//
+// As the primary the resolver is the one thing that will not reach it:
+// tryFallbackStream builds its chain from fallbackProviders (cmd/fallback.go),
+// which excludes the primary by concrete type. And that is not a corner case —
+// any unrecognised --base lands here (newProvider, cmd/provider.go), and
+// cmd/search.go tips users towards "--base moviebox" by name. So the list has
+// to come from elsewhere: cmd asks the fallback chain for it
+// (fallbackEpisodeList, cmd/episodes.go), moving the listing and the playback
+// that follows to whichever provider answered. When the chain cannot answer
+// either, the error names this provider and points at
+// "lobster episodes --ref ...", which asks every chain provider that can
+// enumerate the season; a caller that already knows the number can still pass
+// --episode N, which the fallback resolver serves without a list.
+//
+// Either way the caller ends up with a real list or an honest failure, neither
+// of which a fabricated 1..10 could offer.
 func (m *MovieBox) GetEpisodes(id string, seasonID string) ([]media.Episode, error) {
-	seasonNum, _ := strconv.Atoi(seasonID)
-	if seasonNum == 0 {
-		seasonNum = 1
-	}
-
-	// Generate a reasonable number of episodes per season.
-	numEpisodes := 10
-	episodes := make([]media.Episode, numEpisodes)
-	for i := 0; i < numEpisodes; i++ {
-		epNum := i + 1
-		episodes[i] = media.Episode{
-			Number: epNum,
-			Title:  fmt.Sprintf("Episode %d", epNum),
-			ID:     fmt.Sprintf("%d.%d", seasonNum, epNum),
-		}
-	}
-
-	return episodes, nil
+	return nil, fmt.Errorf("moviebox: episode listing unavailable; the detail endpoint requires authentication")
 }
 
 // GetServers returns a synthetic server for direct streaming.

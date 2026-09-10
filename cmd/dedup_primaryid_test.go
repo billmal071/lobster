@@ -20,7 +20,7 @@ func TestDeduplicateKeepsPrimaryProviderID(t *testing.T) {
 	fallback := [][]media.SearchResult{{{
 		ID: "movie/1930", Title: "The Amazing Spider-Man", Year: "2012",
 		Type: media.Movie, Poster: "http://img/t.jpg",
-		URL:  "https://tmdb/movie/1930", Duration: "136 min",
+		URL: "https://tmdb/movie/1930", Duration: "136 min",
 	}}}
 
 	merged := deduplicateResults(primary, fallback)

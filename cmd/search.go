@@ -219,6 +219,62 @@ func printDetail(r media.SearchResult, d *media.ContentDetail) {
 	fmt.Fprintln(os.Stderr)
 }
 
+// The TUI's download dialog cannot build the fallback chain itself: that needs
+// the configured primary and the health store, both of which live in cmd.
+// Without this wiring the dialog is an error message for any primary that
+// cannot enumerate episodes.
+//
+// It is wired here rather than in searchRun because searchRun reopens the
+// browser in a loop, and Bubble Tea does not wait for its Cmd goroutines at
+// shutdown — a leaked fetchEpisodes could still be reading this var while the
+// next iteration wrote it. The value was the same both times, so nothing
+// misbehaved, but it was an unsynchronised write to a package var all the
+// same. Assigning once, before any goroutine exists, removes the question.
+func init() {
+	tui.EpisodeListFallback = tuiEpisodeListFallback
+}
+
+// tuiEpisodeListFallback is tui.EpisodeListFallback: the chain's answer for a
+// season the TUI's own provider could not list.
+func tuiEpisodeListFallback(prov provider.Provider, item media.SearchResult, seasonNumber int) ([]media.Episode, error) {
+	a := fallbackEpisodeList(prov, item, seasonNumber)
+	if a == nil {
+		return nil, fmt.Errorf("no fallback provider could list season %d of %q", seasonNumber, item.Title)
+	}
+	return a.episodes, nil
+}
+
+// episodeIndex is the position of the episode numbered n, or -1. It is the
+// one lookup that decides whether a request is honoured or refused, so it is
+// named rather than repeated: leaving the index at its zero value on a miss is
+// exactly how a request for episode 47 came back as a successful play of
+// episode 1.
+func episodeIndex(episodes []media.Episode, n int) int {
+	for i, ep := range episodes {
+		if ep.Number == n {
+			return i
+		}
+	}
+	return -1
+}
+
+// seasonIndex is episodeIndex for seasons, or -1.
+func seasonIndex(seasons []media.Season, n int) int {
+	for i, s := range seasons {
+		if s.Number == n {
+			return i
+		}
+	}
+	return -1
+}
+
+// selectItem is ui.Select as a package var, seamed like agentProvider and
+// newPlayer so a test can drive the season and episode menus without a
+// terminal. The menus are not decoration: a provider that cannot enumerate
+// episodes used to fabricate a list, and the only way to check that the list
+// now offered is a real one is to look at what the menu was handed.
+var selectItem = ui.Select
+
 // resolveAndPlay handles season/episode selection for TV and then plays.
 func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, episode int) error {
 	// Selection time is the first moment the content type is known on every
@@ -245,6 +301,15 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	episodeID := ""
 	title := selected.Title
 
+	// chainPrimary is the provider that was configured, kept apart from p
+	// because the episode-list recovery below rebinds p to whichever chain
+	// member could answer. The fallback chain is built by *excluding* its
+	// argument (fallbackProviders, cmd/fallback.go), so passing the rebound p
+	// to anything that builds one would drop the single provider proven to
+	// have this show, this season and this episode list, and add back the
+	// primary that could not list it.
+	chainPrimary := p
+
 	// Live channels are endless streams; ffmpeg-to-file would never finish.
 	if _, isLive := p.(*provider.LiveTV); isLive && flagDownload != "" {
 		return fmt.Errorf("live channels cannot be downloaded")
@@ -259,7 +324,39 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// Primary provider can't resolve seasons — try fallback stream
 			debugf("primary provider seasons failed: %v, trying fallbacks", err)
 			fmt.Fprintf(os.Stderr, "Provider has no season data, trying fallbacks...\n")
-			fbStream, fbErr := tryFallbackStream(p, selected, season, episode)
+			// A requested season has to exist somewhere before the resolver is
+			// asked for it. tryFallbackStream resolves a StreamProvider by
+			// NUMBER — the episode ID is built arithmetically from season and
+			// episode (internal/resolver/probe.go) — so it will happily stream
+			// season 5 of a show that has three, and the run then reports a
+			// finished watch of a season nobody has. That is the
+			// silent-substitution bug this path exists to prevent, one branch
+			// over, and it is also `episodes --season 5` answering no_results
+			// about the very ref `play --season 5` just played.
+			//
+			// Only positive evidence refuses. If some chain member enumerated
+			// seasons and none carries this one, the number is wrong. If
+			// nothing in the chain can enumerate at all, there is no evidence
+			// either way, and refusing would break the case this branch is
+			// for: a StreamProvider that serves episodes without ever listing
+			// them. Note the residual asymmetry that leaves — `episodes` still
+			// answers no_results there, because it has no list to print, while
+			// `play` goes ahead on a number the user supplied.
+			if season > 0 {
+				if hits := fallbackSeasonHits(chainPrimary, contentRequest(selected)); len(hits) > 0 {
+					enumerated := false
+					for _, h := range hits {
+						if _, ok := pickSeason(h.seasons, season); ok {
+							enumerated = true
+							break
+						}
+					}
+					if !enumerated {
+						return errSeasonNotFound{season: season, title: title}
+					}
+				}
+			}
+			fbStream, fbErr := tryFallbackStream(chainPrimary, selected, season, episode)
 			if fbErr != nil {
 				if err != nil {
 					return fmt.Errorf("getting seasons: %w", err)
@@ -273,13 +370,51 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			return fmt.Errorf("no seasons found")
 		}
 
+		// providerID is the key p answers to. It starts as the work's own ID
+		// and follows p if either recovery below moves playback to a chain
+		// provider. selected.ID stays put: it is the identity history is
+		// keyed on (cmd/session.go), so it has to mean the same work whichever
+		// provider ended up answering this run.
+		providerID := selected.ID
+
 		// Select season (or use provided)
 		seasonIdx := 0
 		if season > 0 {
-			for i, s := range seasons {
-				if s.Number == season {
-					seasonIdx = i
-					break
+			// A requested number absent from a list the provider really did
+			// return is an error, not a fallback to index 0. Leaving it at 0
+			// played season one and reported success, so the caller was told
+			// it got the season it asked for.
+			seasonIdx = seasonIndex(seasons, season)
+			if seasonIdx < 0 {
+				// One season list is not the show. VidNest's GetSeasons stops
+				// at the first season it cannot probe for streams, so a real,
+				// non-empty list can still be short of the show — and
+				// `episodes` already asks the rest of the chain before
+				// refusing. Making the same move here is what keeps the two
+				// commands agreeing on one ref: without it, `episodes --season
+				// 5` printed the season and `play --season 5` answered "not
+				// found", pointing the caller at the command that had just
+				// listed it.
+				//
+				// The season comes from a chain provider's own list, so
+				// playback moves to that provider — the same rule the
+				// episode-list recovery below follows, and for the same
+				// reason: the numbers offered are numbers it will honour. Only
+				// the provider-call key moves with it, never selected.ID.
+				alt, altSeasons, altSel, ok := seasonAcrossHits(
+					chainPrimary, contentRequest(selected),
+					seasonAnswer{provider: p, id: providerID, seasons: seasons, fromPrimary: true},
+					season,
+				)
+				if !ok {
+					return errSeasonNotFound{season: season, title: title}
+				}
+				debugf("season %d recovered from %T", altSel.Number, alt.provider)
+				p, providerID, seasons = alt.provider, alt.id, altSeasons
+				// The season came out of this very list, so the lookup cannot
+				// miss; clamp anyway rather than index with -1.
+				if seasonIdx = seasonIndex(seasons, altSel.Number); seasonIdx < 0 {
+					seasonIdx = 0
 				}
 			}
 		} else {
@@ -297,7 +432,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				seasonItems = append(batchItems, seasonItems...)
 			}
 
-			seasonIdx, err = ui.Select("Season", seasonItems)
+			seasonIdx, err = selectItem("Season", seasonItems)
 			if err != nil {
 				return err
 			}
@@ -334,24 +469,115 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 
 		// Get episodes
 		stopEps := ui.StartSpinner("Fetching episodes...")
-		episodes, err := p.GetEpisodes(selected.ID, selectedSeason.ID)
+		episodes, err := p.GetEpisodes(providerID, selectedSeason.ID)
 		stopEps()
-		if err != nil {
-			return fmt.Errorf("getting episodes: %w", err)
-		}
+		if err != nil || len(episodes) == 0 {
+			// The primary has season data but cannot enumerate this season's
+			// episodes. MovieBox and VidNest are exactly that shape: their
+			// season counts are measured while their episode listings are
+			// not available at all, and they now say so rather than
+			// generating a list nobody can tell from a real one.
+			//
+			// Ask the chain for the list first, exactly as `episodes` does.
+			// A list is what most of this function needs: interactive use
+			// passes no --episode at all, so without one there is no menu to
+			// offer and every show under such a primary is an error. It also
+			// buys back playlist continuity — a session built from a real
+			// list can go to the next episode, which a single resolved stream
+			// cannot.
+			//
+			// The list is a chain provider's own, so playback moves to that
+			// provider too: the numbers offered are numbers it will honour.
+			// Only the provider-call key moves with it, not selected.ID.
+			debugf("primary provider episodes failed: %v (%d episodes), trying fallbacks", err, len(episodes))
+			fmt.Fprintf(os.Stderr, "Provider has no episode list, trying fallbacks...\n")
 
-		if len(episodes) == 0 {
-			return fmt.Errorf("no episodes found")
+			answer := fallbackEpisodeList(chainPrimary, selected, selectedSeason.Number)
+			// A requested episode must be in the list before the session is
+			// built on it. A chain provider can have a real but shorter list
+			// than the show — a currently-airing season, say — and playing
+			// the nearest entry instead is the silent-substitution bug this
+			// whole path exists to prevent. When the number is absent the
+			// resolver below still gets its turn, and it needs no list.
+			if answer != nil && (episode == 0 || episodeIndex(answer.episodes, episode) >= 0) {
+				debugf("episode list recovered from %T (%d episodes)", answer.hit.provider, len(answer.episodes))
+				p = answer.hit.provider
+				providerID = answer.hit.id
+				seasons = answer.hit.seasons
+				// The season came out of this very list, so the lookup
+				// cannot miss; clamp anyway rather than index with -1.
+				if seasonIdx = seasonIndex(seasons, answer.season.Number); seasonIdx < 0 {
+					seasonIdx = 0
+				}
+				selectedSeason = answer.season
+				episodes = answer.episodes
+				err = nil
+			} else if episode > 0 {
+				// A caller who already knows which episode it wants does not
+				// need a list: the fallback resolver reaches a StreamProvider
+				// through Watch with an episode ID built arithmetically from
+				// season and episode (tryStreamProviderFallback,
+				// internal/resolver/probe.go), so this mirrors the branch
+				// above for a primary that cannot enumerate seasons.
+				//
+				// chainPrimary, not p: the season recovery above may already
+				// have moved p to a chain member, and the chain excludes
+				// whoever it is handed. That member has this show; the
+				// configured primary is the one that could not answer.
+				fbStream, fbErr := tryFallbackStream(chainPrimary, selected, selectedSeason.Number, episode)
+				if fbErr == nil {
+					return playStream(fbStream, title, selected, selectedSeason.Number, episode)
+				}
+				debugf("fallback stream failed: %v", fbErr)
+			}
+		}
+		if err != nil || len(episodes) == 0 {
+			// A list that arrived with an error is not a list: the provider
+			// said it could not finish, and treating the part it managed as
+			// the season is the fabrication bug in another form — a menu two
+			// entries long for a 22-episode season, a playlist that ends
+			// early, and success reported throughout. err is cleared above
+			// when the chain supplies a real list, which is the only way past
+			// this gate with something in hand.
+			//
+			// Out of options, so say who could not answer and what to do
+			// instead. "episode listing unavailable" on its own leaves a user
+			// under a MovieBox or VidNest primary with a dead end.
+			//
+			// `episodes` is not a second search — the recovery above already
+			// asked the same chain — but it is a different report: it prints
+			// the seasons and the episode numbers a chain provider does have
+			// (fallbackSeasonHits/firstEpisodeList, cmd/episodes.go). That is
+			// what a caller needs here, because this path refuses a requested
+			// number the chain's list lacks rather than substituting a
+			// neighbour, and a refusal is only actionable once you can see
+			// which numbers exist.
+			//
+			// The --episode hint is only offered when no episode was
+			// requested: with one, tryFallbackStream just failed above, so
+			// suggesting it would send the caller back to what did not work.
+			remedy := "list them with 'lobster episodes --ref ...', which asks every fallback provider"
+			if episode == 0 {
+				remedy += ", or pass --episode N to play a known episode without a list"
+			}
+			if err != nil {
+				return fmt.Errorf("%s cannot list season %d of %q: %w (%s)", providerLabel(p), selectedSeason.Number, title, err, remedy)
+			}
+			return fmt.Errorf("%s returned no episodes for season %d of %q (%s)", providerLabel(p), selectedSeason.Number, title, remedy)
 		}
 
 		// Select episode (or use provided)
 		episodeIdx := 0
 		if episode > 0 {
-			for i, ep := range episodes {
-				if ep.Number == episode {
-					episodeIdx = i
-					break
-				}
+			// Same rule as the season above, and the same bug: an episode
+			// missing from a real list silently played episode one. The list
+			// being unavailable is a different case entirely and was handled
+			// above by handing the request to the fallback resolver, which
+			// needs no list — so refusing here cannot break a provider that
+			// never enumerates episodes.
+			episodeIdx = episodeIndex(episodes, episode)
+			if episodeIdx < 0 {
+				return fmt.Errorf("season %d of %q has no episode %d (list them with 'lobster episodes --ref ...')", selectedSeason.Number, title, episode)
 			}
 		} else {
 			episodeItems := make([]string, len(episodes))
@@ -369,7 +595,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				episodeItems = append(batchItems, episodeItems...)
 			}
 
-			episodeIdx, err = ui.Select("Episode", episodeItems)
+			episodeIdx, err = selectItem("Episode", episodeItems)
 			if err != nil {
 				return err
 			}
@@ -378,7 +604,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			if flagDownload != "" {
 				if episodeIdx == 0 {
 					// Download all episodes
-					return batchDownload(p, selected, episodes, selectedSeason)
+					return batchDownload(chainPrimary, selected, episodes, selectedSeason)
 				} else if episodeIdx == 1 {
 					// Download range
 					for {
@@ -395,7 +621,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 							fmt.Fprintln(os.Stderr, "No episodes matched the range.")
 							continue
 						}
-						return batchDownload(p, selected, matched, selectedSeason)
+						return batchDownload(chainPrimary, selected, matched, selectedSeason)
 					}
 				}
 				// Offset index by 2 for injected batch options
@@ -407,7 +633,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		debugf("episode: %d (ID: %s)", selectedEpisode.Number, selectedEpisode.ID)
 
 		// Create a playlist session for continuous playback
-		sess := playlist.New(p, selected, seasons, episodes, seasonIdx, episodeIdx)
+		sess := playlist.NewWithProviderID(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx)
 		cachedServerName = ""
 		return runPlaybackLoop(sess)
 	}
