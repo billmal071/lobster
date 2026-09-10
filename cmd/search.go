@@ -439,7 +439,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			debugf("primary provider episodes failed: %v (%d episodes), trying fallbacks", err, len(episodes))
 			fmt.Fprintf(os.Stderr, "Provider has no episode list, trying fallbacks...\n")
 
-			answer := fallbackEpisodeList(p, selected, selectedSeason.Number)
+			answer := fallbackEpisodeList(chainPrimary, selected, selectedSeason.Number)
 			// A requested episode must be in the list before the session is
 			// built on it. A chain provider can have a real but shorter list
 			// than the show — a currently-airing season, say — and playing
@@ -466,7 +466,12 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				// season and episode (tryStreamProviderFallback,
 				// internal/resolver/probe.go), so this mirrors the branch
 				// above for a primary that cannot enumerate seasons.
-				fbStream, fbErr := tryFallbackStream(p, selected, selectedSeason.Number, episode)
+				//
+				// chainPrimary, not p: the season recovery above may already
+				// have moved p to a chain member, and the chain excludes
+				// whoever it is handed. That member has this show; the
+				// configured primary is the one that could not answer.
+				fbStream, fbErr := tryFallbackStream(chainPrimary, selected, selectedSeason.Number, episode)
 				if fbErr == nil {
 					return playStream(fbStream, title, selected, selectedSeason.Number, episode)
 				}
