@@ -18,17 +18,150 @@ func TestMayStreamTorrent(t *testing.T) {
 	}{
 		{"no config at all", nil, false},
 		{"yts as the base resolves to magnets", &config.Config{Base: "yts"}, true},
-		// Base reaches this from a flag as well as the file, and neither is
-		// case-normalised on the way in.
+		// config.Validate lower-cases Base before any reader sees it, so a
+		// loud spelling does not reach here from a real run. The EqualFold
+		// below is what covers a cfg assembled without Validate — which is
+		// what every fixture in this file is.
 		{"yts spelled loudly", &config.Config{Base: "YTS"}, true},
+		// newProvider matches by substring, so `base = "yts.mx"` — documented
+		// as a valid value in GUIDE.md's source table — builds the real YTS
+		// provider and resolves magnets. An equality test here answered false
+		// for it: no re-exec, the mmap backend, and the SIGBUS the re-exec
+		// exists to prevent. Both readers now go through config.IsYTSBase.
+		{"a yts domain is still a yts base", &config.Config{Base: "yts.mx"}, true},
+		{"a yts domain spelled loudly", &config.Config{Base: "  YTS.MX  "}, true},
 		{"the fallback can reach yts from any base", &config.Config{Base: "flixhq.to", TorrentFallback: true}, true},
 		{"an http provider with no fallback never streams", &config.Config{Base: "flixhq.to"}, false},
 		{"an empty base with no fallback never streams", &config.Config{}, false},
+		// The default. base = "auto" routes every movie to YTS
+		// (routeByType, cmd/typeroute.go), so the default install streams
+		// torrents and needs the backend that cannot SIGBUS just as much as
+		// an explicit --base yts does.
+		{"the auto base routes movies to yts", &config.Config{Base: config.BaseAuto}, true},
+		// Deliberately not a claim about routing: this fixture can only see
+		// mayStreamTorrent, and mayStreamTorrent is the one reader of Base
+		// that folds case. Whether a loudly spelled auto actually routes
+		// movies to YTS depends on baseIsAuto and newProvider agreeing too,
+		// and that is asserted end to end in
+		// TestALoudlySpelledAutoIsAutoForEveryReaderOfBase (autobase_test.go).
+		{"an unvalidated loud auto still reads as auto here", &config.Config{Base: "AUTO"}, true},
+		// api_url overrides Base entirely — newProvider returns a Consumet
+		// client for a non-empty APIURL and never reads Base (cmd/provider.go)
+		// — so `api_url` alongside `base = "yts"` gets Consumet, and no magnet
+		// is reachable. baseIsAuto reads APIURL for the same reason, so the
+		// per-type route does not reach YTS either. Saying true here is not
+		// free: it re-execs, or on Windows prints an ungated SIGBUS notice.
+		{"api_url overrides an explicit yts base", &config.Config{Base: "yts", APIURL: "http://127.0.0.1:3000"}, false},
+		{"api_url overrides the auto base", &config.Config{Base: config.BaseAuto, APIURL: "http://127.0.0.1:3000"}, false},
+		// The exception, and why torrent_fallback is answered before api_url:
+		// fallbackProviders appends YTS whenever the setting is on, whatever
+		// the primary is (cmd/fallback.go) — a Consumet primary included — so
+		// a failed resolution can still end on a magnet.
+		{"the fallback still reaches yts behind an api_url", &config.Config{Base: "yts", APIURL: "http://127.0.0.1:3000", TorrentFallback: true}, true},
 	}
+	// The Base arms are read after --json and --download, so pin both: an
+	// inherited flagDownload would turn the auto rows false and hide a
+	// regression in the arm under test.
+	withOutputFlags(t, false, "")
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			if got := mayStreamTorrent(c.cfg); got != c.want {
 				t.Errorf("mayStreamTorrent(%+v) = %v, want %v", c.cfg, got, c.want)
+			}
+		})
+	}
+}
+
+// withOutputFlags sets the two flags that make a run produce output rather
+// than playback, and restores them afterwards.
+func withOutputFlags(t *testing.T, jsonOut bool, dl string) {
+	t.Helper()
+	prevJSON, prevDL := flagJSON, flagDownload
+	flagJSON, flagDownload = jsonOut, dl
+	t.Cleanup(func() { flagJSON, flagDownload = prevJSON, prevDL })
+}
+
+// Under the auto base the route is the only thing that reaches YTS, and
+// routeByType returns early for both --json and --download, so neither run can
+// open a magnet however it ends. Saying "yes" for one of them costs a re-exec,
+// or on Windows (canExec false) an ungated SIGBUS notice on stderr.
+//
+// This covers the output flags only. It says nothing about which subcommand is
+// running: `lobster version` passes neither flag, so this function answered
+// "yes" for it and every other non-playback command until the gate moved to
+// loadConfig. That gate is asserted in
+// TestOnlyCommandsThatCanPlayChooseTheStorageBackend (storagegate_test.go),
+// which watches the call rather than the environment — the
+// TORRENT_STORAGE_DEFAULT_FILE_IO that TestMain presets makes the mechanism
+// itself a no-op under test, so any fixture reading the environment would see
+// nothing.
+func TestMayStreamTorrentUnderAutoIgnoresRunsTheRouteRefuses(t *testing.T) {
+	auto := &config.Config{Base: config.BaseAuto}
+
+	t.Run("--json is never routed to YTS", func(t *testing.T) {
+		withOutputFlags(t, true, "")
+		if mayStreamTorrent(auto) {
+			t.Fatalf("mayStreamTorrent said a --json run may open a magnet; routeByType returns early for it")
+		}
+	})
+	t.Run("--download is never routed to YTS", func(t *testing.T) {
+		withOutputFlags(t, false, t.TempDir())
+		if mayStreamTorrent(auto) {
+			t.Fatalf("mayStreamTorrent said a --download run may open a magnet; routeByType returns early for it")
+		}
+	})
+	t.Run("a plain auto run still may", func(t *testing.T) {
+		withOutputFlags(t, false, "")
+		if !mayStreamTorrent(auto) {
+			t.Fatalf("mayStreamTorrent said a default install cannot stream; the route sends every movie to YTS")
+		}
+	})
+}
+
+// The other two arms are the user naming a torrent source outright, and those
+// do not go through the route at all: --base yts makes YTS the primary and
+// torrent_fallback puts it in the fallback chain, both of which resolve a
+// magnet. --download does not change that — playStream stands up the local
+// torrent server and fetches from loopback — so unlike the auto arm, these two
+// must still answer yes under it. (--json is the one flag that overrides them,
+// asserted in TestMayStreamTorrentSaysNoUnderJSONWhateverTheSource.)
+func TestMayStreamTorrentKeepsAnExplicitTorrentSourceUnderDownload(t *testing.T) {
+	withOutputFlags(t, false, t.TempDir())
+	for _, c := range []struct {
+		name string
+		cfg  *config.Config
+	}{
+		{"--base yts", &config.Config{Base: "yts"}},
+		{"torrent_fallback", &config.Config{Base: "flixhq.to", TorrentFallback: true}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if !mayStreamTorrent(c.cfg) {
+				t.Fatalf("mayStreamTorrent(%+v) = false under --download; the user named a torrent source, and --download streams it over loopback", c.cfg)
+			}
+		})
+	}
+}
+
+// --json is not a routing question, so the auto arm is the wrong place for it:
+// playStream refuses a magnet outright before it looks at anything else
+// (cmd/search.go), so NO run with --json set can open a torrent, whichever arm
+// would otherwise say yes. The yts and torrent_fallback arms short-circuited
+// above that check and answered true, which costs a re-exec — or, on Windows
+// where canExec is false, an ungated SIGBUS notice printed on stderr ahead of
+// the JSON the caller is parsing.
+func TestMayStreamTorrentSaysNoUnderJSONWhateverTheSource(t *testing.T) {
+	withOutputFlags(t, true, "")
+	for _, c := range []struct {
+		name string
+		cfg  *config.Config
+	}{
+		{"--base yts", &config.Config{Base: "yts"}},
+		{"torrent_fallback", &config.Config{Base: "flixhq.to", TorrentFallback: true}},
+		{"auto", &config.Config{Base: config.BaseAuto}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if mayStreamTorrent(c.cfg) {
+				t.Fatalf("mayStreamTorrent(%+v) = true under --json; playStream refuses a magnet before anything can open one", c.cfg)
 			}
 		})
 	}

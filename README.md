@@ -309,20 +309,38 @@ history = true
 auto_next = true
 download_dir = "~/Videos/lobster"
 
-# Provider selection (default: moviebox)
-# Available: moviebox, flixhq.to, flixhq.ws, soap2day, kimcartoon, yts
+# Provider selection (default: auto)
+# "auto" means "no preference": movies play from YTS where YTS carries them,
+# series always go to a scraping source (YTS has no TV catalogue), and
+# anything YTS does not carry falls back to soap2day. Any other value is an
+# explicit choice and is used for both content types.
+# Available: auto, moviebox, flixhq.to, flixhq.ws, soap2day, kimcartoon,
+# vaplayer, vidnest, tbcpl, 1shows.org, allanime, yts
 # All other providers are automatically used as fallbacks.
-# base = "moviebox"
+# What each value covers, and which of them cannot list a series' episodes, is
+# in GUIDE.md -> "Content sources"; `lobster doctor` reports which are working
+# right now. Changing base loses in-progress resume positions, because history
+# is keyed on the provider's own ID — see GUIDE.md -> "Changing source loses
+# your resume positions".
+# base = "auto"
 
 # yts is BitTorrent, not HTTP streaming. It plays while downloading, but it
 # also makes you a participant in the swarm: your IP is visible to every peer
 # and to the monitoring firms that sit in them, which ordinary streaming never
-# does. Use a VPN, or use one of the HTTP providers above. Needs a 64-bit
-# build. Pieces land in a temp directory and are removed when playback ends.
+# does. This applies to the default install, because "auto" plays movies from
+# YTS — set base = "soap2day" (or any other explicit source, or api_url) and
+# leave torrent_fallback false to never join a swarm. Otherwise use a VPN.
+# Needs a 64-bit build, or the classic storage backend, which lobster selects
+# for you on a run that may stream a torrent (GUIDE.md -> "Torrent storage
+# backend"). Pieces land in a temp directory and are removed when playback ends.
 
 # Optional: use a consumet API backend instead of the built-in scraper.
 # Self-host from: https://github.com/consumet/api.consumet.org
-# When set, lobster uses this API for search, streaming, etc.
+# When set, lobster uses this API for search, streaming, etc. It overrides
+# `base` entirely, and counts as an explicit source: movies are not routed to
+# YTS. With torrent_fallback left false, such a run never joins a swarm —
+# torrent_fallback = true puts YTS back in the fallback chain whatever api_url
+# says.
 # api_url = "https://your-consumet-instance.example.com"
 
 # Live TV sources. See "Live TV and Sports" above.

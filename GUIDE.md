@@ -247,6 +247,24 @@ Config file: `~/.config/lobster/config.toml`
 # Default player (mpv, vlc, iina, celluloid)
 player = "mpv"
 
+# Content source (default: "auto")
+#
+# "auto" means "no preference", and lets lobster pick per content type: a
+# movie is played from YTS where YTS carries it, and a series always goes to
+# a scraping source, because YTS has no TV catalogue at all. Series and
+# anything YTS does not carry fall back to soap2day, the general-purpose
+# source "auto" maps to.
+#
+# Any other value is an explicit choice and is used for every title of either
+# type — lobster never overrides it. Same for `--base` on the command line.
+# Set it, and leave torrent_fallback false, if you would rather never join a
+# torrent swarm:
+#   base = "soap2day"
+# Available: auto, soap2day, moviebox, flixhq.to, flixhq.ws, kimcartoon,
+# vaplayer, vidnest, tbcpl, 1shows.org, allanime, yts
+# See "Content sources" below for what each one covers.
+base = "auto"
+
 # Preferred streaming server (Vidcloud, UpCloud)
 provider = "Vidcloud"
 
@@ -267,12 +285,102 @@ auto_next = true
 download_dir = "~/Videos/lobster"
 
 # Fall back to YTS torrents when every streaming provider fails.
-# Off by default on purpose: YTS resolves to a magnet, so this makes lobster
-# join a BitTorrent swarm, and your IP is visible to its peers. `--base yts`
-# always works without this — the setting only controls automatic fallback.
-# Torrent sources can be played but not downloaded with --download.
+#
+# This is NOT the swarm opt-in, and leaving it false does not keep you out of
+# a swarm: the default `base = "auto"` already plays movies from YTS, so a
+# default install joins one for films. To never join a swarm, choose an
+# explicit source instead — `base = "soap2day"` — and leave this false.
+#
+# What this setting controls is the other direction: letting a *failed* stream
+# resolution end up on a torrent — for a series, for a film YTS does not
+# carry, and under a base you chose explicitly. Off by default because a swarm
+# reached by choosing "auto" is documented, while one reached because a
+# scraper broke is not. `--base yts` always works without this.
+#
+# Torrent sources can be downloaded as well as played: lobster serves the
+# torrent over loopback and --download fetches from there. Note that
+# downloading this way still joins the swarm, so your IP is visible to its
+# peers for the whole download.
+#
+# Two paths refuse a torrent outright. The TUI's download queue is one. The
+# other is --json: a magnet is not a URL a JSON consumer can open, and the
+# loopback URL would die with the process that printed it, so the run fails
+# with "resolved to a torrent, which --json cannot express as a playable URL".
+# Play it without --json, or use --download to fetch it first.
 torrent_fallback = false
 ```
+
+### Content sources
+
+`base` (and `--base`) names the *primary* source: the one searched first, the
+one asked to enumerate a series' seasons and episodes, and the starting point
+for stream resolution. It does not pin the stream — every playback path still
+falls back to the rest of the chain when the primary cannot serve a title, so
+for **playback** naming a source that does not carry something is not fatal,
+just slower.
+
+`lobster episodes` is not covered by that. When the primary cannot enumerate a
+ref's seasons it re-searches the chain by title, but a fallback's result is
+only accepted if its title matches the ref's after normalisation. A show the
+two spell differently — `Marvel's Agents of S.H.I.E.L.D.` in the ref against
+`Agents of S.H.I.E.L.D.` on the fallback — is rejected, and `episodes` exits 2
+with `no seasons found`. `play --ref` has no such check, so it plays the very
+ref `episodes --ref` cannot list. If `episodes` says a ref has no seasons, name
+a source that carries the series (`--base soap2day`) rather than the one the
+ref was found under.
+
+This table is about **scope** — what a source covers and what it structurally
+cannot do. It says nothing about whether a site is up today; that changes week
+to week, and `lobster doctor` is the live answer ("Check which providers work,
+and where the others break"). Run it before concluding a source is broken.
+
+| `base` | Covers | Worth knowing |
+| --- | --- | --- |
+| `auto` (default) | Films and series | Automatic routing: you name no source, so lobster picks one per content type. `soap2day` is the general source `auto` maps to, and the primary every `auto` run searches with. A film is then looked up on YTS by title and year and played from there when both agree. A series is not — YTS is never even queried for one, because it has no TV catalogue — so it stays on `soap2day`, and if `soap2day` cannot enumerate its seasons, playback falls back to the chain, which re-searches every source by title. Films YTS has no match for stay on `soap2day` too. The YTS lookup covers ordinary playback only: `--download` and `--json` runs stay on `soap2day`, the first so a download you did not ask to make over BitTorrent does not silently join a swarm, the second because a magnet is not a URL a JSON consumer can open. Asking for it outright still works — `--base yts --download <dir>` downloads from YTS perfectly well. An explicit `base`, `--base`, or an `api_url` overrides all of this. |
+| `soap2day` | Films and series | The general-purpose source `auto` falls back to. |
+| `vaplayer` | Films and series | General-purpose, API-based. |
+| `flixhq.to`, `flixhq.ws` | Films and series | Scraper-based. `flixhq.ws` was the default before `auto`. Both check their domain at startup and try known alternates (plus any `domain_overrides`) when it is unreachable. |
+| `tbcpl`, `1shows.org` | Films and series | The same provider against the same site: `tbcpl` resolves to `https://www.1shows.org`, `1shows.org` to `https://1shows.org`. Honours `audio_language` for multi-dub releases. |
+| `kimcartoon` | Cartoons and anime | Domain-checked like FlixHQ. |
+| `allanime` | Anime | No longer part of the automatic fallback chain — its sources endpoint is crypto-gated behind a bot challenge — so it is reachable only by naming it here. `lobster doctor` reports whether it answers. |
+| `moviebox` | Films | **Cannot enumerate episodes.** Its episode listing is generated, not fetched: every season returns exactly ten placeholder rows, so a 22-episode season lists as 10. (The season count itself comes from search metadata, and is 1 for any ID MovieBox did not find itself.) Fine for films. |
+| `vidnest` | Films | **Cannot enumerate episodes**, the same way: every season lists episodes 1–50 whether they exist or not. Fine for films. |
+| `yts` | Films only | No TV catalogue at all, so a series named under `--base yts` is played from the fallback chain instead — for playback, `--base yts` pins nothing for a series. `lobster episodes` under it can still fail outright, per the note above. Resolves to a **magnet**, so playback joins a BitTorrent swarm and your IP is visible to its peers; lobster serves it over loopback, so `--download` works too, but the swarm is joined either way. If no peer answers within 90 seconds the run gives up with "the swarm may be dead". |
+
+**A value lobster does not recognise is not an error.** Values are matched by
+substring, so anything still containing a known name works — `flixhq.xx` is
+read as `flixhq`, `soap2days` as `soap2day`. Anything else falls through to
+`moviebox`, which cannot enumerate episodes: `--base sopa2day`
+plays films but reports every season as ten episodes. If a series suddenly
+lists exactly ten, check the spelling of `base` first.
+
+`api_url` is the one way to name a source that does not go through `base` at
+all: when it is set it replaces `base` entirely, and the value of `base` is
+ignored.
+
+### Changing source loses your resume positions
+
+Watch history is keyed on the provider's own ID, and IDs are not portable
+between providers. Changing `base` — including the upgrade that made `auto`
+the default, which moved the primary from `flixhq.ws` to `soap2day` — means
+in-progress titles are looked up under an ID that is not in your history:
+they restart from zero, and finishing one adds a second row for the same
+title rather than updating the first.
+
+The old rows are not deleted — they stay in `history.tsv` and are still listed
+by `lobster history` — but they are no longer reachable. `lobster history`
+re-searches the *current* primary and plays the row whose ID matches the saved
+one; under a different `base` no result carries that ID, so it drops you into
+the picker for that title and playback starts from the beginning.
+
+To keep existing positions on the source you were using before, pin it:
+
+```toml
+base = "flixhq.ws"
+```
+
+Resuming *across* sources needs the history file to identify a title by
+something portable rather than by provider ID, which is a change of its own.
 
 ### Torrent storage backend
 
@@ -282,9 +390,17 @@ another mapping of it is still live, and reading the truncated tail raises
 `SIGBUS` — a signal, not a Go error, so lobster dies mid-playback with no
 recoverable failure.
 
-Lobster avoids this for you. When a run could open a magnet — `--base yts`, or
-`torrent_fallback = true` — it restarts itself once at startup with the safer
-backend selected:
+Lobster avoids this for you. When a playback command could open a magnet — the
+default `base = "auto"` (which plays movies from YTS), any `base` naming YTS
+(`yts`, `yts.mx`, …), or `torrent_fallback = true` — it restarts itself once at
+startup with the safer backend selected:
+
+Under `auto` the restart follows the route, so the cases that suppress the YTS
+lookup suppress the restart too: `--json`, `--download`, and a configured
+`api_url` (which overrides `base` entirely) all stay on the default backend,
+because none of them can reach a magnet. `torrent_fallback = true` is
+independent of all three — it puts YTS in the fallback chain whatever source
+you named — so it always restarts.
 
 ```sh
 TORRENT_STORAGE_DEFAULT_FILE_IO=classic
@@ -303,6 +419,16 @@ Two things worth knowing:
 - **On Windows there is no way to restart in place**, so lobster prints a
   warning instead. Set the variable in your environment before launching to get
   the safe backend there.
+- **Commands that cannot play do not restart.** `version`, `find`, `episodes`,
+  `doctor` and `channels` never reach playback, so they neither restart nor
+  print the Windows warning.
+- **A ref can name a torrent source too late.** `play --ref` adopts the base
+  the ref was found under, and that happens after the backend has been chosen,
+  so a ref minted under `--base yts` played from a config with an explicit
+  non-torrent base streams on whichever backend that run was given. Restarting
+  at that point would replay the command, so lobster prints the same warning
+  instead. Pass `--base yts` explicitly, or set the variable, to get the safe
+  backend for those runs.
 
 Set it to anything other than `classic` or `mmap` and the library panics during
 startup, before lobster can report it — the message will be a bare Go panic
@@ -343,6 +469,10 @@ tbcpl_include_untrusted = false
 -q, --quality <quality>     Video quality: 360 | 480 | 720 | 1080 | best
     --player <player>       Player: mpv | vlc | iina | celluloid
 -x, --debug                 Debug logging to stderr
+    --base <source>         Content source (default: auto — YTS for movies,
+                            a scraping source for series). An explicit value
+                            is used for both types. See "Content sources"
+                            above for what each value covers.
 ```
 
 ## Troubleshooting

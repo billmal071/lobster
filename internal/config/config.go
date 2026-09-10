@@ -14,8 +14,24 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// BaseAuto is the Base value meaning "let lobster choose the source".
+//
+// It is the default because there is no single source that serves both
+// content types well: measured 2026-09-09, flixhq.ws — the previous default —
+// answered TV season enumeration with HTTP 404, and YTS has no TV catalogue at
+// all. Naming the absence of a choice lets the per-type routing apply without
+// ever second-guessing a base the user did pick.
+const BaseAuto = "auto"
+
 // Config holds all application configuration.
 type Config struct {
+	// Base names the content source. The default is the sentinel "auto",
+	// which means "no preference": lobster maps it to a live general-purpose
+	// source and is free to pick a different one per content type (see
+	// cmd/typeroute.go). Any other value is an explicit choice and is used
+	// verbatim for every title, whatever its type. A non-empty APIURL is an
+	// explicit choice too, and overrides this field entirely (newProvider,
+	// cmd/provider.go).
 	Base                   string              `toml:"base"`
 	APIURL                 string              `toml:"api_url"`
 	Player                 string              `toml:"player"`
@@ -42,6 +58,15 @@ type Config struct {
 	// magnet, so falling back to it joins a BitTorrent swarm and exposes the
 	// user's IP to its peers. That is worth doing on request, not silently
 	// because a scraper broke.
+	//
+	// It is not the swarm opt-in, and must not be read as one: the default
+	// Base of "auto" already routes every movie to YTS (cmd/typeroute.go), so
+	// a default install swarms for films whatever this is set to. Naming a
+	// source is what stops the *route* reaching YTS — an explicit non-YTS
+	// Base, or an APIURL, which overrides Base entirely — but it is not on its
+	// own an opt-out either: fallbackProviders appends YTS whenever this is
+	// true, regardless of Base or APIURL (cmd/fallback.go). Staying out of a
+	// swarm takes both — a named source and this left false.
 	TorrentFallback bool         `toml:"torrent_fallback"`
 	LiveTV          LiveTVConfig `toml:"live_tv"`
 }
@@ -90,7 +115,7 @@ func (c LiveTVConfig) Sources() []string {
 // Default returns the default configuration.
 func Default() *Config {
 	return &Config{
-		Base:                   "flixhq.ws",
+		Base:                   BaseAuto,
 		Player:                 "mpv",
 		Provider:               "Default",
 		SubsLanguage:           "english",
@@ -149,6 +174,59 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// NormalizeBase returns the canonical spelling of a base value.
+//
+// Base has three readers that do not compare it the same way —
+// mayStreamTorrent case-insensitively, baseIsAuto exactly, and newProvider by
+// substring (cmd/root.go, cmd/typeroute.go, cmd/provider.go) — so an
+// un-normalized value can be "auto" for one of them and unrecognized for the
+// rest. `base = "AUTO"` was read as auto by mayStreamTorrent, refused the
+// per-type route at baseIsAuto, and fell through newProvider's chain to
+// MovieBox, the provider that answers a 22-episode season with 10 fabricated
+// rows. A ref stamped " yts " was worse: newProvider's substring match handed
+// the run real YTS and a magnet while mayStreamTorrent answered false, so the
+// late-storage warning stayed silent and the magnet was served on the
+// memory-mapped backend.
+//
+// Exported so every entry point for a base value can canonicalize through the
+// same routine. Callers that reject an empty base must test the result, not
+// the input: a whitespace-only base normalizes to "".
+func NormalizeBase(base string) string {
+	return strings.ToLower(strings.TrimSpace(base))
+}
+
+// IsYTSBase reports whether a base value names YTS, the one source that
+// resolves to a magnet rather than an HTTP stream.
+//
+// One predicate, because two readers disagreeing about the spelling of a base
+// is the bug NormalizeBase was written for, one level up. cmd.newProvider
+// selects YTS by substring (a base is allowed to be a domain: the note under
+// GUIDE.md's source table promises that "values are matched by substring, so
+// anything still containing a known name works", giving `yts.mx` the same
+// standing it gives `flixhq.xx`), while cmd.mayStreamTorrent tested it for
+// equality with "yts" — so `base = "yts.mx"` got the real YTS provider and a
+// magnet while mayStreamTorrent answered false, which skips the re-exec onto
+// the storage backend that cannot SIGBUS and silences applyRefBase's late-ref
+// warning.
+// Both call this now, so a new YTS spelling cannot be known to one and not the
+// other.
+//
+// Substring, not equality, to match what newProvider actually does. It agrees
+// with newProvider exactly for every value that reaches it today — no base
+// newProvider matches ahead of YTS contains "yts", which
+// TestEveryReaderOfBaseAgreesAboutYTS pins against the whole documented table. A
+// hypothetical future base that contained both would get the other provider
+// and a true answer here, which costs one needless re-exec: the direction this
+// function is documented to fail in (cmd.mayStreamTorrent).
+//
+// The input is normalized here rather than assumed, because callers see Base
+// at different points: cmd.newProvider reads a cfg.Base that Validate has
+// already canonicalised, while cmd.mayStreamTorrent is handed a *Config
+// directly and is asked before some of them are validated.
+func IsYTSBase(base string) bool {
+	return strings.Contains(NormalizeBase(base), "yts")
+}
+
 // Validate checks config values are within acceptable bounds.
 func (c *Config) Validate() error {
 	validPlayers := map[string]bool{
@@ -183,6 +261,12 @@ func (c *Config) Validate() error {
 	}
 	c.Quality = quality
 
+	// Normalize, don't just tolerate — see NormalizeBase for why. Validate
+	// covers two of the three inputs: the file at Load, and --base at
+	// applyConfig's re-validation. The third, a ref's stamped base, never
+	// reaches Validate at all and calls NormalizeBase itself (applyRefBase,
+	// cmd/play.go).
+	c.Base = NormalizeBase(c.Base)
 	if c.Base == "" {
 		return fmt.Errorf("base URL cannot be empty")
 	}
