@@ -57,7 +57,13 @@ var ytsRouteTimeout = multiSearchTimeout
 // configured their own backend leaves Base sitting at its "auto" default. On
 // Base alone that reads as "no preference" and sends every movie to YTS —
 // away from the source they explicitly configured.
-func baseIsAuto() bool { return cfg == nil || (cfg.APIURL == "" && cfg.Base == config.BaseAuto) }
+// A nil cfg answers false, not true. An absent config is not a user expressing
+// no preference, and the two answers are not symmetric: "auto" is the one that
+// sends a film to YTS and puts the run in a swarm, so "we cannot tell" must
+// mean "do not route" — the same reasoning yearsAgree uses for a missing year.
+// mayStreamTorrent already answers false for a nil config (cmd/root.go), so
+// this is also what keeps the two readers agreeing about the same absence.
+func baseIsAuto() bool { return cfg != nil && cfg.APIURL == "" && cfg.Base == config.BaseAuto }
 
 // yearsAgree reports whether two release years describe the same work,
 // allowing one year of slack: catalogues disagree by a year over festival

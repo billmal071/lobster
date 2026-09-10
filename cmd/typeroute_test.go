@@ -721,3 +721,57 @@ func TestRouteByTypeRefusesADifferentFilmFromTheSameYear(t *testing.T) {
 		t.Fatalf("routed ID = %q, want the selection untouched: the user picked The Matrix, not its sequel", routed.ID)
 	}
 }
+
+// The one-year slack is a deliberate width, not a rounding: catalogues
+// disagree by a year over festival versus general release, and over a December
+// film listed under the following year. Two years apart is a different film.
+//
+// Pinned in both directions because nothing else does: widening the comparison
+// from d <= 1 to d <= 2 was invisible to the whole suite, and a widened gate
+// admits exactly the remake case the gate was added to refuse.
+func TestYearsAgreeIsExactlyOneYearWide(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"2021", "2021", true},
+		{"2021", "2022", true},
+		{"2022", "2021", true},
+		{"2021", "2023", false},
+		{"2023", "2021", false},
+		{"1984", "2021", false},
+		// Absence of evidence is not agreement: the caller is choosing
+		// whether to swap one film for another, where "we cannot tell" must
+		// mean "do not".
+		{"", "2021", false},
+		{"2021", "", false},
+		{"", "", false},
+		{"nineteen-eighty-four", "1984", false},
+		{" 2021 ", "2021", true},
+	} {
+		if got := yearsAgree(c.a, c.b); got != c.want {
+			t.Errorf("yearsAgree(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+// An absent config is not a user expressing no preference.
+//
+// baseIsAuto's nil arm used to answer "auto", which is the direction that
+// routes a film to YTS and puts the run in a BitTorrent swarm. mayStreamTorrent
+// already answers false for a nil config (cmd/root.go), so the two disagreed
+// about the same missing config — one saying "no torrent", the other "route to
+// the torrent source". Unreachable today, which is exactly why it needs pinning
+// rather than leaving to be discovered.
+func TestBaseIsAutoRefusesToRouteWithoutAConfig(t *testing.T) {
+	saved := cfg
+	t.Cleanup(func() { cfg = saved })
+
+	cfg = nil
+	if baseIsAuto() {
+		t.Error("baseIsAuto() = true with no config; an absent config must not route a film into a swarm")
+	}
+	if mayStreamTorrent(cfg) {
+		t.Error("mayStreamTorrent(nil) = true; the two readers must agree about a missing config")
+	}
+}
