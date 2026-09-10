@@ -633,8 +633,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		debugf("episode: %d (ID: %s)", selectedEpisode.Number, selectedEpisode.ID)
 
 		// Create a playlist session for continuous playback
-		sess := playlist.NewWithProviderID(p, selected, providerID, seasons, episodes, seasonIdx, episodeIdx)
-		sess.ChainPrimary = chainPrimary
+		sess := playlist.NewWithProviderID(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx)
 		cachedServerName = ""
 		return runPlaybackLoop(sess)
 	}

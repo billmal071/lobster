@@ -154,6 +154,8 @@ func recoveredSessionForTest(prov *stubStreamProvider) *playlist.Session {
 		prov,
 		media.SearchResult{ID: "tv/s", Title: "S", Type: media.TV},
 		"chain/other-id",
+		// nil: this fixture exercises the ProviderID split, not the chain.
+		nil,
 		[]media.Season{{Number: 1, ID: "s1"}},
 		[]media.Episode{{Number: 3, ID: "ep3"}},
 		0, 0,

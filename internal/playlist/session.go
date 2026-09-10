@@ -66,7 +66,7 @@ type Session struct {
 // New creates a Session positioned at the given season and episode, whose
 // provider answers to the content's own ID.
 func New(p provider.Provider, content media.SearchResult, seasons []media.Season, episodes []media.Episode, seasonIdx, episodeIdx int) *Session {
-	return NewWithProviderID(p, content, content.ID, seasons, episodes, seasonIdx, episodeIdx)
+	return NewWithProviderID(p, content, content.ID, nil, seasons, episodes, seasonIdx, episodeIdx)
 }
 
 // NewWithProviderID is New for a session whose provider is not the one
@@ -77,15 +77,25 @@ func New(p provider.Provider, content media.SearchResult, seasons []media.Season
 // Passing that ID here instead of overwriting content.ID is the whole point.
 // content.ID is what history is keyed on (cmd/session.go), so it has to mean
 // the same work on every run regardless of who answered.
-func NewWithProviderID(p provider.Provider, content media.SearchResult, providerID string, seasons []media.Season, episodes []media.Episode, seasonIdx, episodeIdx int) *Session {
+//
+// chainPrimary is taken as a parameter rather than assigned afterwards because
+// recovery splits Provider two ways at once, and a constructor that closed
+// only one of them invited the other to be forgotten: ProviderID travels with
+// Provider, ChainPrimary stays with the configured source. Omitting it left
+// ChainBase returning Provider, so fallbackProviders would exclude the one
+// source proven to have the work and re-add the primary that could not list
+// it. Every caller now states its answer, and nil — meaning "chain around
+// Provider" — is a visible choice rather than an absent field.
+func NewWithProviderID(p provider.Provider, content media.SearchResult, providerID string, chainPrimary provider.Provider, seasons []media.Season, episodes []media.Episode, seasonIdx, episodeIdx int) *Session {
 	return &Session{
-		Provider:   p,
-		Content:    content,
-		ProviderID: providerID,
-		Seasons:    seasons,
-		Episodes:   episodes,
-		SeasonIdx:  seasonIdx,
-		EpisodeIdx: episodeIdx,
+		Provider:     p,
+		Content:      content,
+		ProviderID:   providerID,
+		ChainPrimary: chainPrimary,
+		Seasons:      seasons,
+		Episodes:     episodes,
+		SeasonIdx:    seasonIdx,
+		EpisodeIdx:   episodeIdx,
 	}
 }
 

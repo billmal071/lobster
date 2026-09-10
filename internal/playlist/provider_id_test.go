@@ -27,7 +27,8 @@ func sessionForSeasonCrossing(p *idRecordingProvider, providerID string) *Sessio
 	}}
 	content := media.SearchResult{ID: "tv/1403", Title: "Test Show", Type: media.TV}
 	seasons := []media.Season{{Number: 1, ID: "s1"}, {Number: 2, ID: "s2"}}
-	return NewWithProviderID(p, content, providerID, seasons, p.episodes["s1"], 0, 0)
+	// nil: this fixture exercises the ProviderID split, not the chain.
+	return NewWithProviderID(p, content, providerID, nil, seasons, p.episodes["s1"], 0, 0)
 }
 
 // Crossing a season boundary is the one place the session talks to its
