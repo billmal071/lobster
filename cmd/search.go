@@ -317,6 +317,13 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			return fmt.Errorf("no seasons found")
 		}
 
+		// providerID is the key p answers to. It starts as the work's own ID
+		// and follows p if either recovery below moves playback to a chain
+		// provider. selected.ID stays put: it is the identity history is
+		// keyed on (cmd/session.go), so it has to mean the same work whichever
+		// provider ended up answering this run.
+		providerID := selected.ID
+
 		// Select season (or use provided)
 		seasonIdx := 0
 		if season > 0 {
@@ -326,7 +333,36 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// it got the season it asked for.
 			seasonIdx = seasonIndex(seasons, season)
 			if seasonIdx < 0 {
-				return fmt.Errorf("season %d not found for %q (list them with 'lobster episodes --ref ...')", season, title)
+				// One season list is not the show. VidNest's GetSeasons stops
+				// at the first season it cannot probe for streams, so a real,
+				// non-empty list can still be short of the show — and
+				// `episodes` already asks the rest of the chain before
+				// refusing. Making the same move here is what keeps the two
+				// commands agreeing on one ref: without it, `episodes --season
+				// 5` printed the season and `play --season 5` answered "not
+				// found", pointing the caller at the command that had just
+				// listed it.
+				//
+				// The season comes from a chain provider's own list, so
+				// playback moves to that provider — the same rule the
+				// episode-list recovery below follows, and for the same
+				// reason: the numbers offered are numbers it will honour. Only
+				// the provider-call key moves with it, never selected.ID.
+				alt, altSeasons, altSel, ok := seasonAcrossHits(
+					chainPrimary, contentRequest(selected),
+					seasonAnswer{provider: p, id: providerID, seasons: seasons, fromPrimary: true},
+					season,
+				)
+				if !ok {
+					return fmt.Errorf("season %d not found for %q (list them with 'lobster episodes --ref ...')", season, title)
+				}
+				debugf("season %d recovered from %T", altSel.Number, alt.provider)
+				p, providerID, seasons = alt.provider, alt.id, altSeasons
+				// The season came out of this very list, so the lookup cannot
+				// miss; clamp anyway rather than index with -1.
+				if seasonIdx = seasonIndex(seasons, altSel.Number); seasonIdx < 0 {
+					seasonIdx = 0
+				}
 			}
 		} else {
 			seasonItems := make([]string, len(seasons))
@@ -377,13 +413,6 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 
 		selectedSeason := seasons[seasonIdx]
 		debugf("season: %d (ID: %s)", selectedSeason.Number, selectedSeason.ID)
-
-		// providerID is the key p answers to. It starts as the work's own ID
-		// and follows p if the episode-list recovery below moves playback to a
-		// chain provider. selected.ID stays put: it is the identity history is
-		// keyed on (cmd/session.go), so it has to mean the same work whichever
-		// provider ended up answering this run.
-		providerID := selected.ID
 
 		// Get episodes
 		stopEps := ui.StartSpinner("Fetching episodes...")

@@ -133,9 +133,29 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 		}
 	}
 	if !found {
-		// A real, non-empty season list that lacks this number. This is the
-		// silent-S1E1 bug: resolveAndPlay would leave seasonIdx at 0 and play
-		// season one while reporting success.
+		// A real, non-empty season list that lacks this number. That is either
+		// the silent-S1E1 bug — resolveAndPlay would leave seasonIdx at 0 and
+		// play season one while reporting success — or a primary that
+		// undercounts, which is a different thing entirely.
+		//
+		// VidNest's GetSeasons probes each season for streams and stops at the
+		// first it cannot reach, so a real, non-empty list is not proof the
+		// show ends there. `episodes` asks the chain before refusing
+		// (seasonAcrossHits), and if this gate refused on the primary's list
+		// alone the two commands would contradict each other on one ref:
+		// `episodes --season 5` printing the season, `play --season 5`
+		// answering no_results and pointing the caller back at the command
+		// that had just listed it.
+		//
+		// A chain hit that has the season is not a verdict of its own, only a
+		// reason not to refuse here: resolveAndPlay repeats the move and picks
+		// the provider that will actually serve the episode.
+		if _, _, _, ok := seasonAcrossHits(p, seasonRequest(r), seasonAnswer{
+			provider: p, id: r.ID, seasons: seasons, fromPrimary: true,
+		}, season); ok {
+			debugf("play: the primary's season list lacks %d but a chain hit has it; deferring to the resolver", season)
+			return nil
+		}
 		return emitErr("no_results", exitNoResults,
 			"season %d not found for %q (list them with 'lobster episodes --ref ...')", season, r.Title)
 	}

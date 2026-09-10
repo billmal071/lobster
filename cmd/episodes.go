@@ -75,7 +75,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		// does — and `--season 5` was no_results for a show another chain
 		// member lists in full. Episodes already ask every hit; seasons did
 		// not.
-		src, seasons, sel, ok = seasonAcrossHits(primary, r, src, wantSeason)
+		src, seasons, sel, ok = seasonAcrossHits(primary, seasonRequest(r), src, wantSeason)
 		p = src.provider
 	}
 	if !ok {
@@ -141,9 +141,24 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 // Every other chain call in this file goes through seasonsWithContext or
 // episodesWithContext; this one did not, and a chain provider slow to list
 // episodes could hold `episodes` for the HTTP client's own timeout — around
-// 30s against the 5s the command otherwise promises. The primary keeps its
-// unbounded call: it is the user's own configured provider, it is asked
+// 30s, six times the bound every other chain phase honours. The primary keeps
+// its unbounded call: it is the user's own configured provider, it is asked
 // exactly once, and no fan-out is waiting on it.
+//
+// What the command as a whole promises is a bound per chain phase, not one
+// across them. It can serialise three — seasonAcrossHits' scan, this call, and
+// firstEpisodeList's every-hit scan — each at episodesFallbackTimeout, so the
+// worst case is around three times that, plus the primary's own unbounded
+// GetSeasons and GetEpisodes.
+//
+// One shared deadline across the three would be a tighter promise and was
+// tried; it is the wrong one. A single wedged provider first in chain order
+// spends the entire budget inside the scan — fallbackSeasonHits must wait for
+// it, because provider order decides the winner — and the healthy provider's
+// episode list, already in hand, can then never be fetched. Sharing turns a
+// command that answered in a little over 5s into one that reports
+// providers_failed, which is what TestEpisodesFallbackScanIsBounded catches.
+// A bounded wait for a real answer beats a tighter bound on a failure.
 func listSeasonEpisodes(p provider.Provider, src seasonAnswer, sel media.Season) ([]media.Episode, error) {
 	if src.fromPrimary {
 		return p.GetEpisodes(src.id, sel.ID)
@@ -245,10 +260,17 @@ func seasonSource(primary provider.Provider, r playRef) seasonAnswer {
 //
 // The scan only has to run when the season list came from the primary; a
 // chain-sourced answer already carries its alternatives.
-func seasonAcrossHits(primary provider.Provider, r playRef, src seasonAnswer, wantSeason int) (seasonAnswer, []media.Season, media.Season, bool) {
+//
+// It takes a resolver.Request rather than a playRef because both agent
+// commands make this move and only one of them has a ref: play reaches it from
+// a media.SearchResult (contentRequest). They have to make it identically —
+// `episodes` advertising a season `play` then refuses is the agent workflow
+// breaking in the middle, and seasonSource's own rule is that the two commands
+// agree on what one ref means.
+func seasonAcrossHits(primary provider.Provider, req resolver.Request, src seasonAnswer, wantSeason int) (seasonAnswer, []media.Season, media.Season, bool) {
 	alts := src.alts
 	if src.fromPrimary {
-		alts = fallbackSeasonHits(primary, seasonRequest(r))
+		alts = fallbackSeasonHits(primary, req)
 	}
 	for i, h := range alts {
 		sel, ok := pickSeason(h.seasons, wantSeason)

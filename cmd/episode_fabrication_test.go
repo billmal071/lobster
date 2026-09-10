@@ -700,8 +700,28 @@ func TestResolveAndPlayDoesNotSubstituteAnotherSeasonForSeasonZero(t *testing.T)
 // as having fewer seasons than it does.
 type shortSeasonLister struct{ *stubProvider }
 
-// fiveSeasonLister has the same show and all five of its seasons.
-type fiveSeasonLister struct{ *stubProvider }
+// fiveSeasonLister has the same show and all five of its seasons. It streams
+// too, so a play that reaches it can be told apart from one that refuses.
+type fiveSeasonLister struct {
+	*stubProvider
+	url string
+
+	mu      sync.Mutex
+	watched []string
+}
+
+func (p *fiveSeasonLister) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+	p.mu.Lock()
+	p.watched = append(p.watched, episodeID)
+	p.mu.Unlock()
+	return &media.Stream{URL: p.url}, nil
+}
+
+func (p *fiveSeasonLister) episodesWatched() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.watched...)
+}
 
 func newShortSeasonLister() *shortSeasonLister {
 	return &shortSeasonLister{&stubProvider{
@@ -713,8 +733,10 @@ func newShortSeasonLister() *shortSeasonLister {
 	}}
 }
 
-func newFiveSeasonLister() *fiveSeasonLister {
-	return &fiveSeasonLister{&stubProvider{
+func newFiveSeasonLister() *fiveSeasonLister { return newFiveSeasonListerAt("") }
+
+func newFiveSeasonListerAt(url string) *fiveSeasonLister {
+	return &fiveSeasonLister{url: url, stubProvider: &stubProvider{
 		results: []media.SearchResult{{ID: "tv/full-1", Title: "Some Show", Type: media.TV}},
 		seasons: []media.Season{
 			{ID: "f1", Number: 1}, {ID: "f2", Number: 2}, {ID: "f3", Number: 3},
@@ -1102,5 +1124,78 @@ func TestRecoveredSessionKeepsTheAnsweringProviderInItsChain(t *testing.T) {
 	}
 	if n := pl.played(); n != 1 {
 		t.Fatalf("player started %d time(s), want 1", n)
+	}
+}
+
+// seasonSource's own doc comment states the rule: "The two commands must agree
+// on what one ref means." Widening the season lookup across chain hits gave
+// `episodes` a recovery that `play` did not have, so the agent workflow
+// find -> episodes --season 5 -> play --season 5 --episode 1 succeeded at step
+// two and exited no_results at step three, pointing the caller at the very
+// command that had just listed the season.
+//
+// One test, both commands, one fixture pair: a primary that undercounts (the
+// shape VidNest's GetSeasons has — it probes each season for streams and stops
+// at the first it cannot reach) and a chain member that has the show in full.
+func TestPlayAndEpisodesAgreeOnASeasonThePrimaryUndercounts(t *testing.T) {
+	hostileEnv(t)
+	pl := &countingPlayer{stubPlayerImpl: stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}}}
+	playStreamHarness(t, pl)
+	buf := captureAgentOut(t)
+
+	fb := newFiveSeasonListerAt(stubStreamServer(t))
+	withFallbackChain(t, fb)
+	// The primary has the ref and answers about it — it is simply missing the
+	// later seasons, which is why nothing on the play side ever consulted the
+	// chain about them.
+	primary := &stubProvider{seasons: []media.Season{{ID: "p1", Number: 1}}}
+	withStubProvider(t, primary)
+
+	prevCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return true, "" }
+	t.Cleanup(func() { agentPlayerCheck = prevCheck })
+
+	ref := tvRef(t, "")
+
+	withEpisodesFlags(t, ref, 5)
+	episodesErr := episodesRun(episodesCmd, nil)
+	var listed struct {
+		Season   int `json:"season"`
+		Episodes []struct {
+			Number int `json:"number"`
+		} `json:"episodes"`
+	}
+	if episodesErr == nil {
+		if err := json.Unmarshal(buf.Bytes(), &listed); err != nil {
+			t.Fatalf("bad JSON from episodes: %v (%q)", err, buf.String())
+		}
+	}
+
+	prevEpisode := flagEpisode
+	flagEpisode = 1
+	t.Cleanup(func() { flagEpisode = prevEpisode })
+	buf.Reset()
+	playErr := playRun(playCmd, nil)
+
+	// The agreement itself. Either both commands have season 5 or neither
+	// does; "episodes lists it, play refuses it" is the state that breaks the
+	// workflow, whichever way round.
+	if (episodesErr == nil) != (playErr == nil) {
+		t.Fatalf("episodes = %v but play = %v; the two commands must agree on what one ref means", episodesErr, playErr)
+	}
+	// And the answer they agree on has to be the true one: the chain really
+	// does have season 5, so agreeing to refuse it would be the wrong half of
+	// the recovery deleted rather than the missing half added.
+	if episodesErr != nil {
+		t.Fatalf("neither command found season 5, which a chain member lists in full: %v", episodesErr)
+	}
+	if listed.Season != 5 || len(listed.Episodes) != 1 || listed.Episodes[0].Number != 1 {
+		t.Fatalf("episodes listed season %d with %+v, want season 5 episode 1", listed.Season, listed.Episodes)
+	}
+	if got := fb.episodesWatched(); len(got) != 1 || got[0] != "f5e1" {
+		t.Fatalf("the chain was asked to stream %v, want the season 5 episode it listed (f5e1)", got)
+	}
+	if n := pl.played(); n != 1 {
+		t.Fatalf("player started %d time(s), want 1 — the episode episodes had just listed", n)
 	}
 }

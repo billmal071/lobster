@@ -352,6 +352,15 @@ func playHarness(t *testing.T, p *stubProvider, ref string, season, episode int)
 	hostileEnv(t)
 	captureAgentOut(t)
 
+	// An empty fallback chain. validateSeasonEpisode asks the chain before
+	// refusing a season the primary's list lacks — a primary can undercount,
+	// and `episodes` makes the same move — so without this these tests build
+	// the real chain and go to the network, which is both slow and not what
+	// they are about. The guarantee they pin is "the primary's list really
+	// lacks it and nothing else has it either", and an empty chain is exactly
+	// that condition.
+	withFallbackChain(t)
+
 	prevCheck := agentPlayerCheck
 	agentPlayerCheck = func() (bool, string) { return true, "" }
 	t.Cleanup(func() { agentPlayerCheck = prevCheck })
