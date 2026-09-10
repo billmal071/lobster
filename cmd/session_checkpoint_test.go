@@ -140,3 +140,88 @@ func TestPlayCurrentEpisodeNoCheckpointWhenHistoryDisabled(t *testing.T) {
 		t.Fatal("checkpoint callback installed with cfg.History disabled")
 	}
 }
+
+// A session whose provider-call key is NOT its history key — the state every
+// chain recovery leaves behind.
+//
+// sessionForTest uses playlist.New, so ProviderKey() and Content.ID coincide
+// there and every identity assertion built on it is blind: substituting one
+// for the other changes nothing. That blindness is why the two guarantees
+// below went unpinned. This constructor makes them differ, so the substitution
+// has somewhere to show.
+func recoveredSessionForTest(prov *stubStreamProvider) *playlist.Session {
+	return playlist.NewWithProviderID(
+		prov,
+		media.SearchResult{ID: "tv/s", Title: "S", Type: media.TV},
+		"chain/other-id",
+		[]media.Season{{Number: 1, ID: "s1"}},
+		[]media.Episode{{Number: 3, ID: "ep3"}},
+		0, 0,
+	)
+}
+
+// Resume keys on the work, not on whoever served it.
+//
+// #58 gave the session path its own resume lookup; #61 split the provider-call
+// key away from the history key. After a chain recovery the two differ, and a
+// lookup that keyed on ProviderKey() would find no row — silently restarting a
+// part-watched episode from zero — or match a row under another provider's
+// numbering. Substituting one for the other survived the whole suite.
+func TestSessionResumeKeysOnTheWorkNotTheProvider(t *testing.T) {
+	stub := &stubPlayerImpl{result: player.PlayResult{Position: 1000, Duration: 5400}}
+	playStreamHarness(t, stub)
+
+	prevCont := flagContinue
+	flagContinue = true
+	t.Cleanup(func() { flagContinue = prevCont })
+
+	// A part-watched row filed under the WORK's id, which is what any earlier
+	// run would have written.
+	if err := history.Save(media.HistoryEntry{
+		ID: "tv/s", Title: "S", Type: media.TV,
+		Season: 1, Episode: 3, Position: 900, Duration: 5400,
+	}); err != nil {
+		t.Fatalf("seeding history: %v", err)
+	}
+
+	prov := &stubStreamProvider{stream: &media.Stream{URL: "http://127.0.0.1:1/never-dialed.m3u8"}}
+	if err := playCurrentEpisode(recoveredSessionForTest(prov)); err != nil {
+		t.Fatalf("playCurrentEpisode: %v", err)
+	}
+
+	if got := stub.lastPos; got != 900 {
+		t.Errorf("episode started at %v, want 900: after a chain recovery the resume lookup must key on Content.ID, not the chain provider's key", got)
+	}
+}
+
+// The mid-playback checkpoint files under the work's id too.
+//
+// This is the write a hard shutdown leaves behind, so getting it wrong loses
+// the position in exactly the case checkpointing exists for. The exit-time
+// save was already pinned; this one was not.
+func TestSessionCheckpointFilesUnderTheWorkNotTheProvider(t *testing.T) {
+	stub := &stubCheckpointPlayer{
+		stubPlayerImpl: stubPlayerImpl{result: player.PlayResult{Position: 1234, Duration: 5400}},
+		fire:           true,
+		mid:            [2]float64{600, 5400},
+	}
+	playStreamHarness(t, stub)
+
+	prov := &stubStreamProvider{stream: &media.Stream{URL: "http://127.0.0.1:1/never-dialed.m3u8"}}
+	if err := playCurrentEpisode(recoveredSessionForTest(prov)); err != nil {
+		t.Fatalf("playCurrentEpisode: %v", err)
+	}
+
+	entries, err := history.Load()
+	if err != nil {
+		t.Fatalf("loading history: %v", err)
+	}
+	for _, e := range entries {
+		if e.ID != "tv/s" {
+			t.Errorf("history row filed under %q, want tv/s: the history identity must not follow the provider that answered", e.ID)
+		}
+	}
+	if len(entries) != 1 {
+		t.Errorf("history holds %d rows for one episode, want 1", len(entries))
+	}
+}
