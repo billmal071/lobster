@@ -85,7 +85,11 @@ func registerPersistentFlags(c *cobra.Command) {
 	// child re-applies this default itself.
 	fs.BoolVarP(&flagContinue, "continue", "c", true, "Auto-resume from history (--continue=false to start fresh)")
 	fs.BoolVarP(&flagJSON, "json", "j", false, "Output stream metadata as JSON")
-	fs.StringVar(&flagBase, "base", "", "Content source: flixhq.to | flixhq.ws | kimcartoon.com.co | soap2day | moviebox | vaplayer | vidnest | tbcpl | 1shows.org | allanime | yts")
+	// Kept to one line and in step with GUIDE.md's "Content sources" table,
+	// which is where each value's scope and limits are written down; an
+	// unrecognised value is not rejected but falls through to moviebox
+	// (newProvider, cmd/provider.go), which is worth knowing before typing one.
+	fs.StringVar(&flagBase, "base", "", "Content source: auto | soap2day | vaplayer | flixhq.to | flixhq.ws | tbcpl | 1shows.org | kimcartoon | allanime | moviebox | vidnest | yts (see GUIDE.md)")
 	fs.BoolVarP(&flagDebug, "debug", "x", false, "Debug logging to stderr")
 }
 
@@ -101,6 +105,15 @@ func init() {
 	rootCmd.AddCommand(trendingCmd)
 	rootCmd.AddCommand(recentCmd)
 	rootCmd.AddCommand(versionCmd)
+
+	// The commands that end in resolveAndPlay: the bare root (searchRun's
+	// interactive picker), play (agentResolveAndPlay), history (historyRun),
+	// and the two browse commands (trendingRun/recentRun).
+	markPlaybackCommand(rootCmd)
+	markPlaybackCommand(playCmd)
+	markPlaybackCommand(historyCmd)
+	markPlaybackCommand(trendingCmd)
+	markPlaybackCommand(recentCmd)
 }
 
 // loadConfig is the root's PersistentPreRunE, so it runs for the interactive
@@ -116,8 +129,53 @@ func loadConfig(cmd *cobra.Command, args []string) error {
 		}
 		return err
 	}
+
+	// The torrent library picks its storage backend in its own init(), so the
+	// only way onto the one that cannot SIGBUS is to start the process again
+	// with the variable already set. Do it here, once the effective base and
+	// fallback setting are known but before any search, network call or
+	// terminal setup — the re-exec replays argv, so anything the user would
+	// not want repeated must not have happened yet.
+	//
+	// Gated on the command, not on the output flags. This is
+	// PersistentPreRunE, so it runs for `version`, `doctor`, `find`,
+	// `episodes` and `channels` too, and none of them can reach a magnet: the
+	// per-type route to YTS runs from resolveAndPlay only. Flag-gating was
+	// tried and does not cover them — `version` passes neither --json nor
+	// --download, so it re-execed all the same, and on Windows (canExec
+	// false) planFileIo warns instead, printing a SIGBUS notice ahead of the
+	// version string. The flag conditions inside mayStreamTorrent still earn
+	// their place for the commands that do play; they are just not sufficient
+	// on their own.
+	if reachesPlayback(cmd) {
+		ensureSafeStorage(mayStreamTorrent(cfg), warnf)
+	}
 	return nil
 }
+
+// playbackCommands is the set of commands that can reach resolveAndPlay, and
+// so the set for which the torrent storage backend matters. Membership is
+// declared at registration (init) rather than inferred, because there is no
+// way to ask a cobra command what its RunE eventually calls.
+var playbackCommands = map[*cobra.Command]bool{}
+
+// markPlaybackCommand records that c can reach resolveAndPlay.
+func markPlaybackCommand(c *cobra.Command) { playbackCommands[c] = true }
+
+// reachesPlayback reports whether cmd can end in playback. A command absent
+// from the set is treated as one that cannot, which is the safe direction for
+// the wrong answer: the cost is a run that streams a torrent on the
+// memory-mapped backend only if a playback command is ever added without being
+// marked — and TestOnlyCommandsThatCanPlayChooseTheStorageBackend fails on any
+// unlisted command to stop exactly that.
+func reachesPlayback(cmd *cobra.Command) bool { return cmd != nil && playbackCommands[cmd] }
+
+// ensureSafeStorage is torrentstream.EnsureSafeStorage behind a package var.
+// The mechanism's own no-op path is environment-driven
+// (TORRENT_STORAGE_DEFAULT_FILE_IO, which this package's TestMain presets so a
+// test binary can never re-exec itself), so a test asserting on the environment
+// could not see whether the call happens at all. This seam can.
+var ensureSafeStorage = torrentstream.EnsureSafeStorage
 
 // applyConfig loads and merges configuration: defaults < config file < CLI flags.
 func applyConfig() error {
@@ -155,14 +213,6 @@ func applyConfig() error {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	// The torrent library picks its storage backend in its own init(), so the
-	// only way onto the one that cannot SIGBUS is to start the process again
-	// with the variable already set. Do it here, once the effective base and
-	// fallback setting are known but before any search, network call or
-	// terminal setup — the re-exec replays argv, so anything the user would
-	// not want repeated must not have happened yet.
-	torrentstream.EnsureSafeStorage(mayStreamTorrent(cfg), warnf)
-
 	if cfg.Debug {
 		log.SetOutput(os.Stderr)
 		log.SetPrefix("[lobster] ")
@@ -179,25 +229,109 @@ func applyConfig() error {
 	return nil
 }
 
-// debugf logs a message if debug mode is enabled.
 // mayStreamTorrent reports whether this run could open a magnet, which decides
 // whether the storage backend matters at all.
 //
-// YTS is the only provider that resolves to one, and it is reachable exactly
-// two ways: named as the base, or enabled as a fallback. Anything else resolves
-// to HTTP or HLS and never reaches the torrent client.
+// YTS is the only provider that resolves to one. Three ways of reaching it are
+// visible to this function, because all three are settled by the time it is
+// called: named as the base, enabled as a fallback, or reached by the per-type
+// route, which sends every movie to YTS whenever the user has named no source
+// of their own (routeByType and baseIsAuto, cmd/typeroute.go). Since that is
+// the *default* configuration, the third way is the common one — leaving it
+// out put the default install on
+// the memory-mapped backend, which is the SIGBUS this whole mechanism exists
+// to avoid. Anything else resolves to HTTP or HLS and never reaches the
+// torrent client.
+//
+// There is a fourth way, and it is deliberately not answered here: a ref
+// carries the base it was found under, and applyRefBase (cmd/play.go) copies
+// that into cfg.Base inside RunE — after this function has been consulted and
+// the backend decided. `lobster play --ref <ref minted under --base yts>`
+// under a configured `base = "soap2day"` therefore streams a magnet on
+// whichever backend a non-torrent run was given. It cannot be closed from
+// here: the value is not knowable until the ref is decoded, and re-execing
+// once it is would replay argv after the process has committed to the
+// invocation. applyRefBase warns instead
+// (torrentstream.WarnLateStorageRisk).
+//
+// It answers for the run, not for a particular selection, because it is
+// consulted before any search: under auto it cannot yet know whether the user
+// will pick a movie (routed to YTS) or a series (never routed there). The
+// conservative answer is the safe one — the cost of a false positive is one
+// re-exec, and of a false negative a process killed mid-playback.
 func mayStreamTorrent(c *config.Config) bool {
 	if c == nil {
 		return false
 	}
-	return strings.EqualFold(c.Base, "yts") || c.TorrentFallback
+	// --json is not a routing question, so it is read before any arm: the
+	// JSON branch of playStream (cmd/search.go) refuses a magnet outright and
+	// returns, before the local torrent server — the only place in the
+	// program that opens one — is ever stood up. So no --json run can reach a
+	// magnet, whichever arm would otherwise say yes, and saying yes is not
+	// free: it re-execs the process, or on Windows (canExec false) prints an
+	// ungated SIGBUS notice on stderr, ahead of the JSON the caller is
+	// parsing. Cobra parses flags before PersistentPreRunE, so this is
+	// populated by the time loadConfig calls this.
+	if flagJSON {
+		return false
+	}
+	// torrent_fallback first, and on its own: it is the one route to a magnet
+	// that api_url does not close. fallbackProviders appends YTS whenever the
+	// setting is on, whatever the primary is (cmd/fallback.go) — including a
+	// Consumet primary built from api_url — so a failed stream resolution can
+	// still end on a torrent.
+	if c.TorrentFallback {
+		return true
+	}
+	// api_url next, because it overrides Base entirely: newProvider returns a
+	// Consumet client for a non-empty APIURL and never reads Base at all
+	// (cmd/provider.go), so `api_url = "..."` with `base = "yts"` gets Consumet
+	// and never a magnet. It also refuses the per-type route (baseIsAuto), so
+	// no movie is sent to YTS either. With torrent_fallback already answered
+	// above, this leaves no way for the run to open one.
+	//
+	// Only the yts and auto arms are behind this, and both are Base arms — the
+	// value api_url overrides. Answering true for a run that cannot reach a
+	// magnet is not free: it re-execs the process, or on Windows (canExec
+	// false) prints an ungated SIGBUS notice on stderr.
+	if c.APIURL != "" {
+		return false
+	}
+	// The user naming a torrent source outright does not go through the route
+	// at all: --base yts makes YTS the primary, and it resolves a magnet for
+	// playback and for --download alike, which serves the torrent over
+	// loopback and fetches from there — so this is read before the --download
+	// arm below.
+	//
+	// config.IsYTSBase, not a comparison of our own: newProvider selects YTS
+	// by substring, so `base = "yts.mx"` (a documented value, GUIDE.md's
+	// source table) is a real YTS primary. An equality test here missed it and
+	// left that run on the mmap backend.
+	if config.IsYTSBase(c.Base) {
+		return true
+	}
+	// The auto arm mirrors routeByType's own conditions (cmd/typeroute.go),
+	// because under auto the route is the only thing that reaches YTS, and
+	// --download returns before its lookup — so no movie is routed to YTS
+	// under it, unlike the arms above where the user asked for the torrent
+	// source by name.
+	//
+	// Which subcommand is running is handled separately and earlier, by
+	// reachesPlayback — this function is only ever asked about a command that
+	// can play.
+	if flagDownload != "" {
+		return false
+	}
+	return strings.EqualFold(c.Base, config.BaseAuto)
 }
 
 // warnf reports something the user should know but that does not stop the run.
 // Unlike debugf it is not gated on the debug flag: a silent downgrade to a
 // backend that can kill the process is exactly the kind of thing that should
 // not need a flag to be seen.
-func warnf(format string, args ...any) {
+// A package var, not a plain func, so a test can observe what was warned about
+// without capturing os.Stderr.
+var warnf = func(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "lobster: "+format+"\n", args...)
 }
 

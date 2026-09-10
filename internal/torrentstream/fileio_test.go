@@ -1,6 +1,8 @@
 package torrentstream
 
 import (
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
@@ -104,3 +106,49 @@ func TestEnsureClassicFileIoIsSilentForANonStreamingRun(t *testing.T) {
 		t.Errorf("ensureClassicFileIo said %v for a run that cannot open a magnet", said)
 	}
 }
+
+// WarnLateStorageRisk is the answer for a run that discovers it needs a torrent
+// after the backend has been chosen. It must warn even where a re-exec would
+// have been possible, because by then it is not, and it must still respect a
+// backend the user chose for themselves.
+func TestWarnLateStorageRisk(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		willStream bool
+		env        *string
+		wantWarn   bool
+	}{
+		{name: "a late torrent source on an unchosen backend", willStream: true, wantWarn: true},
+		{name: "no torrent in the run", willStream: false, wantWarn: false},
+		{name: "the user chose classic", willStream: true, env: strptr(classicIo), wantWarn: false},
+		{name: "the user chose mmap and meant it", willStream: true, env: strptr("mmap"), wantWarn: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.env != nil {
+				t.Setenv(fileIoEnv, *tc.env)
+			} else {
+				prev, had := os.LookupEnv(fileIoEnv)
+				os.Unsetenv(fileIoEnv)
+				t.Cleanup(func() {
+					if had {
+						os.Setenv(fileIoEnv, prev)
+					}
+				})
+			}
+
+			var got []string
+			WarnLateStorageRisk(tc.willStream, func(f string, a ...any) {
+				got = append(got, fmt.Sprintf(f, a...))
+			})
+
+			if warned := len(got) > 0; warned != tc.wantWarn {
+				t.Fatalf("WarnLateStorageRisk(willStream=%v) warned=%v (%q), want %v", tc.willStream, warned, got, tc.wantWarn)
+			}
+			if tc.wantWarn && !strings.Contains(got[0], "SIGBUS") {
+				t.Fatalf("warning does not name the failure it is about: %q", got[0])
+			}
+		})
+	}
+}
+
+func strptr(s string) *string { return &s }
