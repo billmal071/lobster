@@ -1199,3 +1199,132 @@ func TestPlayAndEpisodesAgreeOnASeasonThePrimaryUndercounts(t *testing.T) {
 		t.Fatalf("player started %d time(s), want 1 — the episode episodes had just listed", n)
 	}
 }
+
+// A chain member that has the show and streams anything asked of it, but only
+// lists three seasons. The streaming half is the point: a StreamProvider
+// answers Watch for an episode ID built arithmetically from season and
+// episode, so it cannot refuse a season it does not have.
+func newThreeSeasonStreamerAt(url string) *fiveSeasonLister {
+	return &fiveSeasonLister{url: url, stubProvider: &stubProvider{
+		results: []media.SearchResult{{ID: "tv/three-1", Title: "Some Show", Type: media.TV}},
+		seasons: []media.Season{
+			{ID: "t1", Number: 1}, {ID: "t2", Number: 2}, {ID: "t3", Number: 3},
+		},
+		episodesBySeason: map[string][]media.Episode{
+			"t1": {{ID: "t1e1", Number: 1, Title: "Pilot"}},
+		},
+	}}
+}
+
+// The sibling of TestPlayAndEpisodesAgreeOnASeasonThePrimaryUndercounts, for
+// the season that exists NOWHERE — and the primary cannot enumerate at all, so
+// validateSeasonEpisode defers and resolveAndPlay takes its unenumerable
+// branch.
+//
+// That branch handed the request straight to tryFallbackStream, which resolves
+// a StreamProvider by number and never asks whether the number exists: play
+// exited 0 with {"status":"finished"} for season 5 of a show with three, while
+// `episodes --season 5` on the same ref answered no_results. Reporting a
+// finished watch of a season nobody has is the silent-substitution class this
+// PR exists to kill, one branch over from the case it already covers.
+func TestPlayAndEpisodesAgreeOnASeasonNothingHas(t *testing.T) {
+	hostileEnv(t)
+	pl := &countingPlayer{stubPlayerImpl: stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}}}
+	playStreamHarness(t, pl)
+	buf := captureAgentOut(t)
+
+	fb := newThreeSeasonStreamerAt(stubStreamServer(t))
+	withFallbackChain(t, fb)
+	withStubProvider(t, &stubProvider{seasonsErr: errProviderCannotList})
+
+	prevCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return true, "" }
+	t.Cleanup(func() { agentPlayerCheck = prevCheck })
+
+	ref := tvRef(t, "")
+
+	withEpisodesFlags(t, ref, 5)
+	episodesErr := episodesRun(episodesCmd, nil)
+
+	prevEpisode := flagEpisode
+	flagEpisode = 1
+	t.Cleanup(func() { flagEpisode = prevEpisode })
+	buf.Reset()
+	playErr := playRun(playCmd, nil)
+
+	if (episodesErr == nil) != (playErr == nil) {
+		t.Fatalf("episodes = %v but play = %v; the two commands must agree on what one ref means", episodesErr, playErr)
+	}
+	if playErr == nil {
+		t.Fatalf("play accepted season 5 of a show whose only chain member lists three seasons; it reported %q", buf.String())
+	}
+	// Nothing may be streamed, and no player may start: a refusal that still
+	// opened a stream would be the same bug wearing an error message.
+	if got := fb.episodesWatched(); len(got) != 0 {
+		t.Errorf("chain was asked to stream %v for a season nothing has", got)
+	}
+	if pl.played() != 0 {
+		t.Errorf("player started %d time(s) for a season nothing has", pl.played())
+	}
+	// And it must be the same answer the early gate gives, not a provider
+	// outage: an agent branching on "providers are down" versus "ask for a
+	// different season" branches wrongly if the code depends on which gate
+	// caught it.
+	var exit *exitError
+	if !errors.As(playErr, &exit) || exit.code != exitNoResults {
+		t.Errorf("play returned %v (exit %v), want exit %d: the same no_results validateSeasonEpisode gives, not providers_failed",
+			playErr, exitCodeOf(playErr), exitNoResults)
+	}
+	if !strings.Contains(playErr.Error(), "season 5 not found") {
+		t.Errorf("play said %q, want the same sentence the early gate gives", playErr)
+	}
+}
+
+// exitCodeOf reports the exit code an error carries, or -1, for messages.
+func exitCodeOf(err error) int {
+	var exit *exitError
+	if errors.As(err, &exit) {
+		return exit.code
+	}
+	return -1
+}
+
+// Which gate catches a missing season is not a property of the request.
+// validateSeasonEpisode defers whenever the primary cannot enumerate, and the
+// two gates run two independent chain scans with their own deadlines — so a
+// provider that answers the first and times out in the second moves the same
+// refusal from the early gate to the late one. It must still read the same to
+// the caller: an agent branching on "providers are down" versus "ask for a
+// different season" would otherwise branch wrongly at random.
+func TestALateSeasonRefusalStillExitsNoResults(t *testing.T) {
+	hostileEnv(t)
+	captureAgentOut(t)
+
+	prevCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return true, "" }
+	t.Cleanup(func() { agentPlayerCheck = prevCheck })
+
+	withStubProvider(t, &stubProvider{
+		results: []media.SearchResult{{ID: "tv/late-1", Title: "Some Show", Type: media.TV}},
+	})
+
+	prev := agentResolveAndPlay
+	agentResolveAndPlay = func(provider.Provider, media.SearchResult, int, int) error {
+		return errSeasonNotFound{season: 5, title: "Some Show"}
+	}
+	t.Cleanup(func() { agentResolveAndPlay = prev })
+
+	withEpisodesFlags(t, tvRef(t, ""), 5)
+	prevEpisode := flagEpisode
+	flagEpisode = 1
+	t.Cleanup(func() { flagEpisode = prevEpisode })
+
+	err := playRun(playCmd, nil)
+
+	if got := exitCodeOf(err); got != exitNoResults {
+		t.Errorf("a season that does not exist exited %d, want %d (no_results); it is not a provider outage", got, exitNoResults)
+	}
+	if err == nil || !strings.Contains(err.Error(), "season 5 not found") {
+		t.Errorf("play said %v, want the same sentence validateSeasonEpisode gives", err)
+	}
+}

@@ -14,9 +14,9 @@ import (
 // playCurrentEpisode never touches the fallback chain.
 type stubStreamProvider struct{ stream *media.Stream }
 
-func (p *stubStreamProvider) Search(string) ([]media.SearchResult, error)      { return nil, nil }
-func (p *stubStreamProvider) GetDetails(string) (*media.ContentDetail, error)  { return nil, nil }
-func (p *stubStreamProvider) GetSeasons(string) ([]media.Season, error)        { return nil, nil }
+func (p *stubStreamProvider) Search(string) ([]media.SearchResult, error)     { return nil, nil }
+func (p *stubStreamProvider) GetDetails(string) (*media.ContentDetail, error) { return nil, nil }
+func (p *stubStreamProvider) GetSeasons(string) ([]media.Season, error)       { return nil, nil }
 func (p *stubStreamProvider) GetEpisodes(string, string) ([]media.Episode, error) {
 	return nil, nil
 }

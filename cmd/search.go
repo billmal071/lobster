@@ -303,7 +303,39 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// Primary provider can't resolve seasons — try fallback stream
 			debugf("primary provider seasons failed: %v, trying fallbacks", err)
 			fmt.Fprintf(os.Stderr, "Provider has no season data, trying fallbacks...\n")
-			fbStream, fbErr := tryFallbackStream(p, selected, season, episode)
+			// A requested season has to exist somewhere before the resolver is
+			// asked for it. tryFallbackStream resolves a StreamProvider by
+			// NUMBER — the episode ID is built arithmetically from season and
+			// episode (internal/resolver/probe.go) — so it will happily stream
+			// season 5 of a show that has three, and the run then reports a
+			// finished watch of a season nobody has. That is the
+			// silent-substitution bug this path exists to prevent, one branch
+			// over, and it is also `episodes --season 5` answering no_results
+			// about the very ref `play --season 5` just played.
+			//
+			// Only positive evidence refuses. If some chain member enumerated
+			// seasons and none carries this one, the number is wrong. If
+			// nothing in the chain can enumerate at all, there is no evidence
+			// either way, and refusing would break the case this branch is
+			// for: a StreamProvider that serves episodes without ever listing
+			// them. Note the residual asymmetry that leaves — `episodes` still
+			// answers no_results there, because it has no list to print, while
+			// `play` goes ahead on a number the user supplied.
+			if season > 0 {
+				if hits := fallbackSeasonHits(chainPrimary, contentRequest(selected)); len(hits) > 0 {
+					enumerated := false
+					for _, h := range hits {
+						if _, ok := pickSeason(h.seasons, season); ok {
+							enumerated = true
+							break
+						}
+					}
+					if !enumerated {
+						return errSeasonNotFound{season: season, title: title}
+					}
+				}
+			}
+			fbStream, fbErr := tryFallbackStream(chainPrimary, selected, season, episode)
 			if fbErr != nil {
 				if err != nil {
 					return fmt.Errorf("getting seasons: %w", err)
@@ -354,7 +386,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 					season,
 				)
 				if !ok {
-					return fmt.Errorf("season %d not found for %q (list them with 'lobster episodes --ref ...')", season, title)
+					return errSeasonNotFound{season: season, title: title}
 				}
 				debugf("season %d recovered from %T", altSel.Number, alt.provider)
 				p, providerID, seasons = alt.provider, alt.id, altSeasons

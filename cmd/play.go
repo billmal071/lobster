@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/spf13/cobra"
 
 	"lobster/internal/media"
@@ -246,6 +249,13 @@ func playRun(cmd *cobra.Command, args []string) error {
 		p = agentProvider()
 	}
 	if err := agentResolveAndPlay(p, sel, flagSeason, flagEpisode); err != nil {
+		// A season that does not exist is not a provider outage: it is the
+		// same answer validateSeasonEpisode gives above, reached later because
+		// the primary could not enumerate up front. Report it identically.
+		var notFound errSeasonNotFound
+		if errors.As(err, &notFound) {
+			return emitErr("no_results", exitNoResults, "%v", notFound)
+		}
 		return emitErr("providers_failed", exitProvidersFailed, "%v", err)
 	}
 
@@ -253,4 +263,26 @@ func playRun(cmd *cobra.Command, args []string) error {
 		"status": "finished",
 		"title":  r.Title,
 	})
+}
+
+// errSeasonNotFound is "that season does not exist", raised from inside
+// resolveAndPlay rather than from validateSeasonEpisode's up-front check.
+//
+// It exists so one refusal reports one thing. Both gates produce the same
+// sentence, but playRun's catch-all maps a plain error to providers_failed
+// (exit 3), so the same "season 5 not found" came back as no_results from the
+// early check and as providers_failed from the late one — and which gate
+// catches it is not a property of the request. validateSeasonEpisode defers to
+// the resolver whenever the primary cannot enumerate, and the two gates run
+// two independent chain scans with their own deadlines, so a provider that
+// answers the first and times out in the second flips the exit code on
+// identical input. An agent branching on "providers are down" versus "ask for
+// a different season" would branch wrongly at random.
+type errSeasonNotFound struct {
+	season int
+	title  string
+}
+
+func (e errSeasonNotFound) Error() string {
+	return fmt.Sprintf("season %d not found for %q (list them with 'lobster episodes --ref ...')", e.season, e.title)
 }
