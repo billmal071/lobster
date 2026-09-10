@@ -336,7 +336,7 @@ and where the others break"). Run it before concluding a source is broken.
 
 | `base` | Covers | Worth knowing |
 | --- | --- | --- |
-| `auto` (default) | Films and series | Automatic routing: you name no source, so lobster picks one per content type. `soap2day` is the general source `auto` maps to, and the primary every `auto` run searches with. A film is then looked up on YTS by title and year and played from there when both agree. A series is not — YTS is never even queried for one, because it has no TV catalogue — so it stays on `soap2day`, and if `soap2day` cannot enumerate its seasons, playback falls back to the chain, which re-searches every source by title. Films YTS has no match for stay on `soap2day` too. An explicit `base`, `--base`, or an `api_url` overrides all of this. |
+| `auto` (default) | Films and series | Automatic routing: you name no source, so lobster picks one per content type. `soap2day` is the general source `auto` maps to, and the primary every `auto` run searches with. A film is then looked up on YTS by title and year and played from there when both agree. A series is not — YTS is never even queried for one, because it has no TV catalogue — so it stays on `soap2day`, and if `soap2day` cannot enumerate its seasons, playback falls back to the chain, which re-searches every source by title. Films YTS has no match for stay on `soap2day` too. The YTS lookup covers ordinary playback only: `--download` and `--json` runs stay on `soap2day`, the first so a download you did not ask to make over BitTorrent does not silently join a swarm, the second because a magnet is not a URL a JSON consumer can open. Asking for it outright still works — `--base yts --download <dir>` downloads from YTS perfectly well. An explicit `base`, `--base`, or an `api_url` overrides all of this. |
 | `soap2day` | Films and series | The general-purpose source `auto` falls back to. |
 | `vaplayer` | Films and series | General-purpose, API-based. |
 | `flixhq.to`, `flixhq.ws` | Films and series | Scraper-based. `flixhq.ws` was the default before `auto`. Both check their domain at startup and try known alternates (plus any `domain_overrides`) when it is unreachable. |
@@ -391,9 +391,16 @@ another mapping of it is still live, and reading the truncated tail raises
 recoverable failure.
 
 Lobster avoids this for you. When a playback command could open a magnet — the
-default `base = "auto"` (which plays movies from YTS), `--base yts`, or
-`torrent_fallback = true` — it restarts itself once at startup with the safer
-backend selected:
+default `base = "auto"` (which plays movies from YTS), any `base` naming YTS
+(`yts`, `yts.mx`, …), or `torrent_fallback = true` — it restarts itself once at
+startup with the safer backend selected:
+
+Under `auto` the restart follows the route, so the cases that suppress the YTS
+lookup suppress the restart too: `--json`, `--download`, and a configured
+`api_url` (which overrides `base` entirely) all stay on the default backend,
+because none of them can reach a magnet. `torrent_fallback = true` is
+independent of all three — it puts YTS in the fallback chain whatever source
+you named — so it always restarts.
 
 ```sh
 TORRENT_STORAGE_DEFAULT_FILE_IO=classic
