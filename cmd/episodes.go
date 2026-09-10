@@ -116,6 +116,25 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "getting episodes: %v", err)
 	}
+	// An empty list with no error is not an answer, and emitting it as one is
+	// the same failure this command exists to stop — absence dressed as fact.
+	// `{"episodes":[]}` with exit 0 tells a caller the season has no episodes;
+	// what actually happened is that neither the source nor any chain member
+	// could enumerate it.
+	//
+	// It is reachable rather than defensive: FlixHQ.GetEpisodes and
+	// FlixHQWS.GetEpisodes both end in `return parseEpisodes(doc), nil`, so a
+	// page whose selector matches nothing yields (empty, nil), and both
+	// enumerate seasons for real, so both arrive here. Their siblings guard
+	// internally with "no episodes found"; these two do not.
+	//
+	// no_results rather than providers_failed, because nothing failed in a way
+	// anyone reported: the chain was asked and came back empty-handed, which
+	// is what no_results already means one line up at the season gate.
+	if len(eps) == 0 {
+		return emitErr("no_results", exitNoResults,
+			"no episodes found for season %d of %q", sel.Number, r.Title)
+	}
 
 	seasonNums := make([]int, 0, len(seasons))
 	for _, s := range seasons {

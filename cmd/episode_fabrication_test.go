@@ -1475,3 +1475,43 @@ func TestTheResolverHopKeepsTheProviderThatHadTheSeason(t *testing.T) {
 		}
 	}
 }
+
+// An episode listing that comes back empty with no error is the same lie as a
+// fabricated one, told the other way round: `{"episodes":[]}` and exit 0 says
+// "this season has no episodes", when what happened is that nobody could
+// enumerate it. A caller cannot tell the two apart, and the empty list is the
+// more dangerous of the pair because it looks like a successful answer.
+//
+// Reachable, not hypothetical: FlixHQ.GetEpisodes and FlixHQWS.GetEpisodes end
+// in `return parseEpisodes(doc), nil`, so a page whose selector matches
+// nothing yields (empty, nil). Both enumerate seasons for real, so both reach
+// this path. Their five siblings (soap2day, vaplayer, tbcpl, kimcartoon,
+// moviebox) all guard internally with "no episodes found"; these two do not,
+// which is why the command needs the backstop.
+//
+// The stub is that exact shape: seasons yes, GetEpisodes (nil, nil).
+func TestEpisodesRefusesAnEmptyListRatherThanCallingItASeasonWithNoEpisodes(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+
+	// episodesBySeason and episodes both nil, episodesErr nil: GetEpisodes
+	// returns (nil, nil), the FlixHQ shape.
+	primary := &stubProvider{seasons: []media.Season{{ID: "s1", Number: 1}}}
+	withStubProvider(t, primary)
+	// A chain that cannot list either, so nothing rescues the answer and the
+	// fall-through is what decides the exit code.
+	withFallbackChain(t, blockedLister())
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+
+	err := episodesRun(episodesCmd, nil)
+	if err == nil {
+		t.Fatalf("episodesRun succeeded and emitted %s; an unlistable season must not read as a season with no episodes", strings.TrimSpace(buf.String()))
+	}
+	var exit *exitError
+	if !errors.As(err, &exit) || exit.code != exitNoResults {
+		t.Fatalf("episodesRun = %v, want an exitError with code %d", err, exitNoResults)
+	}
+	if strings.Contains(buf.String(), `"episodes"`) {
+		t.Fatalf("emitted an episodes envelope alongside the refusal: %s", strings.TrimSpace(buf.String()))
+	}
+}
