@@ -692,3 +692,32 @@ func TestPlayStreamJSONRefusesAMagnetFromAnyArrivalPath(t *testing.T) {
 		t.Fatalf("--json still emitted a magnet: %q", out)
 	}
 }
+
+// The resolver.Matches gate, on the only input that can reach it.
+//
+// Matches and yearsAgree refuse different things, and the near-miss test above
+// cannot tell them apart: its sequels are from 2003 against a 1999 selection,
+// so yearsAgree refuses them first and Matches never load-bears. Deleting the
+// Matches call left the whole ./cmd suite green.
+//
+// So: a film YTS really does carry, from the selection's own year, under a
+// different title. yearsAgree admits it, Candidates ranks it first (it applies
+// no score threshold), and Matches is then the only thing standing between the
+// user's pick and a sequel played, filed and resumed under the right title.
+func TestRouteByTypeRefusesADifferentFilmFromTheSameYear(t *testing.T) {
+	yts := &ytsCatalogStub{results: []media.SearchResult{
+		{ID: "yts/2222", Title: "The Matrix Reloaded", Year: "1999", Type: media.Movie},
+	}}
+	withYTSRoute(t, "auto", yts)
+
+	primary := &stubProvider{}
+	sel := media.SearchResult{ID: "movie/the-matrix-19", Title: "The Matrix", Year: "1999", Type: media.Movie}
+
+	got, routed := routeByType(primary, sel)
+	if got != provider.Provider(primary) {
+		t.Fatalf("routeByType routed to %T; YTS offered a different film from the same year, which only resolver.Matches can refuse", got)
+	}
+	if routed.ID != "movie/the-matrix-19" {
+		t.Fatalf("routed ID = %q, want the selection untouched: the user picked The Matrix, not its sequel", routed.ID)
+	}
+}
