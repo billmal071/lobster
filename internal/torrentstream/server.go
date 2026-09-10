@@ -54,11 +54,6 @@ type serveEntry struct {
 // multi-gigabyte film.
 const is32Bit = ^uint(0)>>32 == 0
 
-// fileIoEnv selects the storage layer's file backend. It is read in that
-// package's init(), so it can only be set before the process starts — not from
-// here.
-const fileIoEnv = "TORRENT_STORAGE_DEFAULT_FILE_IO"
-
 // New starts a torrent client and a loopback HTTP server. dataDir is where
 // pieces land; empty uses a temp directory removed on Close.
 func New(dataDir string) (*Server, error) {
@@ -66,10 +61,10 @@ func New(dataDir string) (*Server, error) {
 	// the library as "mapping file: invalid argument" after the download has
 	// apparently started — worth catching up front with the two things that
 	// actually work, both verified.
-	if is32Bit && os.Getenv(fileIoEnv) != "classic" {
+	if is32Bit && os.Getenv(fileIoEnv) != classicIo {
 		return nil, fmt.Errorf(
 			"torrent streaming needs a 64-bit build: this one is 32-bit and cannot memory-map a multi-gigabyte file.\n"+
-				"Either rebuild with GOARCH=amd64, or re-run with %s=classic", fileIoEnv)
+				"Either rebuild with GOARCH=amd64, or re-run with %s=%s", fileIoEnv, classicIo)
 	}
 	tmp := ""
 	if dataDir == "" {

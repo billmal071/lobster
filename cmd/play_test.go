@@ -618,13 +618,14 @@ func playMovieRefForContinue(t *testing.T) *bool {
 
 // The agent play command must resume from history by default: nothing in the
 // JSON envelope tells a caller to pass -c, and "resume_tracking":true reads
-// as a promise that it will. When --continue was not passed on this
-// invocation, playRun must behave as if it were.
+// as a promise that it will. The defaulting lives on the flag itself
+// (root.go), so this feeds playRun the value a real invocation without
+// --continue produces and checks it survives to playback.
 func TestPlayDefaultsContinueOn(t *testing.T) {
 	seen := playMovieRefForContinue(t)
 	withInheritedFlags(t, playCmd, "continue") // restores the Changed bit
 
-	flagContinue = false // cobra's default when the flag is not passed
+	flagContinue = continueFromCLI(t) // what `lobster play --ref R` actually parses to
 
 	if err := playRun(playCmd, nil); err != nil {
 		t.Fatalf("playRun: %v", err)

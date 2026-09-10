@@ -78,8 +78,11 @@ func historyRun(cmd *cobra.Command, args []string) error {
 	// Find matching result by ID
 	for _, r := range results {
 		if r.ID == selected.ID {
-			// Override continue flag to resume
-			flagContinue = true
+			// No flagContinue override here: resuming is the registered
+			// default (root.go), and forcing it would override the one
+			// caller who said --continue=false, i.e. "replay this from the
+			// start" — a coherent request even when picking off the history
+			// list.
 			return resolveAndPlay(p, r, selected.Season, selected.Episode)
 		}
 	}

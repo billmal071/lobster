@@ -71,6 +71,13 @@ func TestMain(m *testing.M) {
 	os.Setenv("LOCALAPPDATA", dataDir)  // windows
 	defer os.RemoveAll(dataDir)
 
+	// applyConfig re-execs this process onto the torrent library's classic
+	// storage backend when a run could open a magnet and the backend has not
+	// been chosen. A test binary must never do that — it would replace itself
+	// with a fresh `go test` run, repeatedly. Choosing the backend here makes
+	// the check a no-op, and classic is what the re-exec would have selected.
+	os.Setenv("TORRENT_STORAGE_DEFAULT_FILE_IO", "classic")
+
 	// Stub flixhqDomain to prevent live network probes in tests.
 	// Tests that need a healthy or dead result override this with t.Cleanup restore.
 	prev := flixhqDomain

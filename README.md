@@ -26,7 +26,7 @@ Lobster is a security-hardened Go rewrite of [lobster.sh](https://github.com/jus
 - 🧭 Episode navigation — next, previous, replay, episode list, cross-season
 - ⬇ Download with ffmpeg for offline viewing
 - 🌍 Subtitles with automatic language matching
-- ▶ Watch history with resume support (`--continue`)
+- ▶ Watch history with resume on by default (`--continue=false` to start fresh)
 - 🎞 Quality selection — 360p, 480p, 720p, 1080p (HLS variant matching)
 - 📺 Live TV — free IPTV channels including a 456-channel Sports category ([jump to guide](#live-tv-and-sports))
 - 📦 JSON output mode for scripting and piping
@@ -104,7 +104,7 @@ Config is stored in `%APPDATA%\lobster\config.toml` and history in `%LOCALAPPDAT
 ## Flags
 
 ```
--c, --continue
+-c, --continue[=false]      (resume from history; on by default)
 -a, --audio-language <lang>
 -d, --download <path>
 -j, --json
