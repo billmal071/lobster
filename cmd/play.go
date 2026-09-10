@@ -149,7 +149,10 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 		//
 		// A chain hit that has the season is not a verdict of its own, only a
 		// reason not to refuse here: resolveAndPlay repeats the move and picks
-		// the provider that will actually serve the episode.
+		// the provider that will actually serve the episode. That is two
+		// chain scans on this path, each bounded at episodesFallbackTimeout,
+		// and only on a request the command used to refuse outright — the
+		// ordinary play, where the primary lists the season, still runs none.
 		if _, _, _, ok := seasonAcrossHits(p, seasonRequest(r), seasonAnswer{
 			provider: p, id: r.ID, seasons: seasons, fromPrimary: true,
 		}, season); ok {
