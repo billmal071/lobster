@@ -229,6 +229,16 @@ var episodesFallbackTimeout = multiSearchTimeout
 // `episodes --ref` reported "no seasons found" for a show `play --ref` then
 // played without complaint. The two commands must agree on what one ref means.
 //
+// They still do not agree completely, and this is the remaining gap: the
+// admission gate below is resolver.Matches, while play's tryFallbackStream
+// goes through resolver.Resolve, which has no such gate. So a ref whose title
+// the fallback spells differently — "Marvel's Agents of S.H.I.E.L.D." against
+// "Agents of S.H.I.E.L.D." — still plays and still lists nothing. Relaxing
+// Matches is not the obvious fix: it is what stops the resolver answering
+// about a different show, and loosening it needs its own adversarial pass.
+// Documented in GUIDE.md's "Content sources" section so the failure is at
+// least findable.
+//
 // The re-search is by title, ranked by resolver.Candidates so the ref's
 // ID/Title/Year all count — the reason a ref carries more than an ID — and then
 // admitted only if resolver.Matches says the candidate is the same work.

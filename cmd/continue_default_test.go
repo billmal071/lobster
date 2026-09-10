@@ -38,15 +38,7 @@ func (p *posRecordingPlayer) Available() bool { return true }
 func continueFromCLI(t *testing.T, args ...string) bool {
 	t.Helper()
 
-	dl, lang, alang := flagDownload, flagLanguage, flagAudioLang
-	prov, qual, plr, base := flagProvider, flagQuality, flagPlayer, flagBase
-	nosubs, cont, js, dbg := flagNoSubs, flagContinue, flagJSON, flagDebug
-	restore := func() {
-		flagDownload, flagLanguage, flagAudioLang = dl, lang, alang
-		flagProvider, flagQuality, flagPlayer, flagBase = prov, qual, plr, base
-		flagNoSubs, flagContinue, flagJSON, flagDebug = nosubs, cont, js, dbg
-	}
-	t.Cleanup(restore)
+	restore := saveFlagGlobals(t)
 
 	tmp := &cobra.Command{Use: "tmp"}
 	registerPersistentFlags(tmp)

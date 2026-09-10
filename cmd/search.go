@@ -277,6 +277,27 @@ var selectItem = ui.Select
 
 // resolveAndPlay handles season/episode selection for TV and then plays.
 func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, episode int) error {
+	// Selection time is the first moment the content type is known on every
+	// path into playback: one interactive search returns movies and series
+	// interleaved, so the type cannot be settled when newProvider builds the
+	// primary. See routeByType (cmd/typeroute.go) for why this funnel is where
+	// it belongs.
+	//
+	// Only the provider handle and the ID used to *ask* it for a stream move:
+	// `selected` stays exactly the row the user picked. History and the resume
+	// checkpoint key on (ID, Season, Episode) — history.Save matches a row on
+	// those three (internal/history/history.go) and playStream looks the
+	// resume position up the same way — so filing a watch under the routed ID
+	// would make a film's identity depend on whether a 5s YTS lookup answered
+	// inside its deadline: the next launch would not find the position it
+	// stored, and a second row would accumulate for one title. The selection's
+	// own ID does not depend on a network call, so it is the stable one.
+	//
+	// Only the movie route moves the ID. The series branch hands `sel` back
+	// untouched on both of its paths, which is why the TV code below can go on
+	// using selected.ID for the provider calls.
+	p, routed := routeByType(p, selected)
+
 	episodeID := ""
 	title := selected.Title
 
@@ -622,7 +643,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	if sp, ok := p.(provider.StreamProvider); ok {
 		debugf("primary provider: %T (StreamProvider)", p)
 		stopStream := ui.StartSpinner("Negotiating stream servers...")
-		servers, err := p.GetServers(selected.ID, episodeID)
+		servers, err := p.GetServers(routed.ID, episodeID)
 		stopStream()
 		if err != nil || len(servers) == 0 {
 			if err != nil {
@@ -647,7 +668,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		var stream *media.Stream
 		for _, srv := range ordered {
 			debugf("trying server (watch): %s (ID: %s)", srv.Name, srv.ID)
-			stream, err = sp.Watch(selected.ID, episodeID, srv.Name, cfg.Quality)
+			stream, err = sp.Watch(routed.ID, episodeID, srv.Name, cfg.Quality)
 			if err != nil {
 				debugf("server %s watch failed: %v", srv.Name, err)
 				fmt.Fprintf(os.Stderr, "Server %s failed, trying next...\n", srv.Name)
@@ -700,6 +721,19 @@ var newPlayer = player.New
 func playStream(stream *media.Stream, title string, selected media.SearchResult, season, episode int) error {
 	// JSON output mode
 	if flagJSON {
+		// A magnet reaches here from any path that does not go through the
+		// per-type route: `--base yts` makes YTS the primary, and
+		// torrent_fallback puts it in the fallback chain. Emitting it as
+		// "url" would hand the caller a URI nothing consuming --json can
+		// open. Standing up the local torrent server instead is no answer
+		// either — its loopback URL dies with this process, which exits as
+		// soon as the JSON is printed — so say so and name the flag that
+		// works. Guarding here rather than at each arrival covers all of
+		// them, including any added later.
+		if torrentstream.IsMagnet(stream.URL) {
+			return fmt.Errorf("%s resolved to a torrent, which --json cannot express as a playable URL; "+
+				"play it without --json, or use --download to fetch it first", title)
+		}
 		out := map[string]interface{}{
 			"title":     title,
 			"url":       stream.URL,

@@ -61,6 +61,31 @@ func TestFallbackProvidersIncludesYTSWhenOptedIn(t *testing.T) {
 	}
 }
 
+// Naming a source stops the per-type route reaching YTS, but it does not keep
+// the run out of a swarm on its own: this chain appends YTS on torrent_fallback
+// alone, without consulting Base or APIURL. Three docs said or implied
+// otherwise — README's api_url block claimed such a run "never joins a swarm" —
+// so pin the behaviour the wording now has to match.
+func TestFallbackProvidersIncludesYTSEvenWithAnExplicitSource(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cfg  *config.Config
+	}{
+		{"an explicit non-YTS base", &config.Config{Base: "soap2day", TorrentFallback: true}},
+		{"a configured api_url", &config.Config{APIURL: "https://api.consumet.example", TorrentFallback: true}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			prev := cfg
+			cfg = c.cfg
+			t.Cleanup(func() { cfg = prev })
+
+			if got := fallbackProviders(nil); !hasYTS(got) {
+				t.Fatalf("YTS missing from the chain under %+v: %v; torrent_fallback puts it back whatever source is named", c.cfg, ytsProviderNames(got))
+			}
+		})
+	}
+}
+
 // The download engine cannot open a magnet. streamToResult classifies by
 // substring, so without a guard a magnet is labelled "http" and handed
 // straight to an engine that will fail on it well after the user walked away.
