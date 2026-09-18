@@ -266,8 +266,10 @@ a fixed position, so it survives a playlist reload or reorder and fails
 closed (rather than guessing) if the match becomes ambiguous or the channel
 is gone.
 
-`play --ref` and `episodes --ref` both resolve against the base the ref was
-found under, and `play` forwards any flags you pass explicitly (`--base`,
+`play --ref` and `episodes --ref` both resolve against the base the ref
+carries — the source that actually produced that row, which is not necessarily
+the `--base` the search was run with, since `find` also searches a fallback
+chain — and `play` forwards any flags you pass explicitly (`--base`,
 `--quality`, `--player`, `--provider`, `--language`, `--audio-language`,
 `--no-subs`, `--debug`, `--continue`) to the detached child so overrides still
 apply in the background.

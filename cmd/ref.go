@@ -17,27 +17,35 @@ import (
 // and Year the provider is asked to Search("") and ranking collapses, which
 // does not fail loudly: it plays the wrong film.
 //
-// Base records the base that was *configured* when the ref was produced, not
-// necessarily the provider that supplied the ID. It is carried because the
-// primary provider is flag/config-selected, and an ID found under --base yts
-// is meaningless under the default base — so replaying the same base is a much
-// better starting point than whatever happens to be configured later.
+// Base names the provider that supplied the ID, as the base token that selects
+// it (cmd/providerbase.go), or is empty when no base value selects that
+// provider at all. It is carried because the primary provider is
+// flag/config-selected and IDs are not portable between providers — an ID
+// found on YTS is meaningless to MovieBox — so replaying the source that
+// produced the ID is a far better starting point than whatever happens to be
+// configured later.
 //
-// It is a hint, not a guarantee. find searches the primary provider *and* the
-// fallback chain (gatherSearchResults), and stamps cfg.Base on every result it
-// prints, so a result that actually came from a fallback provider carries the
-// primary's base. Making it exact would not help. A base is a config-time
-// choice of *primary* provider, not a per-row attribution, and by the time
-// find prints a row that row may not come from one provider at all:
-// deduplicateResults (cmd/multisearch.go) merges duplicates across providers,
-// keeping the first arrival's ID while filling its metadata gaps from the
-// others. There is no single honest base to stamp on the merged row.
+// It is per-row, not per-run. find searches the primary provider *and* the
+// fallback chain (gatherSearchResults, cmd/multisearch.go), so one response
+// can carry rows from several providers; each row is stamped with its own
+// producer (refBaseFor, cmd/find.go). Merged rows are attributed to whichever
+// entry's ID survived deduplication, because it is the ID that Base explains:
+// deduplicateResults pins the first arrival's ID and pins its attribution
+// alongside it.
 //
-// So nothing downstream may assume the ID resolves against the base, and
-// nothing does. play re-searches by title through the whole chain
-// (resolveAndPlay, cmd/search.go) and episodes does the same via seasonSource
-// (cmd/episodes.go) when the base's provider cannot enumerate the ID. The base
-// only decides where that search starts.
+// An empty Base is the honest answer for a provider no base value reaches
+// (AniPub, TBCPLEmbed, Consumet), and applyRefBase (cmd/play.go) treats it as
+// "leave the configuration alone". config.BaseAuto is never stamped in its
+// place: "auto" names no provider and instead licenses routing movies to YTS
+// and opening a magnet (cmd/typeroute.go, cmd/root.go).
+//
+// Base still only decides where resolution *starts*; nothing downstream
+// assumes the ID resolves against it. play re-searches by title through the
+// whole chain (resolveAndPlay, cmd/search.go) and episodes does the same via
+// seasonSource (cmd/episodes.go) when the base's provider cannot enumerate the
+// ID. Refs minted by older versions carry the configured base instead, and are
+// decoded and applied exactly as before — the change is in what find writes,
+// not in how a ref is read.
 //
 // A live ref's identity story is different in kind, not degree. It is never
 // re-searched by title: play re-matches it against freshly loaded playlists

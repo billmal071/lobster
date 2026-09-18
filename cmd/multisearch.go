@@ -43,6 +43,9 @@ func gatherSearchResults(primary provider.Provider, fallbacks []provider.Provide
 	stop := ui.StartSpinner(fmt.Sprintf("Searching for %q...", query))
 	results, err := primary.Search(query)
 	stop()
+	// Attribute before anything merges: this is the last point at which the
+	// rows and the provider that produced them are still side by side.
+	stampProvider(results, searchProviderBase(primary))
 	// A provider that answered with nothing still counts as reached: it is
 	// evidence the title does not exist, which a failed call is not. Most
 	// providers signal "nothing matched" with an error rather than an empty
@@ -113,6 +116,7 @@ func multiProviderSearch(primaryResults []media.SearchResult, fallbacks []provid
 				}
 				return
 			}
+			stampProvider(results, searchProviderBase(p))
 			mu.Lock()
 			fallbackResults[idx] = results
 			reached = true
@@ -167,6 +171,12 @@ func deduplicateResults(primary []media.SearchResult, fallbackGroups [][]media.S
 	// year-bearing duplicate can never leave the merged entry year-less —
 	// an empty year disables the resolver's year-based candidate ranking.
 	keep := func(idx int, r media.SearchResult) {
+		// Provider attributes the ID, so the two travel together or the row
+		// names a source that did not produce the ID a later play resolves
+		// against. Whichever ID survives below, its own attribution survives
+		// with it.
+		id, prov := merged[idx].ID, merged[idx].Provider
+		incoming := r.Provider
 		// The ID of whichever entry arrived first is authoritative, and that is
 		// the primary provider's when it supplied this work. Playback resolves
 		// against the primary, and providers do not share an ID namespace — YTS
@@ -174,14 +184,18 @@ func deduplicateResults(primary []media.SearchResult, fallbackGroups [][]media.S
 		// duplicate donate its ID handed playback an ID its own provider could
 		// not resolve, so --base yts fell through to another provider and played
 		// that one's dub instead. Metadata still merges; only the ID is pinned.
-		id := merged[idx].ID
 		if resultScore(r) > resultScore(merged[idx]) {
 			r = fillGaps(r, merged[idx])
 		} else {
 			r = fillGaps(merged[idx], r)
 		}
 		if id != "" {
-			r.ID = id
+			r.ID, r.Provider = id, prov
+		} else {
+			// The kept entry had no ID, so fillGaps took the incoming one (or
+			// there is none at all). Either way the incoming provider is the
+			// one that can answer for it.
+			r.Provider = incoming
 		}
 		merged[idx] = r
 	}
@@ -233,6 +247,16 @@ func deduplicateResults(primary []media.SearchResult, fallbackGroups [][]media.S
 	}
 
 	return merged
+}
+
+// stampProvider records, on every row, the base token that selects the
+// provider which produced it. Providers do not set it themselves: only this
+// layer knows which provider a row came from, and only here are the rows and
+// their producer still together.
+func stampProvider(results []media.SearchResult, base string) {
+	for i := range results {
+		results[i].Provider = base
+	}
 }
 
 // fillGaps returns base with every empty field filled in from other.

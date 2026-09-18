@@ -86,10 +86,13 @@ false for vlc/iina and other players) — it has nothing to do with whether you
 detached; a detached play runs the same attached playback internally, in a
 background process.
 
-A ref remembers the provider base it was found under (e.g. `find --base
-yts`). Both `play --ref` and `episodes --ref` resolve against that same base
-automatically, so you normally don't need to pass `--base` yourself. Pass
-`--base` explicitly only to deliberately override it.
+A ref remembers the source that actually produced that row — not the `--base`
+you asked for. `find` searches the requested base *and* a fallback chain, so
+one response can carry rows from several sources, and each row's ref names its
+own. A row no base value can select (some sources are reachable only as
+fallbacks) carries no base at all. Both `play --ref` and `episodes --ref`
+resolve against whatever the ref carries, so you normally don't need to pass
+`--base` yourself. Pass `--base` explicitly only to deliberately override it.
 
 ## TV series
 

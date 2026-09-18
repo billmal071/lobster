@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"lobster/internal/config"
 	"lobster/internal/media"
 )
 
@@ -100,14 +101,17 @@ func findRun(cmd *cobra.Command, args []string) error {
 		results = results[:flagFindLimit]
 	}
 
-	// The configured base, stamped on every result — including ones the
-	// fallback chain supplied, whose IDs came from a different provider. See
-	// playRef.Base (cmd/ref.go): the stamp is a starting point for resolution,
-	// not an attribution.
-	base := ""
+	// Each row is stamped with the provider that actually returned it, not
+	// with the base that was asked for. gatherSearchResults broadens past the
+	// primary whenever it errors or answers thinly (cmd/multisearch.go), so a
+	// uniform cfg.Base stamp put a fallback provider's ID under the primary's
+	// name — and a row falsely named yts moves a later play onto the torrent
+	// path (mayStreamTorrent, cmd/root.go) for a film YTS never returned.
+	configured := ""
 	if cfg != nil {
-		base = cfg.Base
+		configured = config.NormalizeBase(cfg.Base)
 	}
+	primaryBase := searchProviderBase(p)
 
 	out := make([]map[string]any, 0, len(results))
 	for i, r := range results {
@@ -116,7 +120,7 @@ func findRun(cmd *cobra.Command, args []string) error {
 			Title: r.Title,
 			Year:  r.Year,
 			Type:  r.Type.String(),
-			Base:  base,
+			Base:  refBaseFor(r, primaryBase, configured),
 		})
 		if err != nil {
 			return emitErr("internal", 1, "encoding ref: %v", err)
@@ -130,6 +134,47 @@ func findRun(cmd *cobra.Command, args []string) error {
 		})
 	}
 	return emitJSON(map[string]any{"results": out})
+}
+
+// refBaseFor returns the base token to stamp on one row's ref: the token that
+// selects the provider which produced the row, or "" when no base value
+// selects it (applyRefBase treats an empty base as "leave the configuration
+// alone", cmd/play.go).
+//
+// The one refinement over row.Provider is spelling. A base is matched by
+// substring (newProvider, cmd/provider.go), so a user who configured a
+// specific mirror — "flixhq.xx" — gets a primary built from that domain, and
+// collapsing their row to the generic "flixhq" would send a later play to the
+// default domain instead. When the row came from the primary *and* the
+// configured value still names that provider, the caller's own spelling is
+// both honest and more precise, so it is preserved.
+//
+// Both halves of that condition are load-bearing:
+//
+//   - "came from the primary" — "flixhq.ws" contains "flixhq", so without it a
+//     row that FlixHQ supplied as a fallback under a FlixHQWS primary would be
+//     restamped as FlixHQWS's.
+//   - "still names that provider" — newProvider has no unknown-base arm and
+//     falls through to MovieBox, so `--base nonesuch` yields MovieBox rows.
+//     Echoing "nonesuch" back would name a source that does not exist;
+//     "moviebox" is what actually answered. config.BaseAuto is excluded by the
+//     same test, which is what it deserves: "auto" names no provider, it
+//     licenses routing movies to YTS and opening a magnet (cmd/typeroute.go,
+//     cmd/root.go).
+//
+// The cost of the second test is a base whose spelling does not contain its
+// provider's token — "1shows.org" selects TBCPL — which is collapsed to
+// "tbcpl" and so replays against TBCPL's default site rather than that one.
+// It still names the source that answered, which is the property being bought;
+// echoing back a string that may name nothing is what it is being bought with.
+func refBaseFor(r media.SearchResult, primaryBase, configured string) string {
+	if r.Provider == "" {
+		return ""
+	}
+	if r.Provider == primaryBase && strings.Contains(configured, r.Provider) {
+		return configured
+	}
+	return r.Provider
 }
 
 func init() {
