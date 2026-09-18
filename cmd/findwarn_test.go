@@ -229,3 +229,63 @@ func TestFindCountsOnlyTheRowsTheCallerReceived(t *testing.T) {
 		t.Fatalf("the warnings key is present when every emitted row came from the requested base")
 	}
 }
+
+// A base token that selects nothing at all.
+//
+// newProvider has no unknown-base arm: `--base sopa2day` falls through to
+// MovieBox, so primaryBase becomes "moviebox" and every MovieBox row matches
+// it. Counting those rows as the requested base's would make the typo look
+// like a source that answered in full, and the caller would be told nothing —
+// while every ref in the same response honestly says "moviebox". The input
+// here is exactly that shape: the configured token names no provider, and the
+// rows all come from the fall-through.
+func TestFindWarnsWhenTheBaseNamesNoProviderAtAll(t *testing.T) {
+	warnings, _ := runFindForWarnings(t, "sopa2day", provider.NewMovieBox(), []media.SearchResult{
+		{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "moviebox"},
+		{ID: "2", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "moviebox"},
+	})
+	if len(warnings) != 1 {
+		t.Fatalf("got %d warnings, want 1: %+v; --base sopa2day selected no provider, so nothing the caller received came from the base they asked for", len(warnings), warnings)
+	}
+	if warnings[0].Code != "base_unknown" {
+		t.Errorf("warning code = %q, want %q; a base that names nothing is a different next step (fix the spelling) from a base that answered nothing (try another source)", warnings[0].Code, "base_unknown")
+	}
+	if warnings[0].Base != "sopa2day" {
+		t.Errorf("warning base = %q, want %q", warnings[0].Base, "sopa2day")
+	}
+	if warnings[0].ResultsFromBase != 0 {
+		t.Errorf("results_from_base = %d, want 0; no row can come from a base that selects no provider", warnings[0].ResultsFromBase)
+	}
+	if warnings[0].ResultsTotal != 2 {
+		t.Errorf("results_total = %d, want 2", warnings[0].ResultsTotal)
+	}
+	if warnings[0].Message == "" {
+		t.Errorf("warning has no message")
+	}
+}
+
+// The alias that a naive "does the configured spelling contain the primary's
+// token" test gets wrong. "1shows.org" is a real TBCPL base — newProvider
+// selects TBCPL from it — yet it does not contain "tbcpl". TBCPL answering in
+// full is a clean result and must stay silent.
+func TestFindDoesNotCallALegitimateAliasAnUnknownBase(t *testing.T) {
+	warnings, envelope := runFindForWarnings(t, "1shows.org", provider.NewTBCPL("1shows.org"), []media.SearchResult{
+		{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "tbcpl"},
+		{ID: "2", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "tbcpl"},
+	})
+	if _, ok := envelope["warnings"]; ok {
+		t.Fatalf("got warnings %+v, want none: 1shows.org is a TBCPL base and TBCPL produced every row", warnings)
+	}
+}
+
+// The fall-through provider named on purpose. "moviebox" selects MovieBox
+// through the default arm rather than by falling through it, so it is a base
+// that was used, not one that named nothing.
+func TestFindTreatsAnExplicitMovieBoxBaseAsNamed(t *testing.T) {
+	warnings, envelope := runFindForWarnings(t, "moviebox", provider.NewMovieBox(), []media.SearchResult{
+		{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "moviebox"},
+	})
+	if _, ok := envelope["warnings"]; ok {
+		t.Fatalf("got warnings %+v, want none: --base moviebox asked for MovieBox and MovieBox produced every row", warnings)
+	}
+}

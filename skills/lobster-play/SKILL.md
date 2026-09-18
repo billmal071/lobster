@@ -46,7 +46,7 @@ Add `--type tv` or `--type movie` when the user was specific ("play the
 If you passed `--base`, check for a top-level `warnings` array. It is absent
 when there is nothing to say — including whenever you did not pass `--base`,
 so this only ever fires on a request you made. `find` also searches a fallback
-chain, so one response can mix sources, and two entries say how that went:
+chain, so one response can mix sources, and three entries say how that went:
 
 - `{"code": "base_not_used", "base": "yts", "results_from_base": 0,
   "results_total": 21}` — none of the results below came from the base you
@@ -55,6 +55,11 @@ chain, so one response can mix sources, and two entries say how that went:
 - `{"code": "base_partially_used", "base": "yts", "results_from_base": 2,
   "results_total": 21}` — it had some of them. Say which count came from their
   source, and do not present the whole list as that source's.
+- `{"code": "base_unknown", "base": "sopa2day", "results_from_base": 0,
+  "results_total": 20}` — what they asked for names no source; an unrecognised
+  base is not rejected, it quietly falls through to MovieBox. Tell them the
+  name was not recognised and ask which source they meant, rather than
+  presenting the results as theirs.
 
 Do not tell the user a row came from their base unless it did; each `ref`
 names its own source, so prefer the rows whose base matches when they asked

@@ -1,6 +1,10 @@
 package cmd
 
-import "lobster/internal/provider"
+import (
+	"strings"
+
+	"lobster/internal/provider"
+)
 
 // providerBase returns the --base token that selects p, or "" when no base
 // value selects p at all.
@@ -54,3 +58,39 @@ func providerBase(p provider.Provider) string {
 // its own stub providers onto tokens without the stub having to be one of the
 // concrete provider types.
 var searchProviderBase = providerBase
+
+// fallThroughBase is the token of the provider newProvider builds when no arm
+// matches the configured base. newProvider has no unknown-base arm: it ends in
+// an unconditional MovieBox, so `--base sopa2day` silently searches MovieBox.
+//
+// It is derived from providerBase rather than written out, so the spelling
+// cannot drift from the table above, and
+// TestFallThroughBaseIsWhatAnUnrecognisedBaseActuallySelects pins the
+// remaining half — that MovieBox is still what an unrecognised base reaches —
+// against newProvider itself. A second switch mirroring newProvider's arms is
+// what that test exists to make unnecessary.
+var fallThroughBase = providerBase(provider.NewMovieBox())
+
+// baseNamedThePrimary reports whether the configured base token actually
+// selected the provider that answered, rather than being a value newProvider
+// did not recognise.
+//
+// Two cases, and the second is the one that cannot be read off the spelling:
+//
+//   - The configured value contains the primary's token, so it named it.
+//     This is also how a mirror spelling ("flixhq.xx") stays a match.
+//   - Otherwise the primary is still a match whenever it is not the
+//     fall-through, because every other arm of newProvider is driven by the
+//     base: a non-MovieBox primary can only have come from an arm the
+//     configured value satisfied. That is what keeps "1shows.org" — a real
+//     TBCPL base whose spelling contains no "tbcpl" — a named base, without
+//     mirroring newProvider's aliases here.
+//
+// The residue is a base that reached MovieBox without naming it, which is
+// exactly the unrecognised case.
+func baseNamedThePrimary(configured, primaryBase string) bool {
+	if strings.Contains(configured, primaryBase) {
+		return true
+	}
+	return primaryBase != fallThroughBase
+}

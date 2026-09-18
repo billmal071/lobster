@@ -152,18 +152,21 @@ func findRun(cmd *cobra.Command, args []string) error {
 // answered nothing and eight scrapers did", and the two call for different
 // next steps.
 //
-// Two codes, not one, and counts on both:
+// Three codes, not one, and counts on all of them:
 //
 //   - The code is the discriminator because a caller switches on it. Folding
-//     both cases into one code would leave the distinction inferable only by
+//     the cases into one code would leave the distinction inferable only by
 //     arithmetic on the counts (results_from_base == 0), which is exactly the
-//     check a consumer skips — and the two cases mean different things:
-//     base_not_used means the source did not have the title, so try another;
-//     base_partially_used means it did, and the rest of the list is not its.
-//   - The counts are on both because a code cannot express magnitude, and
-//     because one shape parses for both: "2 of 21 came from yts" and "19 of 21
-//     came from yts" warrant very different words to the user, and the caller
-//     should not have to re-derive them by tallying refs it cannot decode.
+//     check a consumer skips — and they mean different things, with different
+//     next steps: base_not_used means the source did not have the title, so
+//     try another; base_partially_used means it did, and the rest of the list
+//     is not its; base_unknown means the token names no source at all, so the
+//     fix is the spelling, and retrying other titles against it never helps.
+//   - The counts are on all three because a code cannot express magnitude, and
+//     because one shape parses for every case: "2 of 21 came from yts" and
+//     "19 of 21 came from yts" warrant very different words to the user, and
+//     the caller should not have to re-derive them by tallying refs it cannot
+//     decode.
 //
 // Silence when every emitted row came from the requested base: there is
 // nothing to say, and a warning on a clean answer is noise. Silence under
@@ -185,6 +188,22 @@ func baseBroadeningWarnings(configured, primaryBase string, results []media.Sear
 	// set, base does not select the provider in the first place.
 	if configured == "" || configured == config.BaseAuto || primaryBase == "" {
 		return nil
+	}
+	// A base that selected nothing. newProvider has no unknown-base arm, so
+	// `--base sopa2day` searches MovieBox and primaryBase becomes "moviebox";
+	// tallying rows against it would count another provider's answers as the
+	// requested base's and, when it answered in full, say nothing at all —
+	// while every ref in the same response honestly reads "moviebox".
+	if !baseNamedThePrimary(configured, primaryBase) {
+		return []map[string]any{{
+			"code":              "base_unknown",
+			"base":              configured,
+			"results_from_base": 0,
+			"results_total":     len(results),
+			"message": fmt.Sprintf(
+				"base %q selects no known source; the search ran on %q instead, and each ref names the source that produced it",
+				configured, primaryBase),
+		}}
 	}
 	fromBase := 0
 	for _, r := range results {

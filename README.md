@@ -254,7 +254,7 @@ lobster channels --category news         # JSON channels in a category, each wit
 `find`'s response may also carry a top-level `warnings` array. It is absent
 when there is nothing to warn about — which includes every search where no
 explicit `--base` was given, since broadening is then the intended behaviour.
-The entries it currently emits both mean that an explicit `--base` was asked
+The entries it currently emits all mean that an explicit `--base` was asked
 for and some of the printed results came from elsewhere, because `find`
 searches a fallback chain as well:
 
@@ -264,6 +264,10 @@ searches a fallback chain as well:
 - `{"code": "base_partially_used", "base": "yts", "results_from_base": 2,
   "results_total": 21}` — it produced some of them, and the rest are another
   source's rows.
+- `{"code": "base_unknown", "base": "sopa2day", "results_from_base": 0,
+  "results_total": 20}` — the value passed to `--base` names no source at all.
+  An unrecognised base is not rejected; it falls through to MovieBox, which is
+  what the results came from. Fix the spelling rather than retrying.
 
 The counts describe the rows you actually received, so `--type` and `--limit`
 are already applied. Each row's `ref` names the source that produced it.

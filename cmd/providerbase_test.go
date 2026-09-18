@@ -113,3 +113,20 @@ func TestProviderBaseCoversEveryProviderInTheSearchChain(t *testing.T) {
 		}
 	}
 }
+
+// The drift guard for fallThroughBase. It records which provider newProvider
+// builds when no arm matches, and baseNamedThePrimary reads it to tell a base
+// that selected nothing from one that legitimately selected that provider. A
+// second hand-written table would be the defect this file exists to prevent,
+// so the value is checked against newProvider itself.
+func TestFallThroughBaseIsWhatAnUnrecognisedBaseActuallySelects(t *testing.T) {
+	for _, base := range []string{"sopa2day", "zzz-not-a-source"} {
+		t.Run(base, func(t *testing.T) {
+			hermeticProviderSelection(t, base)
+			got := providerBase(newProvider())
+			if got != fallThroughBase {
+				t.Fatalf("newProvider(base=%q) is %q, but fallThroughBase says %q; find would then treat a base that selected nothing as one that answered", base, got, fallThroughBase)
+			}
+		})
+	}
+}
