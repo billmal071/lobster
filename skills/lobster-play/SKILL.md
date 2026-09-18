@@ -43,6 +43,12 @@ lobster find "the matrix" --limit 10
 Add `--type tv` or `--type movie` when the user was specific ("play the
 *series*"), so a same-named film and show do not both come back.
 
+If you passed `--base`, check for a top-level `warnings` array. It is absent
+when there is nothing to say; a `{"code": "base_not_used", "base": "yts"}`
+entry means none of the results below came from the base that was asked for —
+`find` also searches a fallback chain — so tell the user their chosen source
+did not have this title rather than implying it did.
+
 ### 2. Show the user the candidates and stop
 
 **Always ask which one before playing.** Do not pick for them, even when one

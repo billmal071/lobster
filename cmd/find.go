@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -133,7 +134,52 @@ func findRun(cmd *cobra.Command, args []string) error {
 			"type":  r.Type.String(),
 		})
 	}
-	return emitJSON(map[string]any{"results": out})
+	payload := map[string]any{"results": out}
+	if w := baseNotUsedWarnings(configured, primaryBase, results); len(w) > 0 {
+		payload["warnings"] = w
+	}
+	return emitJSON(payload)
+}
+
+// baseNotUsedWarnings reports, machine-readably, that a base was asked for and
+// none of the results came from it.
+//
+// find always searches the fallback chain as well as the requested base
+// (gatherSearchResults), and until now it announced the broadening only
+// through debugf and a spinner that ui.spinnerVisible suppresses on a
+// non-TTY — so an agent or a script, which is what find exists for, saw
+// nothing at all. It then had no way to tell "yts has this film" from "yts
+// answered nothing and eight scrapers did", and the two call for different
+// next steps.
+//
+// It is additive and absent when there is nothing to say, so a consumer that
+// does not know the key is unaffected: schema 1 is documented in README.md and
+// skills/lobster-play/SKILL.md as a marker for the shape of what *is* there
+// ("check schema before trusting the shape of the rest"), never as a closed
+// set of fields.
+//
+// The test is per row, against the emitted rows, so `--type` and `--limit` are
+// accounted for: the question is whether the base produced anything the caller
+// actually received, not whether it produced anything at all.
+func baseNotUsedWarnings(configured, primaryBase string, results []media.SearchResult) []map[string]any {
+	// No base was asked for (or "auto" was, which is the absence of a
+	// preference), or no base value names the primary at all — with api_url
+	// set, base does not select the provider in the first place.
+	if configured == "" || configured == config.BaseAuto || primaryBase == "" {
+		return nil
+	}
+	for _, r := range results {
+		if r.Provider == primaryBase {
+			return nil
+		}
+	}
+	return []map[string]any{{
+		"code": "base_not_used",
+		"base": configured,
+		"message": fmt.Sprintf(
+			"no result came from base %q; every result below came from a fallback provider, and each ref names the source that produced it",
+			configured),
+	}}
 }
 
 // refBaseFor returns the base token to stamp on one row's ref: the token that

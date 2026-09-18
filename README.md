@@ -251,6 +251,12 @@ lobster channels                         # JSON categories + channel counts
 lobster channels --category news         # JSON channels in a category, each with a ref
 ```
 
+`find`'s response may also carry a top-level `warnings` array. It is absent
+when there is nothing to warn about; the one entry it currently emits,
+`{"code": "base_not_used", "base": "..."}`, means an explicit `--base` was
+asked for and none of the printed results came from it, because `find`
+searches a fallback chain as well.
+
 All four print JSON on stdout and never prompt — including on failure. `find`,
 `episodes` and `channels` print nothing else, so their stdout is always
 parseable; `play` shares stdout with the player unless you pass `--detach`
