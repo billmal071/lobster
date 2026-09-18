@@ -135,14 +135,14 @@ func findRun(cmd *cobra.Command, args []string) error {
 		})
 	}
 	payload := map[string]any{"results": out}
-	if w := baseNotUsedWarnings(configured, primaryBase, results); len(w) > 0 {
+	if w := baseBroadeningWarnings(configured, primaryBase, results); len(w) > 0 {
 		payload["warnings"] = w
 	}
 	return emitJSON(payload)
 }
 
-// baseNotUsedWarnings reports, machine-readably, that a base was asked for and
-// none of the results came from it.
+// baseBroadeningWarnings reports, machine-readably, that a base was asked for
+// and some or all of the results came from somewhere else.
 //
 // find always searches the fallback chain as well as the requested base
 // (gatherSearchResults), and until now it announced the broadening only
@@ -152,33 +152,64 @@ func findRun(cmd *cobra.Command, args []string) error {
 // answered nothing and eight scrapers did", and the two call for different
 // next steps.
 //
+// Two codes, not one, and counts on both:
+//
+//   - The code is the discriminator because a caller switches on it. Folding
+//     both cases into one code would leave the distinction inferable only by
+//     arithmetic on the counts (results_from_base == 0), which is exactly the
+//     check a consumer skips — and the two cases mean different things:
+//     base_not_used means the source did not have the title, so try another;
+//     base_partially_used means it did, and the rest of the list is not its.
+//   - The counts are on both because a code cannot express magnitude, and
+//     because one shape parses for both: "2 of 21 came from yts" and "19 of 21
+//     came from yts" warrant very different words to the user, and the caller
+//     should not have to re-derive them by tallying refs it cannot decode.
+//
+// Silence when every emitted row came from the requested base: there is
+// nothing to say, and a warning on a clean answer is noise. Silence under
+// "auto" (or no base at all) for the same reason — broadening is then the
+// documented, desired behaviour rather than a departure from a request.
+//
 // It is additive and absent when there is nothing to say, so a consumer that
 // does not know the key is unaffected: schema 1 is documented in README.md and
 // skills/lobster-play/SKILL.md as a marker for the shape of what *is* there
 // ("check schema before trusting the shape of the rest"), never as a closed
 // set of fields.
 //
-// The test is per row, against the emitted rows, so `--type` and `--limit` are
-// accounted for: the question is whether the base produced anything the caller
-// actually received, not whether it produced anything at all.
-func baseNotUsedWarnings(configured, primaryBase string, results []media.SearchResult) []map[string]any {
+// The tally is over the emitted rows, so `--type` and `--limit` are accounted
+// for: the question is what the base contributed to the response the caller
+// actually received, not what it contributed before truncation.
+func baseBroadeningWarnings(configured, primaryBase string, results []media.SearchResult) []map[string]any {
 	// No base was asked for (or "auto" was, which is the absence of a
 	// preference), or no base value names the primary at all — with api_url
 	// set, base does not select the provider in the first place.
 	if configured == "" || configured == config.BaseAuto || primaryBase == "" {
 		return nil
 	}
+	fromBase := 0
 	for _, r := range results {
 		if r.Provider == primaryBase {
-			return nil
+			fromBase++
 		}
 	}
-	return []map[string]any{{
-		"code": "base_not_used",
-		"base": configured,
-		"message": fmt.Sprintf(
+	if fromBase == len(results) {
+		return nil
+	}
+
+	code, message := "base_partially_used", fmt.Sprintf(
+		"only %d of %d results came from base %q; the rest came from fallback providers, and each ref names the source that produced it",
+		fromBase, len(results), configured)
+	if fromBase == 0 {
+		code, message = "base_not_used", fmt.Sprintf(
 			"no result came from base %q; every result below came from a fallback provider, and each ref names the source that produced it",
-			configured),
+			configured)
+	}
+	return []map[string]any{{
+		"code":              code,
+		"base":              configured,
+		"results_from_base": fromBase,
+		"results_total":     len(results),
+		"message":           message,
 	}}
 }
 

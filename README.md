@@ -252,10 +252,21 @@ lobster channels --category news         # JSON channels in a category, each wit
 ```
 
 `find`'s response may also carry a top-level `warnings` array. It is absent
-when there is nothing to warn about; the one entry it currently emits,
-`{"code": "base_not_used", "base": "..."}`, means an explicit `--base` was
-asked for and none of the printed results came from it, because `find`
-searches a fallback chain as well.
+when there is nothing to warn about — which includes every search where no
+explicit `--base` was given, since broadening is then the intended behaviour.
+The entries it currently emits both mean that an explicit `--base` was asked
+for and some of the printed results came from elsewhere, because `find`
+searches a fallback chain as well:
+
+- `{"code": "base_not_used", "base": "yts", "results_from_base": 0,
+  "results_total": 21}` — the requested base produced none of the printed
+  results, so that source did not have the title.
+- `{"code": "base_partially_used", "base": "yts", "results_from_base": 2,
+  "results_total": 21}` — it produced some of them, and the rest are another
+  source's rows.
+
+The counts describe the rows you actually received, so `--type` and `--limit`
+are already applied. Each row's `ref` names the source that produced it.
 
 All four print JSON on stdout and never prompt — including on failure. `find`,
 `episodes` and `channels` print nothing else, so their stdout is always

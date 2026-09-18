@@ -10,9 +10,11 @@ import (
 )
 
 type findWarning struct {
-	Code    string `json:"code"`
-	Base    string `json:"base"`
-	Message string `json:"message"`
+	Code            string `json:"code"`
+	Base            string `json:"base"`
+	Message         string `json:"message"`
+	ResultsFromBase int    `json:"results_from_base"`
+	ResultsTotal    int    `json:"results_total"`
 }
 
 // runFindForWarnings runs findRun over stubbed results and returns the decoded
@@ -80,16 +82,20 @@ func TestFindWarnsWhenTheRequestedBaseProducedNothing(t *testing.T) {
 	}
 }
 
-// The other half: silent when there is nothing to warn about. The key must be
-// absent, not an empty array — a consumer written against schema 1 before this
-// existed must see a byte-identical payload.
-func TestFindStaysSilentWhenTheRequestedBaseAnswered(t *testing.T) {
+// The other half: silent when there is nothing to warn about, which is when
+// every emitted row came from the requested base. The key must be absent, not
+// an empty array — a consumer written against schema 1 before this existed
+// must see a byte-identical payload.
+//
+// A single yts row alongside a foreign one is *not* this case and must warn;
+// that is TestFindWarnsWhenOnlySomeResultsCameFromTheRequestedBase.
+func TestFindStaysSilentWhenEveryResultCameFromTheRequestedBase(t *testing.T) {
 	warnings, envelope := runFindForWarnings(t, "yts", provider.NewYTS(), []media.SearchResult{
 		{ID: "3024", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "yts"},
-		{ID: "movie/604", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "vidnest"},
+		{ID: "3025", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "yts"},
 	})
 	if len(warnings) != 0 {
-		t.Fatalf("got warnings %+v, want none: the requested base produced a row", warnings)
+		t.Fatalf("got warnings %+v, want none: every result came from the requested base", warnings)
 	}
 	if _, ok := envelope["warnings"]; ok {
 		t.Fatalf("the warnings key is present with nothing to warn about; it must be absent so an existing consumer sees an unchanged payload")
@@ -126,5 +132,100 @@ func TestFindWarnsWhenLimitTruncatesAwayTheBasesOnlyRow(t *testing.T) {
 	})
 	if len(warnings) != 1 || warnings[0].Code != "base_not_used" {
 		t.Fatalf("got warnings %+v, want one base_not_used: --limit cut the only yts row, so nothing the caller received came from yts", warnings)
+	}
+}
+
+// The common case, and the one the all-or-nothing test above cannot reach:
+// the base was asked for, it answered, and most of what came back is somebody
+// else's. `--base yts "breaking bad"` against live providers returns 21 rows
+// of which 2 are YTS's; saying nothing there tells the caller their source
+// supplied the list, which is false for 19 of the 21 rows.
+//
+// The input is the shape that violates the guarantee: a majority of foreign
+// rows *with* the requested base present, which the base_not_used test can
+// never produce.
+func TestFindWarnsWhenOnlySomeResultsCameFromTheRequestedBase(t *testing.T) {
+	warnings, _ := runFindForWarnings(t, "yts", provider.NewYTS(), []media.SearchResult{
+		{ID: "3024", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "yts"},
+		{ID: "movie/603", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "soap2day"},
+		{ID: "movie/604", Title: "The Matrix Revolutions", Year: "2003", Type: media.Movie, Provider: "vidnest"},
+	})
+	if len(warnings) != 1 {
+		t.Fatalf("got %d warnings, want 1: %+v", len(warnings), warnings)
+	}
+	if warnings[0].Code != "base_partially_used" {
+		t.Errorf("warning code = %q, want %q; a caller has to be able to tell a base that answered partially from one that answered nothing", warnings[0].Code, "base_partially_used")
+	}
+	if warnings[0].Base != "yts" {
+		t.Errorf("warning base = %q, want %q", warnings[0].Base, "yts")
+	}
+	if warnings[0].ResultsFromBase != 1 || warnings[0].ResultsTotal != 3 {
+		t.Errorf("counts = %d of %d, want 1 of 3", warnings[0].ResultsFromBase, warnings[0].ResultsTotal)
+	}
+}
+
+// The two cases must stay machine-distinguishable, and the counts must be
+// carried by both so a consumer parses one shape. "yts answered nothing" and
+// "yts answered 1 of 3" call for different next steps: the first means try
+// another source, the second means the rows are there but mostly foreign.
+func TestFindDistinguishesATotallyUnusedBaseFromAPartiallyUsedOne(t *testing.T) {
+	none, _ := runFindForWarnings(t, "yts", provider.NewYTS(), []media.SearchResult{
+		{ID: "movie/603", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "soap2day"},
+		{ID: "movie/604", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "vidnest"},
+	})
+	some, _ := runFindForWarnings(t, "yts", provider.NewYTS(), []media.SearchResult{
+		{ID: "3024", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "yts"},
+		{ID: "movie/604", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "vidnest"},
+	})
+	if len(none) != 1 || len(some) != 1 {
+		t.Fatalf("want one warning each, got %+v and %+v", none, some)
+	}
+	if none[0].Code == some[0].Code {
+		t.Errorf("both cases emit code %q; nothing in the payload separates a base that produced nothing from one that produced some", none[0].Code)
+	}
+	if none[0].ResultsFromBase != 0 || none[0].ResultsTotal != 2 {
+		t.Errorf("unused-base counts = %d of %d, want 0 of 2; both codes must carry the same fields", none[0].ResultsFromBase, none[0].ResultsTotal)
+	}
+	if some[0].ResultsFromBase != 1 || some[0].ResultsTotal != 2 {
+		t.Errorf("partial counts = %d of %d, want 1 of 2", some[0].ResultsFromBase, some[0].ResultsTotal)
+	}
+}
+
+// Broadening is the normal behaviour when no source was requested, so the
+// partial case must stay silent under auto too — otherwise the default
+// install warns on essentially every search, which is noise, not honesty.
+func TestFindDoesNotWarnOnPartialBroadeningUnderAuto(t *testing.T) {
+	warnings, envelope := runFindForWarnings(t, config.BaseAuto, provider.NewSoap2Day(), []media.SearchResult{
+		{ID: "movie/603", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "soap2day"},
+		{ID: "movie/604", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "vidnest"},
+	})
+	if len(warnings) != 0 {
+		t.Fatalf("got warnings %+v under base=auto with mixed provenance, want none", warnings)
+	}
+	if _, ok := envelope["warnings"]; ok {
+		t.Fatalf("the warnings key is present under base=auto")
+	}
+}
+
+// --limit and --type decide what the caller actually received, so the counts
+// have to describe the emitted rows. Here the base produced two of three rows
+// but the caller sees one of one, all of it from the base: there is nothing to
+// warn about, and a count computed over the pre-limit slice would both warn
+// and report a total the caller cannot see.
+func TestFindCountsOnlyTheRowsTheCallerReceived(t *testing.T) {
+	prevLimit := flagFindLimit
+	flagFindLimit = 1
+	t.Cleanup(func() { flagFindLimit = prevLimit })
+
+	warnings, envelope := runFindForWarnings(t, "yts", provider.NewYTS(), []media.SearchResult{
+		{ID: "3024", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "yts"},
+		{ID: "movie/604", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "vidnest"},
+		{ID: "3025", Title: "The Matrix Revolutions", Year: "2003", Type: media.Movie, Provider: "yts"},
+	})
+	if len(warnings) != 0 {
+		t.Fatalf("got warnings %+v, want none: --limit left one row and it came from yts", warnings)
+	}
+	if _, ok := envelope["warnings"]; ok {
+		t.Fatalf("the warnings key is present when every emitted row came from the requested base")
 	}
 }
