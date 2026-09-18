@@ -51,6 +51,13 @@ func gatherSearchResults(primary provider.Provider, fallbacks []provider.Provide
 	// providers signal "nothing matched" with an error rather than an empty
 	// slice, so `err == nil` alone would classify every real typo as an
 	// outage — see provider.ErrNoResults.
+	//
+	// Only ErrNoResults, and deliberately not provider.ErrUnrecognisedResponse.
+	// A scraper handed a captive portal or an interception page parses it
+	// into zero cards; counting that as reached is how a completely dead
+	// network reported exit 2, "nothing matched, check the spelling". That
+	// answer is evidence about the connection, not about the catalog, so it
+	// is not a vote.
 	reached := err == nil || errors.Is(err, provider.ErrNoResults)
 	if err != nil {
 		debugf("primary search (%T) failed: %v; broadening to fallback providers", primary, err)
@@ -109,6 +116,8 @@ func multiProviderSearch(primaryResults []media.SearchResult, fallbacks []provid
 			if err != nil {
 				debugf("multi-search fallback (%T) failed: %v", p, err)
 				// Answered, just emptily — still evidence about the title.
+				// provider.ErrUnrecognisedResponse is not: see the note in
+				// gatherSearchResults.
 				if errors.Is(err, provider.ErrNoResults) {
 					mu.Lock()
 					reached = true

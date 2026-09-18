@@ -65,6 +65,13 @@ func (f *FlixHQWS) Search(query string) ([]media.SearchResult, error) {
 	}
 
 	if len(results) == 0 {
+		// Zero cards on a page that is not even the site's search page is
+		// evidence about the connection, not about the catalog: report it as
+		// such so cmd/multisearch.go does not count this provider as reached
+		// and turn a dead network into "nothing matched, check the spelling".
+		if !hasResultContainer(doc) {
+			return nil, fmt.Errorf("%w: searching for %q on %s", ErrUnrecognisedResponse, query, f.BaseURL())
+		}
 		return nil, fmt.Errorf("%w for %q", ErrNoResults, query)
 	}
 

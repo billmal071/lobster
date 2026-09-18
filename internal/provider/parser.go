@@ -218,6 +218,20 @@ func parseDetailPage(doc *goquery.Document) *media.ContentDetail {
 	return detail
 }
 
+// hasResultContainer reports whether a document is recognisably one of the
+// flixhq-engine search pages parseSearchResults reads.
+//
+// .film_list-wrap is the list container itself — the element parseSearchResults
+// selects its .flw-item cards out of — so the site emits it whether or not the
+// query matched anything, while a captive portal, an interception page or an
+// error page served with a 200 does not. That distinction is what separates
+// "this catalog does not have the title" from "something other than the site
+// answered", and the repo's own empty-catalog fixture models the former as
+// exactly this container, empty (internal/provider/errors_test.go).
+func hasResultContainer(doc *goquery.Document) bool {
+	return doc.Find(".film_list-wrap").Length() > 0
+}
+
 // parseLastPage extracts the last page number from pagination links.
 // Returns 1 if no pagination is found.
 func parseLastPage(doc *goquery.Document) int {
