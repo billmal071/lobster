@@ -106,7 +106,7 @@ background process.
 A ref remembers the source that actually produced that row — not the `--base`
 you asked for. `find` searches the requested base *and* a fallback chain, so
 one response can carry rows from several sources, and each row's ref names its
-own. A row no base value can select (some sources are reachable only as
+own. A row that no base value can select (some sources are reachable only as
 fallbacks) carries no base at all. Both `play --ref` and `episodes --ref`
 resolve against whatever the ref carries, so you normally don't need to pass
 `--base` yourself. Pass `--base` explicitly only to deliberately override it.
