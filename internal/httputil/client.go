@@ -14,6 +14,13 @@ func NewClient() *http.Client {
 	return &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
+			// A custom Transport starts with a nil Proxy, which means "no
+			// proxy" rather than "the default": http.DefaultTransport is
+			// what carries ProxyFromEnvironment. Without this line every
+			// request from this client bypasses HTTP_PROXY, HTTPS_PROXY and
+			// NO_PROXY, so on a network that only reaches the internet
+			// through a proxy lobster simply fails, with no hint why.
+			Proxy: http.ProxyFromEnvironment,
 			TLSClientConfig: &tls.Config{
 				MinVersion: tls.VersionTLS12,
 			},

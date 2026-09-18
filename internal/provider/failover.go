@@ -39,6 +39,12 @@ func checkDomainHealth(domain string) bool {
 	client := &http.Client{
 		Timeout: probeTimeout,
 		Transport: &http.Transport{
+			// Same reason as the dialer below: a custom Transport loses the
+			// defaults it does not restate, and a nil Proxy means "no proxy",
+			// not "read the environment". Without it every domain probes as
+			// dead behind a proxy-only network and failover walks the whole
+			// candidate list for nothing.
+			Proxy: http.ProxyFromEnvironment,
 			DialContext: (&net.Dialer{
 				Timeout:       probeTimeout,
 				FallbackDelay: 100 * time.Millisecond,
