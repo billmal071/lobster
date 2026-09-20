@@ -43,6 +43,30 @@ lobster find "the matrix" --limit 10
 Add `--type tv` or `--type movie` when the user was specific ("play the
 *series*"), so a same-named film and show do not both come back.
 
+Always check for a top-level `warnings` array. It is absent when there is
+nothing to say. The warnings are about the base in effect, which is `--base`
+when you pass one and otherwise whatever the user's config file sets — so one
+can appear on a search where you asked for no base of your own, and under
+`auto` none ever does. `find` also searches a fallback chain, so one response
+can mix sources, and three entries say how that went:
+
+- `{"code": "base_not_used", "base": "yts", "results_from_base": 0,
+  "results_total": 21}` — none of the results below came from the base you
+  asked for. Tell the user their chosen source did not have this title rather
+  than implying it did.
+- `{"code": "base_partially_used", "base": "yts", "results_from_base": 2,
+  "results_total": 21}` — it had some of them. Say which count came from their
+  source, and do not present the whole list as that source's.
+- `{"code": "base_unknown", "base": "sopa2day", "results_from_base": 0,
+  "results_total": 20}` — what they asked for names no source; an unrecognised
+  base is not rejected, it quietly falls through to MovieBox. Tell them the
+  name was not recognised and ask which source they meant, rather than
+  presenting the results as theirs.
+
+Do not tell the user a row came from their base unless it did; each `ref`
+names its own source where that source has a base token, so prefer the rows
+whose base matches when they asked for one.
+
 ### 2. Show the user the candidates and stop
 
 **Always ask which one before playing.** Do not pick for them, even when one
@@ -86,10 +110,14 @@ false for vlc/iina and other players) — it has nothing to do with whether you
 detached; a detached play runs the same attached playback internally, in a
 background process.
 
-A ref remembers the provider base it was found under (e.g. `find --base
-yts`). Both `play --ref` and `episodes --ref` resolve against that same base
-automatically, so you normally don't need to pass `--base` yourself. Pass
-`--base` explicitly only to deliberately override it.
+A ref remembers the source that actually produced that row — not the `--base`
+you asked for. `find` searches the requested base *and* a fallback chain, so
+one response can carry rows from several sources, and each row's ref names its
+own — a fallback row is stamped with the provider that returned it, not left
+blank and not stamped with the primary. The exception is a row from one of the
+few sources no `--base` value can select at all: that ref carries no base. Both `play --ref` and `episodes --ref`
+resolve against whatever the ref carries, so you normally don't need to pass
+`--base` yourself. Pass `--base` explicitly only to deliberately override it.
 
 ## TV series
 

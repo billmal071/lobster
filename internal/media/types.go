@@ -31,6 +31,17 @@ type SearchResult struct {
 	Episodes int       // Total episodes (TV only)
 	URL      string    // Full URL to the content page
 	Poster   string    // Poster image URL (e.g., TMDB poster path)
+
+	// Provider names the source that returned this row, as the base token
+	// that selects it (cmd.providerBase) — "" when the row cannot be
+	// attributed to a selectable source.
+	//
+	// Providers do not set it: it is stamped by the layer that merges a
+	// search across the primary and the fallback chain (cmd/multisearch.go),
+	// which is the only place that knows which provider each row came from.
+	// It travels with the ID through deduplication, because it is the ID it
+	// attributes — IDs are provider-specific and not portable.
+	Provider string
 }
 
 // ContentDetail contains detailed metadata fetched from a content's detail page.

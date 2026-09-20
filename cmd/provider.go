@@ -22,6 +22,13 @@ import (
 // a stream itself rather than always deferring to the fallback chain.
 const autoBase = "soap2day"
 
+// resolveDomain is provider.ResolveDomain behind a package var. It probes the
+// configured domain over the network and falls over to a known mirror, which
+// is right in production and wrong in a test: a hermetic test that only asks
+// which *provider type* a base selects would otherwise spend a probe timeout
+// per domain-checked provider. Stub it to return the configured value.
+var resolveDomain = provider.ResolveDomain
+
 // newProvider returns the configured content provider.
 // If APIURL is set, it overrides Base entirely and uses the Consumet API.
 // Otherwise Base selects the scraping provider (config.BaseAuto -> autoBase;
@@ -50,15 +57,15 @@ func newProvider() provider.Provider {
 		return provider.NewSoap2Day()
 	}
 	if strings.Contains(base, "kimcartoon") {
-		domain := provider.ResolveDomain(base, "kimcartoon", overrides)
+		domain := resolveDomain(base, "kimcartoon", overrides)
 		return provider.NewKimCartoon(domain)
 	}
 	if strings.Contains(base, "flixhq.ws") {
-		domain := provider.ResolveDomain(base, "flixhqws", overrides)
+		domain := resolveDomain(base, "flixhqws", overrides)
 		return provider.NewFlixHQWS(domain)
 	}
 	if strings.Contains(base, "flixhq") {
-		domain := provider.ResolveDomain(base, "flixhq", overrides)
+		domain := resolveDomain(base, "flixhq", overrides)
 		return provider.NewFlixHQ(domain)
 	}
 	if strings.Contains(base, "tbcpl") || strings.Contains(base, "1shows") {

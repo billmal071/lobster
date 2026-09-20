@@ -2,10 +2,12 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"lobster/internal/config"
 	"lobster/internal/media"
 )
 
@@ -100,14 +102,17 @@ func findRun(cmd *cobra.Command, args []string) error {
 		results = results[:flagFindLimit]
 	}
 
-	// The configured base, stamped on every result — including ones the
-	// fallback chain supplied, whose IDs came from a different provider. See
-	// playRef.Base (cmd/ref.go): the stamp is a starting point for resolution,
-	// not an attribution.
-	base := ""
+	// Each row is stamped with the provider that actually returned it, not
+	// with the base that was asked for. gatherSearchResults broadens past the
+	// primary whenever it errors or answers thinly (cmd/multisearch.go), so a
+	// uniform cfg.Base stamp put a fallback provider's ID under the primary's
+	// name — and a row falsely named yts moves a later play onto the torrent
+	// path (mayStreamTorrent, cmd/root.go) for a film YTS never returned.
+	configured := ""
 	if cfg != nil {
-		base = cfg.Base
+		configured = config.NormalizeBase(cfg.Base)
 	}
+	primaryBase := searchProviderBase(p)
 
 	out := make([]map[string]any, 0, len(results))
 	for i, r := range results {
@@ -116,7 +121,7 @@ func findRun(cmd *cobra.Command, args []string) error {
 			Title: r.Title,
 			Year:  r.Year,
 			Type:  r.Type.String(),
-			Base:  base,
+			Base:  refBaseFor(r, primaryBase, configured),
 		})
 		if err != nil {
 			return emitErr("internal", 1, "encoding ref: %v", err)
@@ -129,7 +134,152 @@ func findRun(cmd *cobra.Command, args []string) error {
 			"type":  r.Type.String(),
 		})
 	}
-	return emitJSON(map[string]any{"results": out})
+	payload := map[string]any{"results": out}
+	if w := baseBroadeningWarnings(configured, primaryBase, results); len(w) > 0 {
+		payload["warnings"] = w
+	}
+	return emitJSON(payload)
+}
+
+// baseBroadeningWarnings reports, machine-readably, that a base was asked for
+// and some or all of the results came from somewhere else.
+//
+// find always searches the fallback chain as well as the requested base
+// (gatherSearchResults), and until now it announced the broadening only
+// through debugf and a spinner that ui.spinnerVisible suppresses on a
+// non-TTY — so an agent or a script, which is what find exists for, saw
+// nothing at all. It then had no way to tell "yts has this film" from "yts
+// answered nothing and eight scrapers did", and the two call for different
+// next steps.
+//
+// Three codes, not one, and counts on all of them:
+//
+//   - The code is the discriminator because a caller switches on it. Folding
+//     the cases into one code would leave the distinction inferable only by
+//     arithmetic on the counts (results_from_base == 0), which is exactly the
+//     check a consumer skips — and they mean different things, with different
+//     next steps: base_not_used means the source did not have the title, so
+//     try another; base_partially_used means it did, and the rest of the list
+//     is not its; base_unknown means the token names no source at all, so the
+//     fix is the spelling, and retrying other titles against it never helps.
+//   - The counts are on all three because a code cannot express magnitude, and
+//     because one shape parses for every case: "2 of 21 came from yts" and
+//     "19 of 21 came from yts" warrant very different words to the user, and
+//     the caller should not have to re-derive them by tallying refs it cannot
+//     decode.
+//
+// Silence when every emitted row came from the requested base: there is
+// nothing to say, and a warning on a clean answer is noise. Silence under
+// "auto" (or no base at all) for the same reason — broadening is then the
+// documented, desired behaviour rather than a departure from a request.
+//
+// It is additive and absent when there is nothing to say, so a consumer that
+// does not know the key is unaffected: schema 1 is documented in README.md and
+// skills/lobster-play/SKILL.md as a marker for the shape of what *is* there
+// ("check schema before trusting the shape of the rest"), never as a closed
+// set of fields.
+//
+// The tally is over the emitted rows, so `--type` and `--limit` are accounted
+// for: the question is what the base contributed to the response the caller
+// actually received, not what it contributed before truncation.
+func baseBroadeningWarnings(configured, primaryBase string, results []media.SearchResult) []map[string]any {
+	// No base was asked for (or "auto" was, which is the absence of a
+	// preference), or no base value names the primary at all — with api_url
+	// set, base does not select the provider in the first place.
+	if configured == "" || configured == config.BaseAuto || primaryBase == "" {
+		return nil
+	}
+	// A base that selected nothing. newProvider has no unknown-base arm, so
+	// `--base sopa2day` searches MovieBox and primaryBase becomes "moviebox";
+	// tallying rows against it would count another provider's answers as the
+	// requested base's and, when it answered in full, say nothing at all —
+	// while every ref in the same response honestly reads "moviebox".
+	if !baseNamedThePrimary(configured, primaryBase) {
+		return []map[string]any{{
+			"code":              "base_unknown",
+			"base":              configured,
+			"results_from_base": 0,
+			"results_total":     len(results),
+			"message": fmt.Sprintf(
+				"base %q selects no known source; the search ran on %q instead, and each ref names the source that produced it, or carries no base when that source has no base token",
+				configured, primaryBase),
+		}}
+	}
+	fromBase := 0
+	for _, r := range results {
+		if r.Provider == primaryBase {
+			fromBase++
+		}
+	}
+	if fromBase == len(results) {
+		return nil
+	}
+
+	code, message := "base_partially_used", fmt.Sprintf(
+		"only %d of %d results came from base %q; the rest came from fallback providers, and each ref names the source that produced it, or carries no base when that source has no base token",
+		fromBase, len(results), configured)
+	if fromBase == 0 {
+		code, message = "base_not_used", fmt.Sprintf(
+			"no result came from base %q; every result below came from a fallback provider, and each ref names the source that produced it, or carries no base when that source has no base token",
+			configured)
+	}
+	return []map[string]any{{
+		"code":              code,
+		"base":              configured,
+		"results_from_base": fromBase,
+		"results_total":     len(results),
+		"message":           message,
+	}}
+}
+
+// refBaseFor returns the base token to stamp on one row's ref: the token that
+// selects the provider which produced the row, or "" when no base value
+// selects it (applyRefBase treats an empty base as "leave the configuration
+// alone", cmd/play.go).
+//
+// The one refinement over row.Provider is spelling. A base is matched by
+// substring (newProvider, cmd/provider.go), so a user who configured a
+// specific mirror — "flixhq.xx" — gets a primary built from that domain, and
+// collapsing their row to the generic "flixhq" would send a later play to the
+// default domain instead. When the row came from the primary *and* the
+// configured value still names that provider, the caller's own spelling is
+// both honest and more precise, so it is preserved.
+//
+// Both halves of that condition are load-bearing:
+//
+//   - "came from the primary" — "flixhq.ws" contains "flixhq", so without it a
+//     row that FlixHQ supplied as a fallback under a FlixHQWS primary would be
+//     restamped as FlixHQWS's.
+//   - "still names that provider" — newProvider has no unknown-base arm and
+//     falls through to MovieBox, so `--base nonesuch` yields MovieBox rows.
+//     Echoing "nonesuch" back would name a source that does not exist;
+//     "moviebox" is what actually answered. config.BaseAuto is excluded by the
+//     same test, which is what it deserves: "auto" names no provider, it
+//     licenses routing movies to YTS and opening a magnet (cmd/typeroute.go,
+//     cmd/root.go).
+//
+// Containment alone does not settle the second half, which is why
+// baseNamedThePrimary is asked as well: "notmoviebox" contains the
+// fall-through's token while selecting nothing, and the two tests disagree
+// only there. Keeping both is deliberate — containment is what says the
+// caller's spelling is a more precise form of the same token and so worth
+// preserving, and baseNamedThePrimary is what says the value really selected
+// that provider.
+//
+// The cost of the second test is a base whose spelling does not contain its
+// provider's token — "1shows.org" selects TBCPL — which is collapsed to
+// "tbcpl" and so replays against TBCPL's default site rather than that one.
+// It still names the source that answered, which is the property being bought;
+// echoing back a string that may name nothing is what it is being bought with.
+func refBaseFor(r media.SearchResult, primaryBase, configured string) string {
+	if r.Provider == "" {
+		return ""
+	}
+	if r.Provider == primaryBase && strings.Contains(configured, r.Provider) &&
+		baseNamedThePrimary(configured, r.Provider) {
+		return configured
+	}
+	return r.Provider
 }
 
 func init() {

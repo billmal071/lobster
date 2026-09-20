@@ -251,6 +251,31 @@ lobster channels                         # JSON categories + channel counts
 lobster channels --category news         # JSON channels in a category, each with a ref
 ```
 
+`find`'s response may also carry a top-level `warnings` array. It is absent
+when there is nothing to warn about — which includes every search run under
+`auto`, since broadening is then the intended behaviour. The entries it
+currently emits all mean that an explicit base was in effect and some of the
+printed results came from elsewhere, because `find` searches a fallback chain
+as well. "In effect" is the `--base` flag when you pass one and otherwise the
+`base` key in the config file, so a warning can appear on a command line that
+never mentioned `--base`:
+
+- `{"code": "base_not_used", "base": "yts", "results_from_base": 0,
+  "results_total": 21}` — the requested base produced none of the printed
+  results, so that source did not have the title.
+- `{"code": "base_partially_used", "base": "yts", "results_from_base": 2,
+  "results_total": 21}` — it produced some of them, and the rest are another
+  source's rows.
+- `{"code": "base_unknown", "base": "sopa2day", "results_from_base": 0,
+  "results_total": 20}` — the value passed to `--base` names no source at all.
+  An unrecognised base is not rejected; it falls through to MovieBox, which is
+  what the results came from. Fix the spelling rather than retrying.
+
+The counts describe the rows you actually received, so `--type` and `--limit`
+are already applied. Each row's `ref` names the source that produced it, where
+that source has a base token of its own; a few are reachable only as fallbacks
+and no `--base` value selects them, so their rows carry no base at all.
+
 All four print JSON on stdout and never prompt — including on failure. `find`,
 `episodes` and `channels` print nothing else, so their stdout is always
 parseable; `play` shares stdout with the player unless you pass `--detach`
@@ -266,8 +291,10 @@ a fixed position, so it survives a playlist reload or reorder and fails
 closed (rather than guessing) if the match becomes ambiguous or the channel
 is gone.
 
-`play --ref` and `episodes --ref` both resolve against the base the ref was
-found under, and `play` forwards any flags you pass explicitly (`--base`,
+`play --ref` and `episodes --ref` both resolve against the base the ref
+carries — the source that actually produced that row, which is not necessarily
+the `--base` the search was run with, since `find` also searches a fallback
+chain — and `play` forwards any flags you pass explicitly (`--base`,
 `--quality`, `--player`, `--provider`, `--language`, `--audio-language`,
 `--no-subs`, `--debug`, `--continue`) to the detached child so overrides still
 apply in the background.

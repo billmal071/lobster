@@ -29,8 +29,8 @@ func TestFindEmitsResultsWithoutPrompting(t *testing.T) {
 	prevSearch := agentSearch
 	agentSearch = func(primary provider.Provider, fallbacks []provider.Provider, query string) ([]media.SearchResult, error) {
 		return []media.SearchResult{
-			{ID: "movie/watch-the-matrix-19724", Title: "The Matrix", Year: "1999", Type: media.Movie},
-			{ID: "movie/watch-the-matrix-reloaded-19725", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie},
+			{ID: "movie/watch-the-matrix-19724", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "flixhq.ws"},
+			{ID: "movie/watch-the-matrix-reloaded-19725", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "flixhq.ws"},
 		}, nil
 	}
 	t.Cleanup(func() { agentSearch = prevSearch })
@@ -66,6 +66,13 @@ func TestFindEmitsResultsWithoutPrompting(t *testing.T) {
 	}
 
 	// The ref must decode back to the same selection, including the base.
+	//
+	// Both fixture rows are attributed to flixhq.ws, which is also what is
+	// configured, so the base is flixhq.ws for the row's own sake — not
+	// because cfg.Base is copied onto everything. That distinction is the
+	// whole of the provenance change and is asserted separately, on rows the
+	// fallback chain supplied: see
+	// TestFindStampsEachRowWithTheProviderThatProducedIt.
 	ref, err := decodeRef(got.Results[0].Ref)
 	if err != nil {
 		t.Fatalf("emitted ref does not decode: %v", err)
@@ -74,7 +81,7 @@ func TestFindEmitsResultsWithoutPrompting(t *testing.T) {
 		t.Fatalf("ref = %+v", ref)
 	}
 	if ref.Base != "flixhq.ws" {
-		t.Fatalf("ref.Base = %q, want flixhq.ws", ref.Base)
+		t.Fatalf("ref.Base = %q, want flixhq.ws: the row was produced by flixhq.ws", ref.Base)
 	}
 }
 

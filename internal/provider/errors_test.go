@@ -12,6 +12,11 @@ import (
 // wrap ErrNoResults, or cmd.gatherSearchResults classifies a typo as an
 // outage and `find` exits 3 ("run lobster doctor") instead of 2.
 //
+// The fixture is an *empty* page from the site itself, not an unrecognised
+// one: a page that is not the site's search page at all is a statement about
+// the connection rather than the catalog and belongs to ErrUnrecognisedResponse
+// instead — see TestScrapersReportABlockPageAsUnreachableNotAsAnEmptyCatalog.
+//
 // This is the test the plumbing in cmd/ cannot provide: those tests construct
 // ErrNoResults themselves, so they pass even if not one real provider ever
 // produces it. Here each provider is driven, through its own parser, to the
