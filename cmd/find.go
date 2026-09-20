@@ -201,7 +201,7 @@ func baseBroadeningWarnings(configured, primaryBase string, results []media.Sear
 			"results_from_base": 0,
 			"results_total":     len(results),
 			"message": fmt.Sprintf(
-				"base %q selects no known source; the search ran on %q instead, and each ref names the source that produced it",
+				"base %q selects no known source; the search ran on %q instead, and each ref names the source that produced it, or carries no base when that source has no base token",
 				configured, primaryBase),
 		}}
 	}
@@ -216,11 +216,11 @@ func baseBroadeningWarnings(configured, primaryBase string, results []media.Sear
 	}
 
 	code, message := "base_partially_used", fmt.Sprintf(
-		"only %d of %d results came from base %q; the rest came from fallback providers, and each ref names the source that produced it",
+		"only %d of %d results came from base %q; the rest came from fallback providers, and each ref names the source that produced it, or carries no base when that source has no base token",
 		fromBase, len(results), configured)
 	if fromBase == 0 {
 		code, message = "base_not_used", fmt.Sprintf(
-			"no result came from base %q; every result below came from a fallback provider, and each ref names the source that produced it",
+			"no result came from base %q; every result below came from a fallback provider, and each ref names the source that produced it, or carries no base when that source has no base token",
 			configured)
 	}
 	return []map[string]any{{

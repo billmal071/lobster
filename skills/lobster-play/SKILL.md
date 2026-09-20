@@ -43,10 +43,12 @@ lobster find "the matrix" --limit 10
 Add `--type tv` or `--type movie` when the user was specific ("play the
 *series*"), so a same-named film and show do not both come back.
 
-If you passed `--base`, check for a top-level `warnings` array. It is absent
-when there is nothing to say — including whenever you did not pass `--base`,
-so this only ever fires on a request you made. `find` also searches a fallback
-chain, so one response can mix sources, and three entries say how that went:
+Always check for a top-level `warnings` array. It is absent when there is
+nothing to say. The warnings are about the base in effect, which is `--base`
+when you pass one and otherwise whatever the user's config file sets — so one
+can appear on a search where you asked for no base of your own, and under
+`auto` none ever does. `find` also searches a fallback chain, so one response
+can mix sources, and three entries say how that went:
 
 - `{"code": "base_not_used", "base": "yts", "results_from_base": 0,
   "results_total": 21}` — none of the results below came from the base you
@@ -62,8 +64,8 @@ chain, so one response can mix sources, and three entries say how that went:
   presenting the results as theirs.
 
 Do not tell the user a row came from their base unless it did; each `ref`
-names its own source, so prefer the rows whose base matches when they asked
-for one.
+names its own source where that source has a base token, so prefer the rows
+whose base matches when they asked for one.
 
 ### 2. Show the user the candidates and stop
 
@@ -111,8 +113,9 @@ background process.
 A ref remembers the source that actually produced that row — not the `--base`
 you asked for. `find` searches the requested base *and* a fallback chain, so
 one response can carry rows from several sources, and each row's ref names its
-own. A row that no base value can select (some sources are reachable only as
-fallbacks) carries no base at all. Both `play --ref` and `episodes --ref`
+own — a fallback row is stamped with the provider that returned it, not left
+blank and not stamped with the primary. The exception is a row from one of the
+few sources no `--base` value can select at all: that ref carries no base. Both `play --ref` and `episodes --ref`
 resolve against whatever the ref carries, so you normally don't need to pass
 `--base` yourself. Pass `--base` explicitly only to deliberately override it.
 

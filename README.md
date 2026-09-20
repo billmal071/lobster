@@ -252,11 +252,13 @@ lobster channels --category news         # JSON channels in a category, each wit
 ```
 
 `find`'s response may also carry a top-level `warnings` array. It is absent
-when there is nothing to warn about — which includes every search where no
-explicit `--base` was given, since broadening is then the intended behaviour.
-The entries it currently emits all mean that an explicit `--base` was asked
-for and some of the printed results came from elsewhere, because `find`
-searches a fallback chain as well:
+when there is nothing to warn about — which includes every search run under
+`auto`, since broadening is then the intended behaviour. The entries it
+currently emits all mean that an explicit base was in effect and some of the
+printed results came from elsewhere, because `find` searches a fallback chain
+as well. "In effect" is the `--base` flag when you pass one and otherwise the
+`base` key in the config file, so a warning can appear on a command line that
+never mentioned `--base`:
 
 - `{"code": "base_not_used", "base": "yts", "results_from_base": 0,
   "results_total": 21}` — the requested base produced none of the printed
@@ -270,7 +272,9 @@ searches a fallback chain as well:
   what the results came from. Fix the spelling rather than retrying.
 
 The counts describe the rows you actually received, so `--type` and `--limit`
-are already applied. Each row's `ref` names the source that produced it.
+are already applied. Each row's `ref` names the source that produced it, where
+that source has a base token of its own; a few are reachable only as fallbacks
+and no `--base` value selects them, so their rows carry no base at all.
 
 All four print JSON on stdout and never prompt — including on failure. `find`,
 `episodes` and `channels` print nothing else, so their stdout is always
