@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -324,5 +325,65 @@ func TestHLSMasterPlaylist(t *testing.T) {
 	info, _ := os.Stat(out)
 	if info.Size() == 0 {
 		t.Error("output is empty")
+	}
+}
+
+// TestHLSProgressMonotonicUnderContention pins down the ordering guarantee the
+// download UI relies on: reported progress never goes backwards.
+//
+// The engine samples the completed-segment counter and delivers the callback
+// under a mutex. If the counter is read outside that mutex, a worker that
+// counted later can win the lock first, and the worker that counted earlier
+// then reports a smaller number — a progress bar that jumps backwards and a
+// negative speed reading.
+//
+// Forcing that interleaving takes contention of a specific shape: the callback
+// must be slow enough that workers park on the mutex, but hold it for well
+// under the 1ms after which Go's mutex switches to fair, FIFO handoff. The busy
+// wait below keeps it in barging mode, where a freshly arriving worker can CAS
+// past a parked one. With the counter read outside the lock this observes
+// inversions on every run; a sleep long enough to trip starvation mode observes
+// none, which is why this is a busy wait and not a sleep.
+func TestHLSProgressMonotonicUnderContention(t *testing.T) {
+	const totalSegs = 300
+
+	srv := makeHLSServer(t, totalSegs)
+	defer srv.Close()
+
+	out := filepath.Join(t.TempDir(), "output.mkv")
+
+	var mu sync.Mutex
+	var last int64
+	var calls int
+
+	e := &HLSEngine{Client: srv.Client(), RetryDelay: 1 * time.Millisecond, SegmentWorkers: 3}
+	err := e.Download(context.Background(), srv.URL+"/playlist.m3u8", out, "", func(done, total int64) {
+		// Hold the engine's progress lock long enough to make workers queue.
+		for start := time.Now(); time.Since(start) < 50*time.Microsecond; {
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		calls++
+		if total != totalSegs {
+			t.Errorf("total: got %d, want %d", total, totalSegs)
+		}
+		if done < last {
+			t.Errorf("progress went backwards: %d < %d", done, last)
+		}
+		last = done
+	})
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != totalSegs {
+		t.Errorf("progress calls: got %d, want %d", calls, totalSegs)
+	}
+	if last != totalSegs {
+		t.Errorf("final progress: got %d, want %d", last, totalSegs)
 	}
 }
