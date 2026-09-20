@@ -128,8 +128,9 @@ func (e *HLSEngine) downloadHLS(ctx context.Context, streamURL, outputPath, refe
 		}
 	}()
 
-	// Mutex to serialize progress callback delivery, since progressFn
-	// may not be safe for concurrent invocation.
+	// Mutex guarding both the completed-segment count and the progress
+	// callback, since progressFn may not be safe for concurrent invocation
+	// and the count it is handed has to match the delivery order.
 	var progressMu sync.Mutex
 
 	var wg sync.WaitGroup
@@ -153,12 +154,20 @@ func (e *HLSEngine) downloadHLS(ctx context.Context, streamURL, outputPath, refe
 					e.Store.MarkSegmentDone(downloadID, job.idx)
 				}
 
-				done := atomic.AddInt64(&doneCount, 1)
-				if progressFn != nil {
-					progressMu.Lock()
-					progressFn(done, int64(totalSegments))
-					progressMu.Unlock()
+				if progressFn == nil {
+					atomic.AddInt64(&doneCount, 1)
+					continue
 				}
+
+				// Count and report under the same lock. Sampling the
+				// counter outside it lets a worker that counted later
+				// win the lock first, so the worker that counted
+				// earlier then reports a smaller number and the
+				// download UI's progress bar jumps backwards.
+				progressMu.Lock()
+				done := atomic.AddInt64(&doneCount, 1)
+				progressFn(done, int64(totalSegments))
+				progressMu.Unlock()
 			}
 		}()
 	}
