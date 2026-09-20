@@ -258,6 +258,14 @@ func baseBroadeningWarnings(configured, primaryBase string, results []media.Sear
 //     licenses routing movies to YTS and opening a magnet (cmd/typeroute.go,
 //     cmd/root.go).
 //
+// Containment alone does not settle the second half, which is why
+// baseNamedThePrimary is asked as well: "notmoviebox" contains the
+// fall-through's token while selecting nothing, and the two tests disagree
+// only there. Keeping both is deliberate — containment is what says the
+// caller's spelling is a more precise form of the same token and so worth
+// preserving, and baseNamedThePrimary is what says the value really selected
+// that provider.
+//
 // The cost of the second test is a base whose spelling does not contain its
 // provider's token — "1shows.org" selects TBCPL — which is collapsed to
 // "tbcpl" and so replays against TBCPL's default site rather than that one.
@@ -267,7 +275,8 @@ func refBaseFor(r media.SearchResult, primaryBase, configured string) string {
 	if r.Provider == "" {
 		return ""
 	}
-	if r.Provider == primaryBase && strings.Contains(configured, r.Provider) {
+	if r.Provider == primaryBase && strings.Contains(configured, r.Provider) &&
+		baseNamedThePrimary(configured, r.Provider) {
 		return configured
 	}
 	return r.Provider

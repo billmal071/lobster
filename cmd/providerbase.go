@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"strings"
-
 	"lobster/internal/provider"
 )
 
@@ -75,22 +73,23 @@ var fallThroughBase = providerBase(provider.NewMovieBox())
 // selected the provider that answered, rather than being a value newProvider
 // did not recognise.
 //
-// Two cases, and the second is the one that cannot be read off the spelling:
+// Every arm of newProvider but the last is driven by the base, so a primary
+// that is not the fall-through can only have come from an arm the configured
+// value satisfied: it named that provider, however it was spelled. That is
+// what keeps "1shows.org" — a real TBCPL base whose spelling contains no
+// "tbcpl" — a named base, and "flixhq.xx" a named FlixHQ one, without
+// mirroring newProvider's aliases here.
 //
-//   - The configured value contains the primary's token, so it named it.
-//     This is also how a mirror spelling ("flixhq.xx") stays a match.
-//   - Otherwise the primary is still a match whenever it is not the
-//     fall-through, because every other arm of newProvider is driven by the
-//     base: a non-MovieBox primary can only have come from an arm the
-//     configured value satisfied. That is what keeps "1shows.org" — a real
-//     TBCPL base whose spelling contains no "tbcpl" — a named base, without
-//     mirroring newProvider's aliases here.
-//
-// The residue is a base that reached MovieBox without naming it, which is
-// exactly the unrecognised case.
+// The fall-through is the one primary that cannot be read that way, because
+// it is where every unrecognised value lands, and there the configured value
+// has to be that exact token. Containment is not enough: "notmoviebox"
+// reaches MovieBox through the same default branch "sopa2day" does, so
+// matching it by substring would call a base that selected nothing an
+// explicit MovieBox base — and would then stamp "notmoviebox", a source that
+// does not exist, onto rows MovieBox produced.
 func baseNamedThePrimary(configured, primaryBase string) bool {
-	if strings.Contains(configured, primaryBase) {
+	if primaryBase != fallThroughBase {
 		return true
 	}
-	return primaryBase != fallThroughBase
+	return configured == fallThroughBase
 }

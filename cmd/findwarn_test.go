@@ -289,3 +289,44 @@ func TestFindTreatsAnExplicitMovieBoxBaseAsNamed(t *testing.T) {
 		t.Fatalf("got warnings %+v, want none: --base moviebox asked for MovieBox and MovieBox produced every row", warnings)
 	}
 }
+
+// The substring trap. "notmoviebox" names no provider — newProvider has no
+// moviebox arm at all, so it reaches MovieBox through the same default branch
+// "sopa2day" does — yet it *contains* "moviebox". A containment test therefore
+// reads it as an explicit MovieBox base, which costs twice over: the caller is
+// told nothing about a token that selected nothing, and every ref in the
+// response is stamped "notmoviebox", naming a source that does not exist.
+//
+// Only the fall-through token itself may be matched exactly; containment is
+// what makes "notmoviebox" indistinguishable from "moviebox".
+func TestFindDoesNotMistakeASubstringOfTheFallThroughForThatBase(t *testing.T) {
+	warnings, envelope := runFindForWarnings(t, "notmoviebox", provider.NewMovieBox(), []media.SearchResult{
+		{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "moviebox"},
+		{ID: "2", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "moviebox"},
+	})
+	if len(warnings) != 1 || warnings[0].Code != "base_unknown" {
+		t.Fatalf("got warnings %+v, want one base_unknown; --base notmoviebox selected no provider, it merely contains the fall-through's token", warnings)
+	}
+	if warnings[0].Base != "notmoviebox" {
+		t.Errorf("warning base = %q, want %q", warnings[0].Base, "notmoviebox")
+	}
+
+	var results []struct {
+		Ref string `json:"ref"`
+	}
+	if err := json.Unmarshal(envelope["results"], &results); err != nil {
+		t.Fatalf("results is not an array of objects: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want 2", len(results))
+	}
+	for i, r := range results {
+		decoded, err := decodeRef(r.Ref)
+		if err != nil {
+			t.Fatalf("decodeRef(results[%d]): %v", i, err)
+		}
+		if decoded.Base != "moviebox" {
+			t.Errorf("ref for row %d has base %q, want %q; MovieBox produced the row and \"notmoviebox\" names nothing, so stamping it would send a replay looking for a source that does not exist", i, decoded.Base, "moviebox")
+		}
+	}
+}
