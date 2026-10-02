@@ -1119,3 +1119,91 @@ func TestAnimeOnsenShedEpisodeOneProbeIsNotAnEmptyCatalogue(t *testing.T) {
 		t.Fatalf("episodeCount err = %v; it wraps ErrNoResults, which tells the chain animeonsen does not have this show", err)
 	}
 }
+
+// TestAnimeOnsenWatchDoesNotNeedACompleteEpisodeListToPlay is the collision
+// between this file's two newest features.
+//
+// The resolver's fallback hands Watch a "showID:season:episode" id
+// (resolver.tryStreamProviderFallback), and a movie or a season-less request
+// hands it "". Both used to be answered by enumerating the whole series and
+// looking the number up — and enumeration now returns its measured prefix
+// *together with* ErrIncompleteEpisodeList whenever it could not reach a
+// confirmed boundary, which resolveNumericEpisodeID reports as a failure
+// because any error there is one. So playback broke precisely when the
+// shedding warning fired, and an episode above the prefix was reported "not
+// found" while a solitary HEAD of its manifest answers 200.
+//
+// The enumeration was never buying anything here: on this source the episode
+// id *is* the episode number, so the lookup only ever reproduced the number it
+// was given, and the existence check it also performed is made again — better,
+// because it is not bounded by the prefix — by the solitary probe Watch runs
+// before it returns a stream. The request count is asserted for that reason:
+// it is what tells a re-introduced enumeration from an absent one.
+func TestAnimeOnsenWatchDoesNotNeedACompleteEpisodeListToPlay(t *testing.T) {
+	// A host that answers 200 for every episode, so enumeration runs into the
+	// animeOnsenMaxEpisodes ceiling and reports its prefix with the flag.
+	// GetEpisodes under this fixture returns a list and an error at once.
+	newFake := func(t *testing.T) *animeOnsenFake {
+		return newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": -1}})
+	}
+	// Precondition, written out rather than assumed: this fixture really does
+	// make GetEpisodes answer with both.
+	t.Run("the fixture does return a flagged list", func(t *testing.T) {
+		eps, err := newFake(t).provider().GetEpisodes("x", "x")
+		if len(eps) == 0 || !errors.Is(err, ErrIncompleteEpisodeList) {
+			t.Fatalf("GetEpisodes = %d episodes, err %v; want a prefix wrapping ErrIncompleteEpisodeList", len(eps), err)
+		}
+	})
+
+	for _, tc := range []struct {
+		name      string
+		episodeID string
+		want      int
+	}{
+		{"an episode inside the measured prefix", "x:1:3", 3},
+		// Past the prefix the old code reported "episode N not found" while
+		// the CDN serves it.
+		{"an episode past the measured prefix", "x:1:5000", 5000},
+		// What every movie request in the fallback chain sends.
+		{"the empty id the chain sends for a film", "", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake(t)
+			s, err := f.provider().Watch("x", tc.episodeID, "", "1080")
+			if err != nil {
+				t.Fatalf("Watch(%q) = %v; an incomplete episode list must not stop playback", tc.episodeID, err)
+			}
+			if want := fmt.Sprintf("/%d/manifest.mpd", tc.want); !strings.HasSuffix(s.URL, want) {
+				t.Fatalf("Watch(%q) URL = %q, want one ending %q", tc.episodeID, s.URL, want)
+			}
+			if got := len(f.requests()); got != 1 {
+				t.Fatalf("Watch made %d requests, want 1 (the availability probe); the episode list is being enumerated to resolve a number it was handed", got)
+			}
+		})
+	}
+}
+
+// TestAnimeOnsenWatchStillRefusesWhatTheLookupUsedTo is the other side of the
+// test above: dropping the catalogue lookup must not drop the checks it was
+// making. "Episode N exists" is a real check, and trading a wrong failure for
+// a wrong success would be no improvement at all.
+func TestAnimeOnsenWatchStillRefusesWhatTheLookupUsedTo(t *testing.T) {
+	for _, tc := range []struct{ name, episodeID string }{
+		// The check the probe below Watch makes, reached through the fallback
+		// ref rather than through a bare number.
+		{"an episode past the end of the series", "x:1:13"},
+		// A season that is a different catalogue entry here.
+		{"a second season", "x:2:1"},
+		{"a season that is not a number", "x:one:1"},
+		{"an episode that is not a number", "x:1:one"},
+		{"an episode numbered zero", "x:1:0"},
+		{"too few fields", "x:1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": 12}})
+			if s, err := f.provider().Watch("x", tc.episodeID, "", "1080"); err == nil {
+				t.Fatalf("Watch(%q) = %q, want a refusal", tc.episodeID, s.URL)
+			}
+		})
+	}
+}

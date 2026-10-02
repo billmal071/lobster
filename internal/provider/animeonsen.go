@@ -868,23 +868,47 @@ func (p *AnimeOnsen) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
 // Watch resolves an episode to its DASH manifest.
 //
 // Native episode IDs are bare episode numbers. The fallback resolver instead
-// passes "showID:season:episode" (resolver.tryStreamProviderFallback), which
-// resolveNumericEpisodeID converts — and which refuses season > 1, because
-// here that is a different show.
+// passes "showID:season:episode" (resolver.tryStreamProviderFallback), and ""
+// for a film or a request with no season — parseFallbackEpisodeRef reads both,
+// and refuses season > 1, because here that is a different show.
+//
+// It reads them rather than looking them up, which is the correction this
+// carries. resolveNumericEpisodeID resolves such an ID through the provider's
+// own episode catalogue, and here that catalogue is a probe: GetEpisodes HEADs
+// its way to the end of the series and returns its measured prefix *together
+// with* ErrIncompleteEpisodeList whenever it could not reach a confirmed
+// boundary. resolveNumericEpisodeID treats any error as fatal, so playback
+// failed precisely when the shedding warning fired — and an episode above the
+// prefix was "not found" while a solitary HEAD of its manifest answers 200.
+//
+// Nothing is lost by reading the number instead. On this source the native
+// episode ID *is* the episode number (manifestURL interpolates it), so the
+// lookup only ever reproduced the number it was handed; and the one real check
+// it also made — that the episode exists — is made below by a solitary probe
+// of that episode's own manifest, which is both the oracle the enumeration is
+// built out of and not bounded by how far the enumeration got.
 //
 // server and quality are accepted and ignored, honestly: there is one server
 // and one 720p rendition. Quality is reported as what the manifest actually
 // contains rather than echoing back what was asked for.
 func (p *AnimeOnsen) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+	var n int
 	if episodeID == "" || strings.Contains(episodeID, ":") {
-		nid, err := resolveNumericEpisodeID(p.GetEpisodes, mediaID, episodeID)
+		// The show the ref names is not used in place of mediaID: the
+		// manifest is fetched under the ID the caller asked to play, which is
+		// what this provider did before and what resolver.Resolve matched on.
+		_, epNum, err := parseFallbackEpisodeRef(mediaID, episodeID)
 		if err != nil {
 			return nil, err
 		}
-		episodeID = nid
+		n = epNum
+	} else {
+		var err error
+		if n, err = strconv.Atoi(episodeID); err != nil {
+			return nil, fmt.Errorf("animeonsen: bad episode id %q", episodeID)
+		}
 	}
-	n, err := strconv.Atoi(episodeID)
-	if err != nil || n < 1 {
+	if n < 1 {
 		return nil, fmt.Errorf("animeonsen: bad episode id %q", episodeID)
 	}
 	ok, err := p.episodeAvailable(mediaID, n)
