@@ -81,7 +81,7 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (*media.Stream, *Re
 			select {
 			case <-ctx.Done():
 				r.recordPending(pending, report)
-				report.add(probeResult{Provider: "(resolver)", Stage: "overall-timeout", Err: ctx.Err()})
+				report.add(probeResult{Provider: SyntheticProvider, Stage: StageOverallTimeout, Err: ctx.Err()})
 				_ = r.health.Save()
 				return nil, report, ctx.Err()
 			case <-batchDeadline:

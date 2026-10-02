@@ -285,6 +285,24 @@ func playRun(cmd *cobra.Command, args []string) error {
 		if errors.As(err, &notFound) {
 			return emitErr("no_results", exitNoResults, "%v", notFound)
 		}
+		// A failed stream resolution is reported as the resolver saw it: a
+		// one-line verdict plus one row per probe attempt.
+		//
+		// Flattening the report into the message is not an option at this
+		// width — the live nine-provider digest is a 300-character sentence
+		// that an agent cannot branch on and a human does not read — and
+		// leaving it in the debug log is what made this failure mode cost an
+		// afternoon. exitProvidersFailed is unchanged and must stay: "every
+		// source is down" and "no such title" (exitNoResults, the branch
+		// above) call for opposite advice, and only errSeasonNotFound is the
+		// latter.
+		var resolveErr *resolveFailure
+		if errors.As(err, &resolveErr) {
+			return emitErrDetail("providers_failed", exitProvidersFailed,
+				map[string]any{"providers": resolveErr.providerRows()},
+				"no source could stream %s: %d providers tried, none produced a playable stream (per-provider reasons in error.providers)",
+				playTarget(r.Title, flagSeason, flagEpisode), resolveErr.providersTried())
+		}
 		return emitErr("providers_failed", exitProvidersFailed, "%v", err)
 	}
 
@@ -292,6 +310,17 @@ func playRun(cmd *cobra.Command, args []string) error {
 		"status": "finished",
 		"title":  r.Title,
 	})
+}
+
+// playTarget names what the run was trying to play, for a failure message.
+// Season and episode are included only when both were requested, which for
+// `play --ref` means exactly "this is a series" — the command refuses a TV ref
+// without both (playRun's season_episode_required gate).
+func playTarget(title string, season, episode int) string {
+	if season > 0 && episode > 0 {
+		return fmt.Sprintf("season %d episode %d of %q", season, episode, title)
+	}
+	return fmt.Sprintf("%q", title)
 }
 
 // errSeasonNotFound is "that season does not exist", raised from inside

@@ -51,7 +51,23 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	src := seasonSource(primary, r)
 	if len(src.seasons) == 0 {
 		if src.err != nil {
-			return emitErr("providers_failed", exitProvidersFailed, "getting seasons: %v", src.err)
+			// Name both halves of what happened. seasonSource only ever puts
+			// a non-nil err here on its `len(hits) == 0` return, so reaching
+			// this line means the primary failed AND the whole fallback chain
+			// was re-searched by title and nothing answered. "getting seasons:
+			// no seasons found" said neither: it reads as one provider's
+			// complaint about one call, which sends the reader to look at
+			// --base when eleven providers were asked.
+			//
+			// The bound is part of the answer, not decoration. The scan is
+			// capped at episodesFallbackTimeout (5s) while the play path's
+			// resolver gives each provider 30s, so a provider that answers
+			// `play` can legitimately miss this scan — and a reader comparing
+			// the two commands on one ref needs to know a deadline was in
+			// play before concluding the chain does not have the show.
+			return emitErr("providers_failed", exitProvidersFailed,
+				"no provider could list the seasons of %q: %s reported %v, and no fallback provider answered within %s",
+				r.Title, providerLabel(primary), src.err, episodesFallbackTimeout)
 		}
 		return emitErr("no_results", exitNoResults, "no seasons found for %q", r.Title)
 	}

@@ -108,3 +108,50 @@ func TestResolveRecordsTimeoutAsFailure(t *testing.T) {
 		t.Fatalf("expected a batch-timeout attempt for the slow provider in the report, got %+v", rep.Attempts)
 	}
 }
+
+// The attempt Resolve appends when its own overall deadline expires must be
+// the one IsProviderProbe rejects.
+//
+// This pins a producer against a consumer in another package. cmd's
+// resolveFailure.providersTried counts providers for the "%d providers tried"
+// line in a user-facing failure message, and it skips this row by asking
+// IsProviderProbe. Were Resolve to record the row under some other name — a
+// rename, a second synthetic row added for a different reason — nothing would
+// fail to compile and the count would silently gain one. So the assertion is
+// not "a timeout row exists" but "the timeout row Resolve actually writes is
+// not a provider probe, and every real probe still is".
+func TestResolveOverallTimeoutRowIsNotAProviderProbe(t *testing.T) {
+	slow := &delayedSP{fakeSP: &fakeSP{}, name: "slow", delay: time.Second, stream: &media.Stream{URL: "https://cdn/slow.m3u8"}}
+	r := New([]provider.Provider{slow}, NewHealthStore(), func(string, ...any) {})
+	r.validate = false
+	r.batchSize = 1
+	r.attemptTimeout = time.Second
+	// Shorter than the batch deadline, so the overall deadline is what fires.
+	r.overallTimeout = 20 * time.Millisecond
+
+	_, rep, err := r.Resolve(context.Background(), Request{Title: "Foo", MediaType: media.Movie})
+	if err == nil {
+		t.Fatal("expected failure when the overall deadline expires")
+	}
+
+	var synthetic, probes int
+	for _, a := range rep.Attempts {
+		if a.IsProviderProbe() {
+			probes++
+			continue
+		}
+		synthetic++
+		if a.Stage != StageOverallTimeout {
+			t.Errorf("non-probe attempt has Stage %q, want %q", a.Stage, StageOverallTimeout)
+		}
+	}
+	if synthetic != 1 {
+		t.Fatalf("IsProviderProbe rejected %d of %d attempts, want exactly 1 (the overall-timeout row); attempts: %+v",
+			synthetic, len(rep.Attempts), rep.Attempts)
+	}
+	// The abandoned provider is still a probe, so the count a caller derives
+	// from IsProviderProbe is 1 here and not 0.
+	if probes != 1 {
+		t.Errorf("IsProviderProbe accepted %d attempts, want 1 (the abandoned provider); attempts: %+v", probes, rep.Attempts)
+	}
+}

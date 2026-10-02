@@ -257,10 +257,91 @@ func tryFallbackStream(primary provider.Provider, content media.SearchResult, se
 	stream, report, err := r.Resolve(context.Background(), req)
 	if err != nil {
 		debugf("resolve failed: %s", report.Summary())
-		return nil, err
+		return nil, &resolveFailure{report: report, err: err}
 	}
 	debugf("resolve ok via report: %s", report.Summary())
 	return stream, nil
+}
+
+// resolveFailure is "the resolver ran and no provider produced a stream",
+// carrying the per-provider report alongside the error.
+//
+// The report was already assembled on every Resolve call and then thrown away
+// here: `debugf("resolve failed: %s", report.Summary())` was its only
+// consumer, so the reasons eleven providers gave existed solely behind -x. The
+// returned error has the same digest flattened into one sentence by
+// resolver.Resolve, which is unparseable and, at nine providers, too long to
+// read as a message.
+//
+// Error() deliberately returns the wrapped error verbatim and Unwrap exposes
+// it, so the callers that only render text — cmd/batch.go's per-episode
+// download loop, makeStreamResolver — read exactly as they did before this
+// type existed. Only a caller that asks for the structure gets it.
+type resolveFailure struct {
+	report *resolver.Report
+	err    error
+}
+
+func (e *resolveFailure) Error() string { return e.err.Error() }
+func (e *resolveFailure) Unwrap() error { return e.err }
+
+// providerRows renders the report as JSON-ready rows, one per probe attempt, in
+// the order the resolver recorded them.
+//
+// One row per *attempt*, not per provider: the resolver probes in
+// health-ordered batches and records a batch-timeout row for any provider it
+// abandons (Resolver.recordPending), so a provider can legitimately appear once
+// as a timeout and never again. Collapsing by name would hide which stage each
+// one reached, and the stage is the actionable half — "search" means the
+// provider's own search call failed (resolveWithProvider, internal/resolver/probe.go),
+// "match" means it searched fine and has nothing under that title, "resolve"
+// means it has the title and could not serve it, "validate" means it served a
+// URL that did not answer.
+//
+// "search" and "match" are deliberately not merged: a failed search is the
+// provider being broken or blocked and says nothing about the catalogue, while
+// "match" is the one stage that really does mean "not here". Reading them as
+// one is how a provider outage gets diagnosed as a missing title.
+func (e *resolveFailure) providerRows() []map[string]any {
+	if e.report == nil {
+		return nil
+	}
+	rows := make([]map[string]any, 0, len(e.report.Attempts))
+	for _, a := range e.report.Attempts {
+		row := map[string]any{
+			"provider":    a.Provider,
+			"stage":       a.Stage,
+			"duration_ms": a.DurationMs,
+		}
+		if a.Err != nil {
+			row["error"] = a.Err.Error()
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// providersTried counts the distinct providers the report mentions, for the
+// one-line message. Distinct, because providerRows is per attempt.
+//
+// Attempt.IsProviderProbe is what excludes the resolver's note about its own
+// deadline, which carries resolver.SyntheticProvider as its name and would
+// otherwise be counted as a tenth provider in a nine-provider run. The
+// predicate is asked rather than the stage string compared: the stage is
+// resolver's to rename, and a literal here would have gone on compiling while
+// quietly adding one to a number a user reads.
+func (e *resolveFailure) providersTried() int {
+	if e.report == nil {
+		return 0
+	}
+	seen := make(map[string]bool, len(e.report.Attempts))
+	for _, a := range e.report.Attempts {
+		if !a.IsProviderProbe() {
+			continue
+		}
+		seen[a.Provider] = true
+	}
+	return len(seen)
 }
 
 // makeStreamResolver builds a StreamResolver that tries the primary provider

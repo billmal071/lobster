@@ -176,13 +176,43 @@ cases that are not "you called it wrong":
 | 0 | success | — |
 | 1 | bad invocation | You called it wrong: a malformed `ref`, a missing `--season`/`--episode`, `episodes` on a movie ref, `--season`/`--episode`/`--download` given for a live ref, an unrecognised `--type` or other flag, or an invalid config value. Also internal failures such as an unwritable cache directory. Fix the command; do not retry it unchanged. **Exception: `error.code: "not_configured"`** from `channels` or `play --ref` on a live ref means the user has no live TV sources set up at all — nothing was malformed. Tell them to add one under `[live_tv]` in the config; do not edit the command |
 | 2 | no results | Suggest a spelling correction, or a different title. Also returned when the season or episode number does not exist — re-run `lobster episodes` and check. A live ref can hit exit 2 two ways: **`error.code: "no_results"`** means the channel is no longer in the playlist (playlists change upstream) — re-run `lobster channels` for a current ref. **`error.code: "ambiguous_channel"`** means the ref now matches more than one channel and lobster refused to guess. Two distinct playlist problems cause this: a duplicate tvg-id that survives Title narrowing, or (when the ref's tvg-id is empty) a duplicate folded channel name — Title narrowing only runs when the ref has a tvg-id, so an empty-tvg-id ref can't fall back to it. Either way this is a playlist data problem, not one a different ref value fixes: resolution never uses the ref's `ID`, so a fresh ref for either duplicate carries the same tvg-id/name/source and hits the same ambiguity again. Re-running `lobster channels` does not disambiguate — it only lets you inspect the conflicting rows. The playlist needs a unique tvg-id or name for each channel |
-| 3 | every provider failed | Run `lobster doctor` and report which sources are down. Do **not** suggest a spelling fix — the title was found, the sources are broken. For a live ref this also covers the playlist it lives in failing to load on replay — the channel likely still exists, retry later |
+| 3 | every provider failed | Read `error.providers` first when it is present (see below), then run `lobster doctor` and report which sources are down. Do **not** suggest a spelling fix — the title was found, the sources are broken. For a live ref this also covers the playlist it lives in failing to load on replay — the channel likely still exists, retry later |
 | 4 | player unavailable | mpv (or the configured player) is not installed, or the background process could not be started |
 
 **A misspelling exits 2, not 3.** `find` distinguishes "every provider answered
 and none has this title" from "nothing answered at all", so exit 3 really does
 mean broken sources — never reach for a spelling fix on it. It is not the
 default failure; treat it as a genuine outage report and say so.
+
+When `play` fails because no source could produce a stream, the envelope carries
+an additive `error.providers` array — one row per probe attempt, in the order
+the resolver recorded them:
+
+```json
+{"schema": 1, "error": {"code": "providers_failed",
+  "message": "no source could stream season 1 episode 1 of \"Some Show\": 9 providers tried, none produced a playable stream (per-provider reasons in error.providers)",
+  "providers": [{"provider": "VaPlayer", "stage": "resolve", "error": "status 404", "duration_ms": 812}]}}
+```
+
+`stage` is the actionable half:
+
+| `stage` | what it means | what to do |
+| ------- | ------------- | ---------- |
+| `search` | that provider's own search call **failed** — it is broken, blocked or unreachable. It says nothing about whether the title exists there | a source problem; `lobster doctor` and report it as down |
+| `match` | the search worked and returned nothing under that title — this provider genuinely does not have it | nothing to fix; the other rows are where the answer is |
+| `resolve` | it has the title and could not produce a stream for it | a source problem for that title; try again later |
+| `validate` | it handed back a URL that did not answer | same |
+| `batch-timeout` | it was still running when its batch deadline passed | too slow this run; it may answer on a retry |
+
+Do not read `search` as "not available here" — only `match` means that. The
+field is additive — absent on every other failure, and on older lobsters — so
+read it defensively rather than requiring it.
+
+One row is not a provider: `{"provider": "(resolver)", "stage":
+"overall-timeout"}` is the resolver saying its own deadline expired before the
+chain was exhausted, so providers after that point were never asked at all. The
+`N providers tried` count in the message excludes it; anything still running
+when it fired also carries its own `batch-timeout` row.
 
 Exit 3 from `play --detach` is a narrower case: the background process was
 started and then died within a second. The message names the log file. Read
