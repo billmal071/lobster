@@ -58,10 +58,34 @@ func emitJSON(payload map[string]any) error {
 // emitErr writes the error envelope and returns an *exitError carrying the
 // process exit code.
 func emitErr(code string, exit int, format string, a ...any) error {
+	return emitErrDetail(code, exit, nil, format, a...)
+}
+
+// emitErrDetail is emitErr with extra machine-readable fields merged into the
+// error object, for a failure whose cause does not fit in one sentence.
+//
+// The caller it exists for is a failed stream resolution: nine to eleven
+// providers each gave their own reason, and a message long enough to carry all
+// of them is a message nobody reads — while dropping them loses the only
+// information that says what to do next. So the message stays one line and the
+// detail goes in a sibling field the caller can iterate.
+//
+// Additive, and deliberately so. agentSchema is documented as a shape-compat
+// marker ("a skill written against a different lobster can detect the
+// mismatch"), not a closed field set, and every existing consumer reads
+// error.code and error.message by name — neither of which this can displace,
+// because both are written after the merge.
+func emitErrDetail(code string, exit int, detail map[string]any, format string, a ...any) error {
 	msg := fmt.Sprintf(format, a...)
-	_ = emitJSON(map[string]any{
-		"error": map[string]any{"code": code, "message": msg},
-	})
+	e := make(map[string]any, len(detail)+2)
+	for k, v := range detail {
+		e[k] = v
+	}
+	// After the copy, so a detail key can never shadow the two fields the
+	// envelope contract guarantees.
+	e["code"] = code
+	e["message"] = msg
+	_ = emitJSON(map[string]any{"error": e})
 	return &exitError{code: exit, err: fmt.Errorf("%s: %s", code, msg)}
 }
 

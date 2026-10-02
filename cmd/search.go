@@ -358,10 +358,25 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			}
 			fbStream, fbErr := tryFallbackStream(chainPrimary, selected, season, episode)
 			if fbErr != nil {
-				if err != nil {
-					return fmt.Errorf("getting seasons: %w", err)
-				}
-				return fmt.Errorf("no seasons found")
+				// The resolver's failure is the cause, and `err` is not.
+				//
+				// This returned `fmt.Errorf("getting seasons: %w", err)` — the
+				// primary's complaint about enumerating seasons, which is the
+				// very condition this branch exists to continue past.
+				// validateSeasonEpisode logs "deferring to the resolver"
+				// (cmd/play.go) and lets the request through precisely because
+				// that error is not fatal; resurfacing it here as the final
+				// cause sends the reader to look at season listings when the
+				// answer is that no source can serve the stream. It cost real
+				// debugging time on a live KAMUI ref whose nine-provider
+				// digest was sitting in fbErr the whole time.
+				//
+				// A swallowed-and-superseded error must not outlive the step
+				// that superseded it, so the superseded one goes to the debug
+				// log and the resolver's own verdict — report and all — is
+				// returned.
+				debugf("resolve failed after the primary could not enumerate seasons (superseded primary error: %v)", err)
+				return fbErr
 			}
 			return playStream(fbStream, title, selected, season, episode)
 		}
@@ -528,7 +543,21 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				if fbErr == nil {
 					return playStream(fbStream, title, selected, selectedSeason.Number, episode)
 				}
-				debugf("fallback stream failed: %v", fbErr)
+				// The same rule as the seasons branch above, and it was broken
+				// the same way: fbErr was logged and dropped, and control fell
+				// into the gate below, which reports the *primary's*
+				// episode-listing error — the step this branch had already
+				// decided was survivable. The resolver ran last and knows
+				// most, so its verdict is the one that goes back.
+				//
+				// What that gives up is the gate's remedy sentence ("list them
+				// with 'lobster episodes --ref ...'"), and giving it up is
+				// right here: by this point fallbackEpisodeList has already
+				// asked the same chain for the same list and failed, so the
+				// remedy pointed the caller at a command that had just run
+				// inside this one.
+				debugf("resolve failed after the primary could not list season %d's episodes (superseded primary error: %v)", selectedSeason.Number, err)
+				return fbErr
 			}
 		}
 		if err != nil || len(episodes) == 0 {
