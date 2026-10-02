@@ -293,8 +293,15 @@ func (e *resolveFailure) Unwrap() error { return e.err }
 // abandons (Resolver.recordPending), so a provider can legitimately appear once
 // as a timeout and never again. Collapsing by name would hide which stage each
 // one reached, and the stage is the actionable half — "search" means the
-// provider does not have the title, "resolve" means it has it and could not
-// serve it, "validate" means it served a URL that did not answer.
+// provider's own search call failed (resolveWithProvider, internal/resolver/probe.go),
+// "match" means it searched fine and has nothing under that title, "resolve"
+// means it has the title and could not serve it, "validate" means it served a
+// URL that did not answer.
+//
+// "search" and "match" are deliberately not merged: a failed search is the
+// provider being broken or blocked and says nothing about the catalogue, while
+// "match" is the one stage that really does mean "not here". Reading them as
+// one is how a provider outage gets diagnosed as a missing title.
 func (e *resolveFailure) providerRows() []map[string]any {
 	if e.report == nil {
 		return nil

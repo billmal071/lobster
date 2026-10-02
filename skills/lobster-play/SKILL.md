@@ -194,12 +194,19 @@ the resolver recorded them:
   "providers": [{"provider": "VaPlayer", "stage": "resolve", "error": "status 404", "duration_ms": 812}]}}
 ```
 
-`stage` is the actionable half: `search`/`match` means that provider does not
-have the title, `resolve` means it has it and could not serve it, `validate`
-means it handed back a URL that did not answer, and `batch-timeout` means it was
-still running when its batch deadline passed. The field is additive — absent on
-every other failure, and on older lobsters — so read it defensively rather than
-requiring it.
+`stage` is the actionable half:
+
+| `stage` | what it means | what to do |
+| ------- | ------------- | ---------- |
+| `search` | that provider's own search call **failed** — it is broken, blocked or unreachable. It says nothing about whether the title exists there | a source problem; `lobster doctor` and report it as down |
+| `match` | the search worked and returned nothing under that title — this provider genuinely does not have it | nothing to fix; the other rows are where the answer is |
+| `resolve` | it has the title and could not produce a stream for it | a source problem for that title; try again later |
+| `validate` | it handed back a URL that did not answer | same |
+| `batch-timeout` | it was still running when its batch deadline passed | too slow this run; it may answer on a retry |
+
+Do not read `search` as "not available here" — only `match` means that. The
+field is additive — absent on every other failure, and on older lobsters — so
+read it defensively rather than requiring it.
 
 One row is not a provider: `{"provider": "(resolver)", "stage":
 "overall-timeout"}` is the resolver saying its own deadline expired before the
