@@ -316,12 +316,22 @@ func (e *resolveFailure) providerRows() []map[string]any {
 
 // providersTried counts the distinct providers the report mentions, for the
 // one-line message. Distinct, because providerRows is per attempt.
+//
+// Attempt.IsProviderProbe is what excludes the resolver's note about its own
+// deadline, which carries resolver.SyntheticProvider as its name and would
+// otherwise be counted as a tenth provider in a nine-provider run. The
+// predicate is asked rather than the stage string compared: the stage is
+// resolver's to rename, and a literal here would have gone on compiling while
+// quietly adding one to a number a user reads.
 func (e *resolveFailure) providersTried() int {
 	if e.report == nil {
 		return 0
 	}
 	seen := make(map[string]bool, len(e.report.Attempts))
 	for _, a := range e.report.Attempts {
+		if !a.IsProviderProbe() {
+			continue
+		}
 		seen[a.Provider] = true
 	}
 	return len(seen)

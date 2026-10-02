@@ -201,6 +201,12 @@ still running when its batch deadline passed. The field is additive — absent o
 every other failure, and on older lobsters — so read it defensively rather than
 requiring it.
 
+One row is not a provider: `{"provider": "(resolver)", "stage":
+"overall-timeout"}` is the resolver saying its own deadline expired before the
+chain was exhausted, so providers after that point were never asked at all. The
+`N providers tried` count in the message excludes it; anything still running
+when it fired also carries its own `batch-timeout` row.
+
 Exit 3 from `play --detach` is a narrower case: the background process was
 started and then died within a second. The message names the log file. Read
 that log rather than running `doctor` — the cause is in it.

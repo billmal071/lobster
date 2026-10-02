@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/provider"
+	"lobster/internal/resolver"
 )
 
 // deadStreamer is a chain member that has the show and refuses to stream it.
@@ -261,5 +263,45 @@ func TestResolveFailurePreservesTheResolverSentence(t *testing.T) {
 	}
 	if !errors.Is(rf, inner) {
 		t.Errorf("errors.Is(resolveFailure, inner) = false; the wrapped cause must stay reachable")
+	}
+}
+
+// The "%d providers tried" count must not include the resolver's own
+// overall-timeout row.
+//
+// When Resolve's deadline expires it appends an attempt named
+// resolver.SyntheticProvider (internal/resolver/resolver.go:84) so the report
+// says why it stopped. providersTried counted distinct Attempt.Provider values
+// and so counted that note as a provider: a run where two providers were asked
+// reported three. These two commits exist to stop this message lying about
+// what happened, and an inflated provider count is the same defect — it sends
+// the reader looking for a provider that was never probed.
+//
+// Fed the input that violates the guarantee: a report with real attempts AND
+// the synthetic row, not one with only real attempts, which cannot tell a
+// correct count from an inflated one.
+func TestProvidersTriedExcludesTheResolversOwnTimeoutRow(t *testing.T) {
+	rf := &resolveFailure{
+		err: errors.New("all providers failed"),
+		report: &resolver.Report{Attempts: []resolver.Attempt{
+			{Provider: "Alpha", Stage: "resolve", Err: errors.New("status 404")},
+			{Provider: "Beta", Stage: "batch-timeout", Err: errors.New("no result within 30s")},
+			{Provider: resolver.SyntheticProvider, Stage: resolver.StageOverallTimeout, Err: context.DeadlineExceeded},
+		}},
+	}
+	if got := rf.providersTried(); got != 2 {
+		t.Errorf("providersTried() = %d, want 2; the %q row is the resolver reporting its own deadline, not a provider that was asked",
+			got, resolver.SyntheticProvider)
+	}
+
+	// The row itself stays in the rendered list: "the resolver ran out of
+	// time" is the most actionable line a reader can get, and dropping it
+	// would leave the envelope silent about why the chain stopped early.
+	rows := rf.providerRows()
+	if len(rows) != 3 {
+		t.Fatalf("providerRows() returned %d rows, want 3 (one per recorded attempt, timeout row included): %+v", len(rows), rows)
+	}
+	if rows[2]["provider"] != resolver.SyntheticProvider || rows[2]["stage"] != resolver.StageOverallTimeout {
+		t.Errorf("providerRows()[2] = %+v, want the %q / %q row preserved", rows[2], resolver.SyntheticProvider, resolver.StageOverallTimeout)
 	}
 }
