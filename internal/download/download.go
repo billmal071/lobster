@@ -128,23 +128,50 @@ func probeDuration(path string) float64 {
 	return duration
 }
 
-// runFFmpegDownload runs a single ffmpeg download attempt. If a partial file
-// already exists at outputPath, it probes its duration and uses -ss to seek
-// past the already-downloaded content, appending to a temporary file and then
-// concatenating the parts.
-func runFFmpegDownload(ffmpegPath string, stream *media.Stream, title, subFile, outputPath string) error {
-	// Check if we can resume from a partial download.
-	resumeFromSec := probeDuration(outputPath)
+// ffmpegHeaderArgs builds ffmpeg's -headers option for whatever of Referer and
+// User-Agent the stream requires, or nothing when it requires neither.
+//
+// Both go into ONE -headers value. ffmpeg treats -headers as a single option,
+// so a second one replaces the first and drops a header rather than adding to
+// it — the same reason internal/player/headers.go folds them into one
+// --demuxer-lavf-o=headers= value for mpv.
+//
+// The User-Agent is not optional where a source asks for one. ffmpeg defaults
+// to "Lavf/<version>", and at least one CDN lobster reaches
+// (cdn.animeonsen.xyz) denies that exact value with 403 while serving any
+// other — so without this, a stream whose provider set UserAgent fails on its
+// very first request, with an access error that reads like a dead host.
+func ffmpegHeaderArgs(stream *media.Stream) []string {
+	var b strings.Builder
+	if stream.Referer != "" {
+		b.WriteString("Referer: " + stream.Referer + "\r\n")
+	}
+	if stream.UserAgent != "" {
+		b.WriteString("User-Agent: " + stream.UserAgent + "\r\n")
+	}
+	if b.Len() == 0 {
+		return nil
+	}
+	return []string{"-headers", b.String()}
+}
 
-	// Build ffmpeg args as explicit slice
+// ffmpegDownloadArgs builds the full ffmpeg command line for one download
+// attempt.
+//
+// Separated from runFFmpegDownload so it can be asserted on without executing
+// ffmpeg. That matters for more than tidiness: the headers below are the only
+// thing standing between a CDN that requires them and a 403 on the first
+// request, and a test that stopped at ffmpegHeaderArgs would prove the value
+// is built correctly while saying nothing about whether it is passed. CI has
+// no ffmpeg, so running it was never an option either.
+func ffmpegDownloadArgs(stream *media.Stream, title, subFile, targetPath string, resumeFromSec float64) []string {
 	args := []string{
 		"-y", // Overwrite output (for partial/empty files)
 	}
 
-	// Pass Referer and headers for CDNs that require them
-	if stream.Referer != "" {
-		args = append(args, "-headers", "Referer: "+stream.Referer+"\r\n")
-	}
+	// Pass whatever headers the CDN requires. See ffmpegHeaderArgs: both go
+	// into one -headers value, and the User-Agent is load-bearing.
+	args = append(args, ffmpegHeaderArgs(stream)...)
 
 	// If resuming, seek past already-downloaded content on the input side.
 	if resumeFromSec > 0 {
@@ -179,19 +206,29 @@ func runFFmpegDownload(ffmpegPath string, stream *media.Stream, title, subFile, 
 		)
 	}
 
-	// When resuming, write to a temporary file; we'll concatenate after.
-	targetPath := outputPath
-	if resumeFromSec > 0 {
-		targetPath = outputPath + ".part"
-	}
-
 	// Add metadata
-	args = append(args,
+	return append(args,
 		"-metadata", fmt.Sprintf("title=%s", title),
 		"-progress", "pipe:1",
 		"-nostats",
 		targetPath,
 	)
+}
+
+// runFFmpegDownload runs a single ffmpeg download attempt. If a partial file
+// already exists at outputPath, it probes its duration and uses -ss to seek
+// past the already-downloaded content, appending to a temporary file and then
+// concatenating the parts.
+func runFFmpegDownload(ffmpegPath string, stream *media.Stream, title, subFile, outputPath string) error {
+	// Check if we can resume from a partial download.
+	resumeFromSec := probeDuration(outputPath)
+
+	targetPath := outputPath
+	if resumeFromSec > 0 {
+		// When resuming, write to a temporary file; we'll concatenate after.
+		targetPath = outputPath + ".part"
+	}
+	args := ffmpegDownloadArgs(stream, title, subFile, targetPath, resumeFromSec)
 
 	cmd := exec.Command(ffmpegPath, args...)
 	stdout, err := cmd.StdoutPipe()

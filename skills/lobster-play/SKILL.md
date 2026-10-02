@@ -67,6 +67,20 @@ Do not tell the user a row came from their base unless it did; each `ref`
 names its own source where that source has a base token, so prefer the rows
 whose base matches when they asked for one.
 
+`episodes` uses the same array for one entry of its own:
+
+- `{"code": "episode_list_incomplete", "provider": "animeonsen",
+  "episodes_listed": 10}` — the episodes listed were all confirmed, and the
+  source could not establish where the season ends. Say "at least 10" rather
+  than "10 episodes", and do not tell the user an episode does not exist
+  because it is not on the list.
+- `{"code": "episode_list_from_fallback", "base": "animeonsen",
+  "provider": "anipub", "episodes_listed": 10}` — the base the user asked for
+  could not list this season and a fallback answered instead. Say which source
+  the list came from, and do not promise the episodes will play: a fallback can
+  list episodes it cannot stream. Try the base again before treating its count
+  as settled.
+
 ### 2. Show the user the candidates and stop
 
 **Always ask which one before playing.** Do not pick for them, even when one

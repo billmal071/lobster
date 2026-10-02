@@ -141,7 +141,7 @@ func StartApp(p provider.Provider, cfg *config.Config, liveSources []string, mgr
 		state:             stateTrending,
 		provider:          p,
 		cartoonProvider:   provider.NewKimCartoon(provider.ResolveDomain("kimcartoon.com.co", "kimcartoon", cfg.DomainOverrides)),
-		animeProvider:     provider.NewAllAnime(cfg.AnimeDub),
+		animeProvider:     newTUIAllAnime(cfg),
 		liveTVProvider:    provider.NewLiveTV(liveSources),
 		fallbackProviders: fallbacks,
 		config:            cfg,
@@ -912,4 +912,14 @@ func (m AppModel) renderDetailText(textWidth int) string {
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, titleStr, typeStr, "", extDetails)
+}
+
+// newTUIAllAnime builds the anime provider the TUI uses, with the adult-filter
+// setting applied. The CLI does the same in cmd.newProvider; both have to,
+// because the flag is a setter rather than a constructor argument, and a
+// forgotten call here would be a setting the TUI silently ignores.
+func newTUIAllAnime(cfg *config.Config) *provider.AllAnime {
+	aa := provider.NewAllAnime(cfg.AnimeDub)
+	aa.SetAllowAdult(cfg.AllowAdultAnime)
+	return aa
 }

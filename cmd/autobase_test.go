@@ -146,6 +146,7 @@ func TestEveryReaderOfBaseAgreesAboutYTS(t *testing.T) {
 		{base: "tbcpl"},
 		{base: "1shows.org"},
 		{base: "kimcartoon", probesNetwork: true},
+		{base: "animeonsen"},
 		{base: "allanime"},
 		{base: "moviebox"},
 		{base: "vidnest"},

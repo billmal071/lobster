@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
 
+	"lobster/internal/config"
 	"lobster/internal/media"
 	"lobster/internal/provider"
 	"lobster/internal/resolver"
@@ -98,7 +100,36 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		return emitErr("no_results", exitNoResults, "season %d not found for %q", flagSeason, r.Title)
 	}
 
+	// Whoever answers below, this is who the request named — the configured
+	// primary, and not whatever the chain has already put in p. The chain can
+	// replace p, and when it does the replacement's list is not comparable to
+	// the one the requested source would have given, so the fact of the
+	// substitution is itself the finding. See episodeSourceWarnings.
+	//
+	// It must be captured from primary rather than from p, because by this
+	// line p is no longer necessarily the primary: seasonSource replaces it
+	// with the first chain hit whenever the primary cannot enumerate seasons,
+	// and seasonAcrossHits replaces it again when the primary's season list
+	// lacks the requested season. Reading p here made the comparison below
+	// "did the chain member that answered differ from the chain member that
+	// answered", which is never true — so the warning stayed silent in exactly
+	// the case it exists for, a base that could not answer at all, and the
+	// base test below asked whether the *chain member's* token named the
+	// primary.
+	asked := primary
+
 	eps, err := listSeasonEpisodes(p, src, sel)
+	// An enumeration that stopped short of the end is an answer, not a
+	// failure: the list is episodes the provider actually confirmed, and
+	// dropping it to ask the chain would trade a measured prefix for a guess
+	// from a provider that may invent one (#61). What it must not do is pass
+	// for a complete list — that is the same dishonesty one layer up, and the
+	// warning below is the whole reason this case is kept rather than
+	// rejected.
+	incomplete := ""
+	if len(eps) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
+		incomplete, err = err.Error(), nil
+	}
 	if err != nil || len(eps) == 0 {
 		// Enumerating seasons and enumerating episodes are different
 		// questions, and a provider can answer the first and not the second:
@@ -127,6 +158,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		if a := firstEpisodeList(alts, wantSeason); a != nil {
 			debugf("episodes: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), a.season.Number)
 			p, seasons, sel, eps, err = a.hit.provider, a.hit.seasons, a.season, a.episodes, nil
+			incomplete = a.incomplete
 		}
 	}
 	if err != nil {
@@ -161,13 +193,90 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		out = append(out, map[string]any{"number": e.Number, "title": e.Title})
 	}
 
-	return emitJSON(map[string]any{
+	payload := map[string]any{
 		"title":    r.Title,
 		"seasons":  seasonNums,
 		"season":   sel.Number,
 		"episodes": out,
 		"provider": providerLabel(p),
-	})
+	}
+	if w := episodeSourceWarnings(asked, p, incomplete, len(out)); len(w) > 0 {
+		payload["warnings"] = w
+	}
+	return emitJSON(payload)
+}
+
+// episodeSourceWarnings builds the additive warnings array for this command:
+// absent when there is nothing to say, the same contract find's carries
+// (cmd/find.go, baseBroadeningWarnings) and for the same reason — a consumer
+// that does not know the key is unaffected, and one that does can tell "this
+// season has 10 episodes" from "10 is as far as enumeration got".
+//
+// # episode_list_incomplete
+//
+// A list that cannot be completed is the episodes-shaped version of the bug
+// `play` had in #66 — a confident answer that was not the one the evidence
+// supported. The count itself is evidence-backed; what was missing was any way
+// to see that the evidence ran out.
+//
+// # episode_list_from_fallback
+//
+// This one was argued against in the previous round and the argument was
+// wrong, so it is worth writing down why.
+//
+// The case against: the envelope's `provider` key already names whoever
+// answered, and this command documents that key as the thing that makes a
+// listing checkable. True, and still not enough. `provider` tells a caller
+// *who* answered; it does not tell them that someone else was asked first and
+// could not answer. Those are different facts, and the second one is the one
+// that was costing correctness: a 429 on one AnimeOnsen probe sent `episodes`
+// to the chain, and the chain's AniPub answered with ten episodes of a
+// twelve-episode series — from a provider whose stream path returns an
+// encrypted blob, so every episode it listed was unplayable. Exit 0, a
+// plausible list, no indication that anything had been substituted. The same
+// find.go reasoning applies verbatim: "the distinction is inferable only by
+// arithmetic the consumer skips".
+//
+// The count cannot be compared against what the requested source would have
+// given — it did not answer, so there is no number to compare — which is
+// exactly why the substitution rather than the shortfall is what is reported.
+//
+// Silent when no base was named, or "auto" was, or the base does not select
+// the primary at all: broadening is then the documented behaviour rather than
+// a departure from a request, which is the rule find.go already follows.
+func episodeSourceWarnings(asked, answered provider.Provider, incomplete string, listed int) []map[string]any {
+	var out []map[string]any
+	if incomplete != "" {
+		out = append(out, map[string]any{
+			"code":            "episode_list_incomplete",
+			"provider":        providerLabel(answered),
+			"episodes_listed": listed,
+			"message": fmt.Sprintf(
+				"%s could not establish where this season ends, so the %d episodes above are what it confirmed and there may be more: %s",
+				providerLabel(answered), listed, incomplete),
+		})
+	}
+	configured := ""
+	if cfg != nil {
+		configured = config.NormalizeBase(cfg.Base)
+	}
+	// searchProviderBase, not providerBase: it is the same table behind a
+	// package var, which is how a test maps a stub onto a token without the
+	// stub having to be one of the concrete provider types.
+	askedBase := searchProviderBase(asked)
+	if asked != answered && configured != "" && configured != config.BaseAuto &&
+		baseNamedThePrimary(configured, askedBase) {
+		out = append(out, map[string]any{
+			"code":            "episode_list_from_fallback",
+			"base":            configured,
+			"provider":        providerLabel(answered),
+			"episodes_listed": listed,
+			"message": fmt.Sprintf(
+				"base %q could not list this season, so the %d episodes above came from %s instead; a fallback provider can list episodes it cannot stream, so check that a ref from this listing plays before relying on the count",
+				configured, listed, providerLabel(answered)),
+		})
+	}
+	return out
 }
 
 // listSeasonEpisodes makes the first episode-listing call, under a deadline
@@ -476,6 +585,10 @@ type episodeAnswer struct {
 	hit      *seasonHit
 	season   media.Season
 	episodes []media.Episode
+	// incomplete is the provider's own reason, when it returned a list it
+	// knows may be short (provider.ErrIncompleteEpisodeList). Empty means the
+	// provider reported a complete list.
+	incomplete string
 }
 
 // firstEpisodeList asks every hit for the requested season's episodes and
@@ -505,11 +618,18 @@ func firstEpisodeList(hits []*seasonHit, wantSeason int) *episodeAnswer {
 		go func(idx int, h *seasonHit, sel media.Season) {
 			defer wg.Done()
 			eps, err := episodesWithContext(ctx, h.provider, h.id, sel.ID)
+			// A prefix a provider measured and flagged beats no list at all,
+			// and the flag travels with it so the caller is never told it is
+			// the whole season. Any other error means no answer.
+			incomplete := ""
+			if len(eps) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
+				incomplete, err = err.Error(), nil
+			}
 			if err != nil || len(eps) == 0 {
 				debugf("episodes: fallback %T cannot list season %d (err=%v, episodes=%d)", h.provider, sel.Number, err, len(eps))
 				return
 			}
-			answers[idx] = &episodeAnswer{hit: h, season: sel, episodes: eps}
+			answers[idx] = &episodeAnswer{hit: h, season: sel, episodes: eps, incomplete: incomplete}
 		}(i, h, sel)
 	}
 	wg.Wait()

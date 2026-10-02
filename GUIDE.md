@@ -261,7 +261,7 @@ player = "mpv"
 # torrent swarm:
 #   base = "soap2day"
 # Available: auto, soap2day, moviebox, flixhq.to, flixhq.ws, kimcartoon,
-# vaplayer, vidnest, tbcpl, 1shows.org, allanime, yts
+# vaplayer, vidnest, tbcpl, 1shows.org, animeonsen, allanime, yts
 # See "Content sources" below for what each one covers.
 base = "auto"
 
@@ -342,7 +342,8 @@ and where the others break"). Run it before concluding a source is broken.
 | `flixhq.to`, `flixhq.ws` | Films and series | Scraper-based. `flixhq.ws` was the default before `auto`. Both check their domain at startup and try known alternates (plus any `domain_overrides`) when it is unreachable. |
 | `tbcpl`, `1shows.org` | Films and series | The same provider against the same site: `tbcpl` resolves to `https://www.1shows.org`, `1shows.org` to `https://1shows.org`. Honours `audio_language` for multi-dub releases. |
 | `kimcartoon` | Cartoons and anime | Domain-checked like FlixHQ. |
-| `allanime` | Anime | No longer part of the automatic fallback chain — its sources endpoint is crypto-gated behind a bot challenge — so it is reachable only by naming it here. `lobster doctor` reports whether it answers. |
+| `animeonsen` | Anime | Public API, no key and no DRM, and in the automatic fallback chain ahead of the other anime sources. Two things to know before naming it. It **carries no subtitles** — the stream is Japanese audio and the source has no text track at all, so you need `subdl_api_key` set for anything to appear. And it has **one 720p rendition**, so `quality` has nothing to choose: a run under it reports 720 whatever you asked for, rather than claiming a height the stream does not have. Its episode counts are measured by probing the CDN (the catalogue endpoints need a key lobster does not ship), so a series with a gap in its numbering lists short rather than long. |
+| `allanime` | Anime | `allow_adult_anime = true` is sometimes needed to find a title at all: the catalogue hides some ordinary shows behind the same filter as its adult ones. No longer part of the automatic fallback chain — its sources endpoint is crypto-gated behind a bot challenge — so it is reachable only by naming it here. `lobster doctor` reports whether it answers. |
 | `moviebox` | Films | **Cannot enumerate episodes.** Its episode listing is generated, not fetched: every season returns exactly ten placeholder rows, so a 22-episode season lists as 10. (The season count itself comes from search metadata, and is 1 for any ID MovieBox did not find itself.) Fine for films. |
 | `vidnest` | Films | **Cannot enumerate episodes**, the same way: every season lists episodes 1–50 whether they exist or not. Fine for films. |
 | `yts` | Films only | No TV catalogue at all, so a series named under `--base yts` is played from the fallback chain instead — for playback, `--base yts` pins nothing for a series. `lobster episodes` under it can still fail outright, per the note above. Resolves to a **magnet**, so playback joins a BitTorrent swarm and your IP is visible to its peers; lobster serves it over loopback, so `--download` works too, but the swarm is joined either way. If no peer answers within 90 seconds the run gives up with "the swarm may be dead". |
