@@ -60,6 +60,29 @@ type animeOnsenFake struct {
 	// with every 429. The live CDN sends none, so the default models that.
 	throttleRetryAfter string
 
+	// stallAfter names the episodes that hold their request open for stallFor
+	// before answering, unless the request's own context is cancelled first —
+	// in which case nothing is written at all. The value is how many requests
+	// answer normally first (0: stall from the very first). stallAll stalls
+	// every episode and every request.
+	//
+	// It is the only knob here that can tell a request bounded by the probe
+	// budget from one bounded by the HTTP client's 30 s timeout. Every other
+	// fixture answers immediately, so the probe's deadline could only ever be
+	// consulted *between* requests and a stalled round trip was
+	// indistinguishable from a fast one.
+	//
+	// Keyed per episode rather than "every episode above N", because a wave
+	// probes 1,2,4,8,... — so a threshold low enough to stall the episode
+	// under test also stalls the bracket's own upper probes, and the
+	// measurement then never reaches the arm the test is aimed at. Counted per
+	// request for the same reason: the confirmation probe asks about an
+	// episode the search has usually already asked about once, and a fixture
+	// that stalls both never gets past the search.
+	stallAfter map[int]int
+	stallAll   bool
+	stallFor   time.Duration
+
 	mu        sync.Mutex
 	reqs      []animeOnsenReq
 	inFlight  int
@@ -137,6 +160,27 @@ func (f *animeOnsenFake) handle(w http.ResponseWriter, r *http.Request) {
 			f.mu.Unlock()
 			if left > 0 {
 				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+		}
+		stall := f.stallAll
+		if !stall && f.stallAfter != nil {
+			f.mu.Lock()
+			left, ok := f.stallAfter[n]
+			if ok && left > 0 {
+				f.stallAfter[n] = left - 1
+			}
+			f.mu.Unlock()
+			stall = ok && left == 0
+		}
+		if stall {
+			select {
+			case <-time.After(f.stallFor):
+			case <-r.Context().Done():
+				// The client gave up on this request. Answering now would
+				// write into a closed response, and a fixture that answered
+				// anyway could not distinguish a bounded request from an
+				// unbounded one.
 				return
 			}
 		}
@@ -1081,9 +1125,22 @@ func TestAnimeOnsenRetryRefusesToSleepPastItsDeadline(t *testing.T) {
 		throttleAbove: -1,
 	})
 	p := f.provider()
-	// A deadline already in the past. The first request still goes out — the
-	// probe does not pre-check — and the 429 it gets back must not be slept on.
-	if _, err := p.probeEpisodeWithRetries("x", 1, p.now().Add(-time.Second), animeOnsenProbeRetries); err == nil {
+	// A clock that leaves budget for the first request and none for the
+	// backoff after it. The request has to go out — the deadline now bounds
+	// the request itself, so a deadline already in the past would be refused
+	// before the wire and never reach the retry at all — and the 429 it gets
+	// back must not be slept on.
+	base := time.Now()
+	deadline := base.Add(time.Second)
+	calls := 0
+	p.now = func() time.Time {
+		calls++
+		if calls <= 1 {
+			return base
+		}
+		return deadline.Add(time.Second)
+	}
+	if _, err := p.probeEpisodeWithRetries("x", 1, deadline, animeOnsenProbeRetries); err == nil {
 		t.Fatal("probeEpisodeWithRetries succeeded against a host that answers 429 to everything")
 	}
 	if n := len(*waits); n != 0 {
@@ -1205,5 +1262,171 @@ func TestAnimeOnsenWatchStillRefusesWhatTheLookupUsedTo(t *testing.T) {
 				t.Fatalf("Watch(%q) = %q, want a refusal", tc.episodeID, s.URL)
 			}
 		})
+	}
+}
+
+// withAnimeOnsenProbeBudget shrinks the probe's budget for one test, so a
+// deadline can be reached in milliseconds instead of seconds.
+func withAnimeOnsenProbeBudget(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := animeOnsenProbeBudget
+	animeOnsenProbeBudget = d
+	t.Cleanup(func() { animeOnsenProbeBudget = prev })
+}
+
+// TestAnimeOnsenProbeBoundsEachRequestInFlightByItsBudget is the gap the
+// budget's own comment claimed could not exist ("under 4.5 s the probe always
+// gets to answer").
+//
+// The budget was only ever consulted between requests and between waves, so a
+// single stalled round trip was bounded by the HTTP client's 30 s timeout
+// instead — six times the 5 s at which cmd/episodes.go abandons the call and
+// asks the fallback chain. That is the silent downgrade the whole 429 fix
+// exists to prevent, reached by a different route, and the abandoned goroutine
+// goes on probing behind it.
+//
+// The assertion is on elapsed time, because that is the thing that changes: an
+// unbounded probe still returns a flagged answer eventually, just long after
+// anyone is listening.
+func TestAnimeOnsenProbeBoundsEachRequestInFlightByItsBudget(t *testing.T) {
+	animeOnsenNoSleep(t)
+	withAnimeOnsenProbeBudget(t, 300*time.Millisecond)
+	// The bracket's first wave is 1,2,4,...,128, so everything up to 32
+	// answers at once and the top two probes hold their requests open far
+	// longer than the budget. The stalled ones are the top of the wave rather
+	// than the bottom on purpose: animeOnsenProbeInFlight slots are handed out
+	// in no particular order, so a wave whose *low* episodes stall can starve
+	// the fast ones out of a slot entirely and measure nothing at all.
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes:   map[string]int{"x": -1},
+		stallAfter: map[int]int{64: 0, 128: 0},
+		stallFor:   3 * time.Second,
+	})
+	p := f.provider()
+
+	start := time.Now()
+	n, err := p.episodeCount("x")
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Fatalf("episodeCount took %s against a %s budget; a request already in flight is not bounded by the probe deadline, only the gaps between them are",
+			elapsed, animeOnsenProbeBudget)
+	}
+	// A stalled probe teaches nothing about its episode, which is the same
+	// thing a shed one teaches: report the measured prefix and say it is one,
+	// rather than failing the provider or claiming the series ends here.
+	if !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("episodeCount err = %v, want one wrapping ErrIncompleteEpisodeList", err)
+	}
+	if n != 32 {
+		t.Fatalf("episodeCount = %d, want the 32 episodes that answered before the stall", n)
+	}
+}
+
+// TestAnimeOnsenAnUnreachableCDNIsNotAShortAnswer is the other side of the
+// test above.
+//
+// The probe deadline and the HTTP client's own 30 s timeout surface the same
+// context.DeadlineExceeded, and only one of them means "this is as far as the
+// measurement got". A client timeout means the CDN could not be reached at
+// all, which is a failure to report, not a prefix to flag — reading it as
+// budget expiry would have the provider answer with a confident short list
+// every time the network is down.
+func TestAnimeOnsenAnUnreachableCDNIsNotAShortAnswer(t *testing.T) {
+	animeOnsenNoSleep(t)
+	// Stall every episode, and let the client give up long before the probe's
+	// own budget does.
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes: map[string]int{"x": 12},
+		stallAll: true,
+		stallFor: 3 * time.Second,
+	})
+	p := f.provider()
+	p.client = &http.Client{Timeout: 50 * time.Millisecond}
+
+	_, err := p.probeEpisodeWithRetries("x", 1, p.now().Add(time.Hour), animeOnsenProbeRetries)
+	if err == nil {
+		t.Fatal("probeEpisodeWithRetries succeeded against a CDN that never answered")
+	}
+	if errors.Is(err, errAnimeOnsenProbeExpired) {
+		t.Fatalf("probe err = %v; a client timeout with an hour of budget left was reported as the budget running out, which turns an unreachable CDN into an honest-looking short list", err)
+	}
+}
+
+// TestAnimeOnsenASpentBudgetIsNotReportedAsThrottling pins which of the two
+// "the wave taught nothing" reasons is reported.
+//
+// They point at different levers — throttling is answered by lowering
+// animeOnsenProbeInFlight, a spent budget by raising animeOnsenProbeBudget —
+// so reporting the wrong one sends whoever reads the warning to the wrong
+// place. The wave here is starved rather than shed: the stalled probes hold
+// every in-flight slot until the deadline, so the fast episodes below them
+// never get one and nothing at all is measured.
+func TestAnimeOnsenASpentBudgetIsNotReportedAsThrottling(t *testing.T) {
+	animeOnsenNoSleep(t)
+	withAnimeOnsenProbeBudget(t, 200*time.Millisecond)
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes: map[string]int{"x": -1},
+		stallAll: true,
+		stallFor: 3 * time.Second,
+	})
+	_, err := f.provider().episodeCount("x")
+	if err == nil {
+		t.Fatal("episodeCount succeeded against a CDN that answered nothing")
+	}
+	if !strings.Contains(err.Error(), "probe exceeded") {
+		t.Fatalf("episodeCount err = %v, want one naming the spent probe budget", err)
+	}
+	if strings.Contains(err.Error(), "throttled") {
+		t.Fatalf("episodeCount err = %v; the budget ran out, and calling that throttling points at the wrong lever", err)
+	}
+}
+
+// TestAnimeOnsenAStalledConfirmationProbeStillYieldsThePrefix reaches the one
+// place the budget can run out that is not a wave: the solitary HEAD of n+1
+// that episodeCount sends before it reports a boundary.
+//
+// It is the last probe of a successful measurement, so a budget spent there
+// has a real prefix behind it — twelve episodes the CDN served — and losing
+// that to a transport error would send `episodes` to the fallback chain with
+// nothing, which is the downgrade this whole file is about. The boundary is
+// simply unconfirmed, which is what ErrIncompleteEpisodeList says.
+//
+// The fixture has to leave budget for the bracket and the narrowing and run
+// out only inside the confirmation probe; a budget already spent is caught one
+// line earlier and never reaches this arm.
+func TestAnimeOnsenAStalledConfirmationProbeStillYieldsThePrefix(t *testing.T) {
+	animeOnsenNoSleep(t)
+	withAnimeOnsenProbeBudget(t, 400*time.Millisecond)
+	// A one-episode series, so the bracket lands on the boundary directly
+	// (1 present, 2 absent) and the narrowing never runs. Episode 2 answers
+	// the bracket's 404 and then stalls, which makes the stalled request the
+	// confirmation probe and nothing else — 404s are deliberately not cached,
+	// so the probe really does ask again.
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes:   map[string]int{"x": 1},
+		stallAfter: map[int]int{2: 1},
+		stallFor:   3 * time.Second,
+	})
+	p := f.provider()
+
+	n, err := p.episodeCount("x")
+	if !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("episodeCount = %d, err = %v; want the measured prefix wrapping ErrIncompleteEpisodeList", n, err)
+	}
+	if n != 1 {
+		t.Fatalf("episodeCount = %d, want the 1 episode that answered", n)
+	}
+	// Proof the arm under test is the one reached, and not the between-waves
+	// budget check: episode 2 has to have been asked about twice, once by the
+	// bracket and once by the confirmation probe that then stalled.
+	asked := 0
+	for _, r := range f.requests() {
+		if strings.HasSuffix(r.path, "/2/manifest.mpd") {
+			asked++
+		}
+	}
+	if asked != 2 {
+		t.Fatalf("episode 2 was probed %d times, want 2 (the bracket, then the confirmation probe); this test is not reaching the confirmation probe at all", asked)
 	}
 }

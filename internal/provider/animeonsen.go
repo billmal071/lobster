@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,7 +83,17 @@ const (
 //
 // Under 4.5 s the probe always gets to answer, and when it has to stop early
 // it answers with the prefix it measured and the ErrIncompleteEpisodeList
-// flag. The cost is that a four-digit series against a slow CDN now reports a
+// flag.
+//
+// "Always" rests on the budget reaching the requests and not only the gaps
+// between them. It did not, at first: every probe was built with
+// http.NewRequest, so the budget was consulted between waves while a single
+// stalled round trip ran against the HTTP client's 30 s timeout — six times
+// the caller's cap, i.e. the same silent downgrade by another route, with the
+// abandoned goroutine still probing behind it. headManifest carries the
+// remaining budget into each request's context, and a request the deadline
+// cancels is read as errAnimeOnsenProbeExpired: unknown, not absent and not a
+// transport failure. The cost is that a four-digit series against a slow CDN now reports a
 // flagged prefix where it would previously have been cancelled outright; that
 // is the same contract the animeOnsenMaxEpisodes ceiling already has, and it
 // is visible in the JSON rather than silent.
@@ -144,6 +155,20 @@ var (
 // because those two readings produce a short list and a missing show
 // respectively, and both look like a finished answer from outside.
 var errAnimeOnsenThrottled = errors.New("animeonsen: the CDN throttled the availability probe")
+
+// errAnimeOnsenProbeExpired marks a probe whose request was still in flight
+// when the probe budget ran out.
+//
+// It is a third answer alongside "present", "absent" and "shed", and it is
+// read the same way as "shed": the episode is unknown, the measurement carries
+// on with what it did learn, and the prefix is reported with
+// ErrIncompleteEpisodeList. Reading it as a transport failure instead would
+// lose the whole provider to the fallback chain — the exact silent downgrade
+// the retry policy above exists to prevent — and reading it as "absent" would
+// end the series wherever the CDN happened to be slow.
+//
+// It is never retried: there is by definition no budget left to retry inside.
+var errAnimeOnsenProbeExpired = errors.New("animeonsen: the availability probe ran out of budget mid-request")
 
 // animeOnsenRetryable reports whether status is worth asking again.
 //
@@ -283,8 +308,13 @@ func NewAnimeOnsenAt(apiBase, cdnBase string) *AnimeOnsen {
 // Go-http-client/1.1 User-Agent is answered 403 as well (measured
 // 2026-10-02), so a probe that let net/http fill the header in would be
 // locked out while a browser string sails through.
-func (p *AnimeOnsen) do(method, rawURL string) (int, http.Header, []byte, error) {
-	req, err := http.NewRequest(method, rawURL, nil)
+// The context is the probe's deadline, and it has to reach the request rather
+// than only the gaps between requests: without it a single stalled round trip
+// is bounded by the HTTP client's 30 s timeout, six times the 5 s at which
+// cmd/episodes.go abandons the call and asks the fallback chain — and the
+// goroutine behind it goes on probing after everyone has stopped listening.
+func (p *AnimeOnsen) do(ctx context.Context, method, rawURL string) (int, http.Header, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, nil)
 	if err != nil {
 		return 0, nil, nil, err
 	}
@@ -338,7 +368,7 @@ type animeOnsenHit struct {
 // an option: resolver.dedupeByType keys on ID and would collapse them,
 // keeping whichever came first and dropping the spelling that matches.
 func (p *AnimeOnsen) Search(query string) ([]media.SearchResult, error) {
-	status, _, body, err := p.do(http.MethodGet, p.apiBase+"/search/"+url.PathEscape(query))
+	status, _, body, err := p.do(context.Background(), http.MethodGet, p.apiBase+"/search/"+url.PathEscape(query))
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
@@ -461,7 +491,7 @@ func (p *AnimeOnsen) probeEpisodeWithRetries(contentID string, n int, deadline t
 		return true, nil
 	}
 	for attempt := 0; ; attempt++ {
-		status, hdr, _, err := p.do(http.MethodHead, p.manifestURL(contentID, n))
+		status, hdr, err := p.headManifest(contentID, n, deadline)
 		if err != nil {
 			return false, err
 		}
@@ -491,6 +521,30 @@ func (p *AnimeOnsen) probeEpisodeWithRetries(contentID string, n int, deadline t
 	}
 }
 
+// headManifest sends one probe request, bounded by the probe's own deadline.
+//
+// The bound is expressed as the remaining budget rather than as the deadline
+// itself, because the deadline is measured on p.now — the clock a test
+// replaces — while a request context counts real time. Handing a fake clock's
+// instant to context.WithDeadline would expire every request in a test that
+// only meant to simulate a spent budget.
+//
+// A request the context cancels is reported as errAnimeOnsenProbeExpired
+// rather than as a transport failure, but only when the probe's own deadline
+// is what passed: the HTTP client has a 30 s timeout of its own that surfaces
+// the same context.DeadlineExceeded, and that one is a real failure to reach
+// the CDN.
+func (p *AnimeOnsen) headManifest(contentID string, n int, deadline time.Time) (int, http.Header, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), deadline.Sub(p.now()))
+	defer cancel()
+	status, hdr, _, err := p.do(ctx, http.MethodHead, p.manifestURL(contentID, n))
+	if err != nil && errors.Is(err, context.DeadlineExceeded) && !p.now().Before(deadline) {
+		return 0, nil, fmt.Errorf("%w: episode %d of %q was still unanswered when the budget ran out",
+			errAnimeOnsenProbeExpired, n, contentID)
+	}
+	return status, hdr, err
+}
+
 func (p *AnimeOnsen) confirmKey(contentID string, n int) string {
 	return contentID + "/" + strconv.Itoa(n)
 }
@@ -511,7 +565,8 @@ func (p *AnimeOnsen) confirm(contentID string, n int) {
 }
 
 // probeSet HEADs every manifest in ns and reports which answered, along with
-// whether any probe was shed for good.
+// whether any probe was left unanswered — shed for good, or still in flight
+// when the budget ran out.
 //
 // At most animeOnsenProbeInFlight of them are on the wire at once: origin
 // sheds concurrent cache misses, and the whole wave arriving together is the
@@ -549,7 +604,9 @@ func (p *AnimeOnsen) probeSet(contentID string, ns []int, deadline time.Time) (m
 	// Second pass, strictly one request at a time. This is the shape the
 	// recovery was measured under: every probe the live CDN shed answered
 	// truthfully when it was re-sent on its own.
-	throttled := false
+	// A probe the budget cut short is not re-asked: there is no budget left to
+	// ask in, and the re-ask pass would spend what remains discovering that.
+	unanswered := false
 	for i, n := range ns {
 		if errs[i] != nil && errors.Is(errs[i], errAnimeOnsenThrottled) {
 			oks[i], errs[i] = p.probeEpisodeWithRetries(contentID, n, deadline, animeOnsenProbeRetries)
@@ -557,13 +614,13 @@ func (p *AnimeOnsen) probeSet(contentID string, ns []int, deadline time.Time) (m
 		switch {
 		case errs[i] == nil:
 			present[n] = oks[i]
-		case errors.Is(errs[i], errAnimeOnsenThrottled):
-			throttled = true
+		case errors.Is(errs[i], errAnimeOnsenThrottled), errors.Is(errs[i], errAnimeOnsenProbeExpired):
+			unanswered = true
 		default:
 			return nil, false, errs[i]
 		}
 	}
-	return present, throttled, nil
+	return present, unanswered, nil
 }
 
 // episodeCount returns how many episodes contentID has, by probing the CDN.
@@ -620,7 +677,7 @@ func (p *AnimeOnsen) episodeCount(contentID string) (int, error) {
 	deadline := p.now().Add(animeOnsenProbeBudget)
 	expired := func() error {
 		if p.now().After(deadline) {
-			return fmt.Errorf("animeonsen: episode probe exceeded %s", animeOnsenProbeBudget)
+			return errors.New(expiredBudgetReason())
 		}
 		return nil
 	}
@@ -650,6 +707,9 @@ func (p *AnimeOnsen) episodeCount(contentID string) (int, error) {
 		// increases, and the ceiling bounds it.
 		ok, err := p.probeEpisode(contentID, n+1, deadline)
 		if err != nil {
+			if errors.Is(err, errAnimeOnsenProbeExpired) {
+				return p.short(contentID, n, expiredBudgetReason())
+			}
 			if errors.Is(err, errAnimeOnsenThrottled) {
 				return p.short(contentID, n, fmt.Sprintf("the CDN would not answer whether episode %d exists", n+1))
 			}
@@ -689,6 +749,15 @@ func (p *AnimeOnsen) short(contentID string, n int, reason string) (int, error) 
 		ErrIncompleteEpisodeList, reason, n, contentID)
 }
 
+// expiredBudgetReason is how a measurement the probe budget cut off is worded
+// for short(). One function so the three places that can reach it — the check
+// between waves, the check between confirmation rounds, and a request the
+// deadline cancelled mid-flight — cannot drift into saying different things
+// about the same event.
+func expiredBudgetReason() string {
+	return fmt.Sprintf("the episode probe exceeded %s", animeOnsenProbeBudget)
+}
+
 // searchBoundary finds the highest present episode above floor, which is
 // itself known present (0: nothing is known yet).
 //
@@ -700,7 +769,7 @@ func (p *AnimeOnsen) short(contentID string, n int, reason string) (int, error) 
 func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.Time) (int, string, error) {
 	expired := func() error {
 		if p.now().After(deadline) {
-			return fmt.Errorf("the episode probe exceeded %s", animeOnsenProbeBudget)
+			return errors.New(expiredBudgetReason())
 		}
 		return nil
 	}
@@ -738,15 +807,20 @@ func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.T
 			step *= 2
 		}
 		wasLo, wasHi := lo, hi
-		present, throttled, err := p.probeSet(contentID, ns, deadline)
+		present, unanswered, err := p.probeSet(contentID, ns, deadline)
 		if err != nil {
 			return 0, "", err
 		}
 		note(present)
-		if throttled && lo == wasLo && hi == wasHi {
-			// Every probe in the wave was shed, so the wave taught nothing.
-			// Widening and asking again would spend the budget learning
-			// nothing a second time; stop and say the measurement is short.
+		if unanswered && lo == wasLo && hi == wasHi {
+			// Every probe in the wave went unanswered, so the wave taught
+			// nothing. Widening and asking again would spend the budget
+			// learning nothing a second time; stop and say the measurement is
+			// short. The budget is checked first so a wave the deadline cut
+			// off is reported as the expiry it was, not as throttling.
+			if err := expired(); err != nil {
+				return lo, err.Error(), nil
+			}
 			return lo, "the CDN throttled the availability probe", nil
 		}
 		if lo == floor && floor == 0 {
@@ -774,6 +848,12 @@ func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.T
 					// does not have this show". That is the reading the
 					// fallback chain treats as final, and it would retire a
 					// series lobster can stream over one refused request.
+					//
+					// A probe the budget cancelled needs no arm of its own:
+					// it falls through to the plain error below, which is
+					// also not ErrNoResults, and there is nothing measured to
+					// prefer over asking the chain. An arm here would only
+					// reword it, and would be a line no test could reach.
 					return 0, "the CDN would not answer whether episode 1 exists", nil
 				}
 				return 0, "", err
@@ -819,14 +899,17 @@ func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.T
 			return lo, "", nil
 		}
 		wasLo, wasHi := lo, hi
-		present, throttled, err := p.probeSet(contentID, ns, deadline)
+		present, unanswered, err := p.probeSet(contentID, ns, deadline)
 		if err != nil {
 			return 0, "", err
 		}
 		note(present)
-		if throttled && lo == wasLo && hi == wasHi {
+		if unanswered && lo == wasLo && hi == wasHi {
 			// Same as in the bracket: nothing was learnt, so narrowing again
 			// would only burn budget. lo is still a measured episode.
+			if err := expired(); err != nil {
+				return lo, err.Error(), nil
+			}
 			return lo, "the CDN throttled the availability probe", nil
 		}
 	}
