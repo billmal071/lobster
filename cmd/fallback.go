@@ -200,6 +200,16 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 	// (AA_CRYPTO_MISSING, mid-2026), so it can neither search nor stream. The
 	// provider code stays for the day either gate lifts.
 
+	// AnimeOnsen goes ahead of AniPub because it is the one that can still
+	// return a playable URL. megaplay (AniPub's backend) is alive and
+	// well-stocked, but its stream/getSources no longer carries a `sources`
+	// key: the URL now sits inside an encrypted `enc` blob, which is on the
+	// wrong side of the project's content boundary to open. AniPub stays in
+	// the chain for its subtitle tracks and for the day that changes back.
+	if _, ok := primary.(*provider.AnimeOnsen); !ok {
+		fallbacks = append(fallbacks, provider.NewAnimeOnsen())
+	}
+
 	if _, ok := primary.(*provider.AniPub); !ok {
 		fallbacks = append(fallbacks, provider.NewAniPub())
 	}

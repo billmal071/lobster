@@ -42,6 +42,8 @@ func providerBase(p provider.Provider) string {
 		return "yts"
 	case *provider.AllAnime:
 		return "allanime"
+	case *provider.AnimeOnsen:
+		return "animeonsen"
 	case *provider.MovieBox:
 		return "moviebox"
 	}

@@ -85,6 +85,14 @@ func newProvider() provider.Provider {
 	if config.IsYTSBase(base) {
 		return provider.NewYTS()
 	}
+	// Before the allanime arm only for readability; neither token contains the
+	// other, so the order between them is not load-bearing. It does have to
+	// stay below the "flixhq"/"tbcpl"/yts arms for the same reason they are
+	// ordered among themselves: these are substring tests, and an arm that
+	// matched a longer token first would shadow this one.
+	if strings.Contains(base, "animeonsen") {
+		return provider.NewAnimeOnsen()
+	}
 	if strings.Contains(base, "allanime") {
 		return provider.NewAllAnime(cfg.AnimeDub)
 	}

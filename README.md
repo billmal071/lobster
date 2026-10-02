@@ -342,7 +342,7 @@ download_dir = "~/Videos/lobster"
 # anything YTS does not carry falls back to soap2day. Any other value is an
 # explicit choice and is used for both content types.
 # Available: auto, moviebox, flixhq.to, flixhq.ws, soap2day, kimcartoon,
-# vaplayer, vidnest, tbcpl, 1shows.org, allanime, yts
+# vaplayer, vidnest, tbcpl, 1shows.org, animeonsen, allanime, yts
 # All other providers are automatically used as fallbacks.
 # What each value covers, and which of them cannot list a series' episodes, is
 # in GUIDE.md -> "Content sources"; `lobster doctor` reports which are working
