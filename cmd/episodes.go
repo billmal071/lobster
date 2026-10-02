@@ -84,11 +84,23 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		return emitErr("no_results", exitNoResults, "season %d not found for %q", flagSeason, r.Title)
 	}
 
-	// Whoever answers below, this is who the request named. The chain can
+	// Whoever answers below, this is who the request named — the configured
+	// primary, and not whatever the chain has already put in p. The chain can
 	// replace p, and when it does the replacement's list is not comparable to
-	// the one the requested source would have given — so the fact of the
+	// the one the requested source would have given, so the fact of the
 	// substitution is itself the finding. See episodeSourceWarnings.
-	asked := p
+	//
+	// It must be captured from primary rather than from p, because by this
+	// line p is no longer necessarily the primary: seasonSource replaces it
+	// with the first chain hit whenever the primary cannot enumerate seasons,
+	// and seasonAcrossHits replaces it again when the primary's season list
+	// lacks the requested season. Reading p here made the comparison below
+	// "did the chain member that answered differ from the chain member that
+	// answered", which is never true — so the warning stayed silent in exactly
+	// the case it exists for, a base that could not answer at all, and the
+	// base test below asked whether the *chain member's* token named the
+	// primary.
+	asked := primary
 
 	eps, err := listSeasonEpisodes(p, src, sel)
 	// An enumeration that stopped short of the end is an answer, not a

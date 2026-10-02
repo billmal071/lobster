@@ -958,3 +958,50 @@ func TestEpisodesWarnsAboutBothFallbackAndIncompleteness(t *testing.T) {
 		t.Fatalf("warnings = %+v, want both episode_list_incomplete and episode_list_from_fallback", w)
 	}
 }
+
+// TestEpisodesWarnsWhenTheRequestedBaseCouldNotEvenEnumerateSeasons is the
+// other half of the downgrade, and the one the warning was built for: the
+// requested base failed at GetSeasons, so the chain supplied the season list
+// *and* the episodes, and nothing in the envelope said the base had been asked
+// at all.
+//
+// The sibling test above covers the seasons-yes/episodes-no shape, where the
+// provider that answered seasons is still the primary when the comparison is
+// made. Here it is not — seasonSource has already replaced it — so a
+// comparison taken after that point finds the chain member equal to itself and
+// stays silent. The fact to report is who the *request* named, which is the
+// configured primary and nobody else.
+func TestEpisodesWarnsWhenTheRequestedBaseCouldNotEvenEnumerateSeasons(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+	withBase(t, "animeonsen")
+
+	// A ref whose ID the primary does not recognise: it cannot enumerate
+	// seasons, which is the condition seasonSource re-searches the chain for.
+	primary := &stubProvider{seasonsErr: errors.New("animeonsen: manifest status 429")}
+	withStubProvider(t, primary)
+	withStubProviderBase(t, primary, "animeonsen")
+
+	fb := twoSeasonStub()
+	fb.results = []media.SearchResult{{ID: "fb/some-show", Title: "Some Show", Type: media.TV}}
+	prevFB := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider {
+		return []provider.Provider{fb}
+	}
+	t.Cleanup(func() { agentFallbackProviders = prevFB })
+
+	withEpisodesFlags(t, tvRef(t, ""), 2)
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	w := decodeEpisodesWarnings(t, buf.Bytes())
+	if len(w) != 1 || w[0].Code != "episode_list_from_fallback" {
+		t.Fatalf("warnings = %+v, want one episode_list_from_fallback", w)
+	}
+	if w[0].Base != "animeonsen" {
+		t.Fatalf("warning base = %q, want animeonsen", w[0].Base)
+	}
+	if w[0].Provider == "" || w[0].EpisodesListed != 2 {
+		t.Fatalf("warning = %+v, want the chain member named over its 2 episodes", w[0])
+	}
+}
