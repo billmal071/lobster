@@ -67,6 +67,14 @@ Do not tell the user a row came from their base unless it did; each `ref`
 names its own source where that source has a base token, so prefer the rows
 whose base matches when they asked for one.
 
+`episodes` uses the same array for one entry of its own:
+
+- `{"code": "episode_list_incomplete", "provider": "animeonsen",
+  "episodes_listed": 10}` — the episodes listed were all confirmed, and the
+  source could not establish where the season ends. Say "at least 10" rather
+  than "10 episodes", and do not tell the user an episode does not exist
+  because it is not on the list.
+
 ### 2. Show the user the candidates and stop
 
 **Always ask which one before playing.** Do not pick for them, even when one

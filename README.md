@@ -271,6 +271,16 @@ never mentioned `--base`:
   An unrecognised base is not rejected; it falls through to MovieBox, which is
   what the results came from. Fix the spelling rather than retrying.
 
+`episodes` carries the same array for a different question — whether the
+listing is the whole season:
+
+- `{"code": "episode_list_incomplete", "provider": "animeonsen",
+  "episodes_listed": 10}` — every episode printed was confirmed to exist, and
+  enumeration stopped before it found the end. Sources that have no episode
+  index are enumerated by probing for each episode in turn, so "10 episodes"
+  and "10 is as far as we got" are different answers and this is the one that
+  distinguishes them. Treat the list as a floor, not a total.
+
 The counts describe the rows you actually received, so `--type` and `--limit`
 are already applied. Each row's `ref` names the source that produced it, where
 that source has a base token of its own; a few are reachable only as fallbacks

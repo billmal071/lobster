@@ -37,6 +37,15 @@ type animeOnsenFake struct {
 	// shape a rejected Referer or User-Agent takes on the live CDN.
 	forbidAbove int
 
+	// lie404 is how many times each episode number answers 404 before it
+	// starts telling the truth. It models the one thing the rest of this fake
+	// cannot express: a 404 that is not the truth. The live CDN sheds a burst
+	// of concurrent HEADs that way — the manifest exists, and a request for it
+	// inside the burst is refused anyway — and a 404 taken at face value then
+	// ends the series early. Counted per episode and decremented as requests
+	// arrive, so the lie is deterministic rather than timing-dependent.
+	lie404 map[int]int
+
 	mu        sync.Mutex
 	reqs      []animeOnsenReq
 	inFlight  int
@@ -84,6 +93,18 @@ func (f *animeOnsenFake) handle(w http.ResponseWriter, r *http.Request) {
 
 	if m := animeOnsenManifestPath.FindStringSubmatch(r.URL.Path); m != nil {
 		n, _ := strconv.Atoi(m[2])
+		if f.lie404 != nil {
+			f.mu.Lock()
+			left := f.lie404[n]
+			if left > 0 {
+				f.lie404[n] = left - 1
+			}
+			f.mu.Unlock()
+			if left > 0 {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+		}
 		if f.forbidAbove > 0 && n > f.forbidAbove {
 			w.WriteHeader(http.StatusForbidden)
 			return
@@ -259,11 +280,23 @@ func TestAnimeOnsenEpisodesReportsABogusContentIDAsNoResults(t *testing.T) {
 
 // Every episode reported answered 200, and the one after the last did not.
 //
-// The counts span the shapes the probe's two phases take: fewer than one wave,
-// exactly a power of two (where the bracket's own probe is the boundary), an
-// ordinary cour, and a count that needs several narrowing waves.
+// The matrix is the boundaries the algorithm's own structure creates, not a
+// sample of plausible season lengths. The bracket probes powers of two, so
+// every power of two and both of its neighbours is a distinct case: the
+// boundary falling on a bracket probe, just below one, and just above one.
+// Then an ordinary cour, a two-cour run, and counts needing several narrowing
+// waves. 12 is the live-verified case — `episodes` reported 10 of KAMUI's 12 —
+// and it is in here because of that, not because 12 is a common length.
+//
+// The expected count is a literal in the table, never computed: a test that
+// derives what to expect with the same arithmetic the implementation uses
+// proves only that the arithmetic is self-consistent, and both would move
+// together under a mutation.
 func TestAnimeOnsenEpisodesReportsExactlyTheEpisodesThatAnswered(t *testing.T) {
-	for _, want := range []int{1, 8, 12, 13, 26, 100, 1097} {
+	for _, want := range []int{
+		1, 2, 3, 7, 8, 9, 12, 13, 15, 16, 17, 24, 26, 31, 32, 33,
+		63, 64, 65, 100, 127, 128, 129, 1097,
+	} {
 		t.Run(strconv.Itoa(want), func(t *testing.T) {
 			f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": want}})
 			eps, err := f.provider().GetEpisodes("x", "x")
@@ -294,8 +327,11 @@ func TestAnimeOnsenEpisodeProbeIsBoundedAgainstAHostThatAnswersEverything(t *tes
 	// -1 means "every episode exists" in the fake.
 	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": -1}})
 	n, err := f.provider().episodeCount("x")
-	if err != nil {
-		t.Fatalf("episodeCount: %v", err)
+	// The ceiling is not a boundary anybody measured, so the count comes back
+	// with the sentinel that says so. Reporting it as a finished enumeration
+	// is the dishonesty ErrIncompleteEpisodeList exists to stop.
+	if !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("episodeCount at the ceiling returned err = %v, want one wrapping ErrIncompleteEpisodeList", err)
 	}
 	// Written out, not read from animeOnsenMaxEpisodes: a test comparing
 	// against the same constant the code uses passes for any ceiling,
@@ -457,5 +493,186 @@ func TestAnimeOnsenSearchClaimsNothingTheResponseDidNotCarry(t *testing.T) {
 	}
 	if r.Year != "" || r.Duration != "" || r.Episodes != 0 || r.Seasons != 0 {
 		t.Errorf("row = %+v; the search response carries no year, duration or counts, so none may be claimed", r)
+	}
+}
+
+// A 404 inside a wave of concurrent HEADs does not end the series.
+//
+// This is the live failure: `episodes` reported 10 of KAMUI's 12 episodes,
+// three runs in a row, while a HEAD of episode 11 and of episode 12 sent on
+// its own answered 200 and episode 13 answered 404. Nothing but a 404 makes
+// this probe stop, so the wave that asked for 9..15 at once was told "no" about
+// an episode that exists — and episodes 11 and 12 were then unreachable
+// through lobster.
+//
+// The count is a measurement, so a boundary has to be confirmed by a probe
+// sent on its own before it is reported, which is the condition under which a
+// hand-run curl got the truth. Each case below is the same true count, 12,
+// reached through a different lie.
+func TestAnimeOnsenEpisodeProbeDoesNotTakeABurst404AsTheEndOfTheSeries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lie  map[int]int
+	}{
+		// The live shape: the narrowing wave is told the last two episodes are
+		// absent, and both of its neighbours agree, so nothing looks wrong.
+		{"the last two episodes are refused once", map[int]int{11: 1, 12: 1}},
+		// A present episode appears above an absent one, which the contiguity
+		// clamp resolves downwards — the safe direction, and still wrong.
+		{"one episode inside the series is refused once", map[int]int{11: 1}},
+		// The whole narrowing wave is shed, which puts the reported count back
+		// at the bracket's own boundary.
+		{"the whole narrowing wave is refused once", map[int]int{9: 1, 10: 1, 11: 1, 12: 1}},
+		// The bracket's upper probe is shed, so the bracket closes below the
+		// end of the series instead of above it.
+		{"the bracket's own probe is refused once", map[int]int{8: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAnimeOnsenFake(t, &animeOnsenFake{
+				episodes: map[string]int{"x": 12},
+				lie404:   tc.lie,
+			})
+			n, err := f.provider().episodeCount("x")
+			if err != nil {
+				t.Fatalf("episodeCount: %v", err)
+			}
+			if n != 12 {
+				t.Fatalf("episodeCount = %d, want 12", n)
+			}
+		})
+	}
+}
+
+// An enumeration that stopped short comes back as a list *and* an error, so
+// the caller can keep the measured prefix and still know it is a prefix.
+//
+// The two halves are asserted separately on purpose. Returning the error and
+// dropping the list would cost `episodes` an answer it has; returning the list
+// and dropping the error is the bug — a partial list presented as the whole
+// series, which no caller can detect.
+func TestAnimeOnsenGetEpisodesReturnsThePrefixItMeasuredAndSaysItIsOne(t *testing.T) {
+	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": -1}})
+	eps, err := f.provider().GetEpisodes("x", "x")
+	if !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("GetEpisodes err = %v, want one wrapping ErrIncompleteEpisodeList", err)
+	}
+	// 4096 written out rather than read from animeOnsenMaxEpisodes, for the
+	// reason the ceiling test gives.
+	if len(eps) != 4096 {
+		t.Fatalf("GetEpisodes returned %d episodes alongside the error, want the 4096 it measured", len(eps))
+	}
+	// Not ErrNoResults: the catalogue does have this show, and a caller asking
+	// that question must not be told otherwise.
+	if errors.Is(err, ErrNoResults) {
+		t.Fatalf("GetEpisodes err = %v, which errors.Is reads as ErrNoResults", err)
+	}
+}
+
+// A confirmed boundary carries no incompleteness error. The sentinel has to
+// mean something, and a complete list that reports itself as possibly short
+// trains every caller to ignore the warning.
+func TestAnimeOnsenGetEpisodesReportsAConfirmedBoundaryAsComplete(t *testing.T) {
+	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": 12}})
+	eps, err := f.provider().GetEpisodes("x", "x")
+	if err != nil {
+		t.Fatalf("GetEpisodes: %v", err)
+	}
+	if len(eps) != 12 {
+		t.Fatalf("GetEpisodes returned %d episodes, want 12", len(eps))
+	}
+}
+
+// When the boundary cannot be confirmed within the round bound, the count
+// comes back with the sentinel rather than as a finished enumeration.
+//
+// This is the confirmation loop's own bound. Without it the search would walk
+// forward a round at a time for as long as the budget allowed and then report
+// a number with no confirmed boundary behind it at all — and report it as
+// truth.
+//
+// The round bound is shrunk rather than the fixture made to lie four times in
+// the right places: what is under test is that exhausting the bound is
+// reported, not how many rounds a particular host takes to exhaust it.
+func TestAnimeOnsenEpisodeProbeSaysSoWhenItCannotConfirmABoundary(t *testing.T) {
+	old := animeOnsenConfirmRounds
+	animeOnsenConfirmRounds = 1
+	t.Cleanup(func() { animeOnsenConfirmRounds = old })
+
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes: map[string]int{"x": 12},
+		lie404:   map[int]int{11: 1},
+	})
+	n, err := f.provider().episodeCount("x")
+	if !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("episodeCount = %d, err = %v; want an error wrapping ErrIncompleteEpisodeList", n, err)
+	}
+	// Still a measured episode: the prefix reported is one the CDN served.
+	if n != 11 {
+		t.Fatalf("episodeCount = %d, want the 11 the confirmation probe proved present", n)
+	}
+}
+
+// Episode 1 answering 404 inside the first wave is not "this source does not
+// have the show" until a solitary probe agrees.
+//
+// ErrNoResults from here is load-bearing — cmd/multisearch and the fallback
+// chain read it as "reached, and the catalogue does not have this" — so a shed
+// burst would retire a series lobster can stream, under an error that tells
+// the caller not to bother retrying.
+func TestAnimeOnsenEpisodeProbeDoesNotReadABurst404OnEpisodeOneAsAnEmptyCatalogue(t *testing.T) {
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes: map[string]int{"x": 12},
+		lie404:   map[int]int{1: 1},
+	})
+	n, err := f.provider().episodeCount("x")
+	if err != nil {
+		t.Fatalf("episodeCount: %v", err)
+	}
+	if n != 12 {
+		t.Fatalf("episodeCount = %d, want 12", n)
+	}
+}
+
+// A content id the CDN really has nothing for is still ErrNoResults, and the
+// confirmation probe does not turn that into something retryable.
+func TestAnimeOnsenEpisodeProbeStillReportsAGenuinelyEmptyCatalogueAsNoResults(t *testing.T) {
+	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": 12}})
+	_, err := f.provider().episodeCount("nope")
+	if !errors.Is(err, ErrNoResults) {
+		t.Fatalf("episodeCount for an unknown id = %v, want ErrNoResults", err)
+	}
+	if errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("episodeCount for an unknown id = %v, which reads as an incomplete list", err)
+	}
+}
+
+// A re-run after a disproved 404 resumes above what it has already proved,
+// instead of measuring the series again from episode 1.
+//
+// The count is the same either way, which is why this needs its own
+// assertion: the difference is entirely in cost, and the whole reason this
+// probe brackets rather than walks is that an agent-facing command may not be
+// left waiting on round trips. Episode 1 is the crisp witness — nothing above
+// the floor ever needs to be asked about twice.
+func TestAnimeOnsenEpisodeProbeResumesAboveTheFloorAfterADisproved404(t *testing.T) {
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes: map[string]int{"x": 12},
+		lie404:   map[int]int{11: 1, 12: 1},
+	})
+	n, err := f.provider().episodeCount("x")
+	if err != nil {
+		t.Fatalf("episodeCount: %v", err)
+	}
+	if n != 12 {
+		t.Fatalf("episodeCount = %d, want 12", n)
+	}
+	ep1 := 0
+	for _, r := range f.requests() {
+		if r.path == "/video/mp4-dash/x/1/manifest.mpd" {
+			ep1++
+		}
+	}
+	if ep1 != 1 {
+		t.Fatalf("episode 1 was probed %d times; a re-run is bracketing from 1 again rather than from the episode it proved present", ep1)
 	}
 }

@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -603,5 +604,194 @@ func TestEpisodesFirstListingCallIsBoundedForAChainProvider(t *testing.T) {
 
 	if elapsed > time.Second {
 		t.Fatalf("episodesRun took %v with a chain provider slow to list episodes; that call is not bounded by episodesFallbackTimeout (%v)", elapsed, episodesFallbackTimeout)
+	}
+}
+
+// A provider that returns a list it knows may be short gets the list printed
+// and a warning alongside it.
+//
+// The two halves are the test. Dropping the list would cost the caller a
+// measured answer; printing it without the warning is the bug — the AnimeOnsen
+// probe enumerates by HEADing manifests, and a run that stopped at its ceiling
+// or could not confirm where the series ends was indistinguishable in this
+// envelope from one that counted the season exactly.
+func TestEpisodesWarnsWhenTheProviderCouldNotFinishEnumerating(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+
+	p := twoSeasonStub()
+	p.episodesWithErr = []media.Episode{
+		{ID: "1", Number: 1, Title: "Episode 1"},
+		{ID: "2", Number: 2, Title: "Episode 2"},
+	}
+	p.episodesErr = fmt.Errorf("%w: stopped at 2", provider.ErrIncompleteEpisodeList)
+	withStubProvider(t, p)
+	withNoFallbackProviders(t)
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+
+	var got struct {
+		Episodes []struct {
+			Number int `json:"number"`
+		} `json:"episodes"`
+		Warnings []struct {
+			Code           string `json:"code"`
+			Provider       string `json:"provider"`
+			EpisodesListed int    `json:"episodes_listed"`
+			Message        string `json:"message"`
+		} `json:"warnings"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+	}
+	if len(got.Episodes) != 2 {
+		t.Fatalf("episodes = %+v, want the 2 the provider measured", got.Episodes)
+	}
+	if len(got.Warnings) != 1 {
+		t.Fatalf("warnings = %+v, want exactly one; a partial list that reports itself as complete is the whole bug", got.Warnings)
+	}
+	w := got.Warnings[0]
+	// Written out, not read from the code: a test that compares against the
+	// same string literal the implementation emits would pass for any code.
+	if w.Code != "episode_list_incomplete" {
+		t.Fatalf("warning code = %q, want %q", w.Code, "episode_list_incomplete")
+	}
+	if w.EpisodesListed != 2 {
+		t.Fatalf("warning episodes_listed = %d, want 2", w.EpisodesListed)
+	}
+	if w.Message == "" {
+		t.Fatalf("warning carries no message: %+v", w)
+	}
+}
+
+// The ordinary case stays silent. A warning on a complete list is noise, and
+// noise is what trains a caller to ignore the one that matters.
+func TestEpisodesDoesNotWarnWhenTheListIsComplete(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+
+	withStubProvider(t, twoSeasonStub())
+	withNoFallbackProviders(t)
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+	}
+	if _, ok := got["warnings"]; ok {
+		t.Fatalf("a complete listing carried warnings: %q", buf.String())
+	}
+}
+
+// The flag travels with a list that came from the fallback chain, not only
+// with the primary's.
+//
+// A primary that cannot enumerate is the common path for an anime ref (every
+// anime source here is a separate catalogue entry per season), so the provider
+// whose enumeration stopped short is usually a chain member. Carrying the
+// warning on one route and dropping it on the other would mean the envelope's
+// honesty depended on which provider happened to answer.
+func TestEpisodesWarnsWhenAFallbackProviderCouldNotFinishEnumerating(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+
+	// The primary does not index this ID: no error, just nothing.
+	withStubProvider(t, &stubProvider{})
+
+	fb := twoSeasonStub()
+	fb.results = []media.SearchResult{
+		{ID: "fb/some-show", Title: "Some Show", Type: media.TV},
+	}
+	fb.episodesWithErr = []media.Episode{{ID: "1", Number: 1, Title: "Episode 1"}}
+	fb.episodesErr = fmt.Errorf("%w: stopped at 1", provider.ErrIncompleteEpisodeList)
+	prevFB := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider {
+		return []provider.Provider{fb}
+	}
+	t.Cleanup(func() { agentFallbackProviders = prevFB })
+
+	withEpisodesFlags(t, tvRef(t, ""), 2)
+
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	var got struct {
+		Episodes []struct {
+			Number int `json:"number"`
+		} `json:"episodes"`
+		Warnings []struct {
+			Code           string `json:"code"`
+			EpisodesListed int    `json:"episodes_listed"`
+		} `json:"warnings"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+	}
+	if len(got.Episodes) != 1 {
+		t.Fatalf("episodes = %+v, want the 1 the fallback measured", got.Episodes)
+	}
+	if len(got.Warnings) != 1 || got.Warnings[0].Code != "episode_list_incomplete" || got.Warnings[0].EpisodesListed != 1 {
+		t.Fatalf("warnings = %+v, want one episode_list_incomplete over 1 episode", got.Warnings)
+	}
+}
+
+// The flag survives the second hop too: the chain member that ends up
+// supplying the list is not always the one the season scan picked.
+//
+// seasonSource chooses a hit on "can you enumerate seasons?", and the real
+// chain leads with two providers that answer that and not "can you enumerate
+// episodes?" (VidNest, MovieBox). So firstEpisodeList is the route a list
+// usually arrives by, and it carries its own copy of the flag.
+func TestEpisodesWarnsWhenTheSecondChainHopCouldNotFinishEnumerating(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+
+	withStubProvider(t, &stubProvider{})
+
+	hit := []media.SearchResult{{ID: "fb/some-show", Title: "Some Show", Type: media.TV}}
+	// First in chain order: enumerates seasons, cannot list episodes at all.
+	seasonsOnly := twoSeasonStub()
+	seasonsOnly.results = hit
+	seasonsOnly.episodesErr = errors.New("upstream 503")
+	// Second: lists a prefix and says it is one.
+	partial := twoSeasonStub()
+	partial.results = hit
+	partial.episodesWithErr = []media.Episode{{ID: "1", Number: 1, Title: "Episode 1"}}
+	partial.episodesErr = fmt.Errorf("%w: stopped at 1", provider.ErrIncompleteEpisodeList)
+
+	prevFB := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider {
+		return []provider.Provider{seasonsOnly, partial}
+	}
+	t.Cleanup(func() { agentFallbackProviders = prevFB })
+
+	withEpisodesFlags(t, tvRef(t, ""), 2)
+
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	var got struct {
+		Episodes []struct {
+			Number int `json:"number"`
+		} `json:"episodes"`
+		Warnings []struct {
+			Code           string `json:"code"`
+			EpisodesListed int    `json:"episodes_listed"`
+		} `json:"warnings"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+	}
+	if len(got.Episodes) != 1 {
+		t.Fatalf("episodes = %+v, want the 1 the second chain hit measured", got.Episodes)
+	}
+	if len(got.Warnings) != 1 || got.Warnings[0].Code != "episode_list_incomplete" || got.Warnings[0].EpisodesListed != 1 {
+		t.Fatalf("warnings = %+v, want one episode_list_incomplete over 1 episode", got.Warnings)
 	}
 }

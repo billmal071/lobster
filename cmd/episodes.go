@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -83,6 +84,17 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	}
 
 	eps, err := listSeasonEpisodes(p, src, sel)
+	// An enumeration that stopped short of the end is an answer, not a
+	// failure: the list is episodes the provider actually confirmed, and
+	// dropping it to ask the chain would trade a measured prefix for a guess
+	// from a provider that may invent one (#61). What it must not do is pass
+	// for a complete list — that is the same dishonesty one layer up, and the
+	// warning below is the whole reason this case is kept rather than
+	// rejected.
+	incomplete := ""
+	if len(eps) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
+		incomplete, err = err.Error(), nil
+	}
 	if err != nil || len(eps) == 0 {
 		// Enumerating seasons and enumerating episodes are different
 		// questions, and a provider can answer the first and not the second:
@@ -111,6 +123,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		if a := firstEpisodeList(alts, wantSeason); a != nil {
 			debugf("episodes: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), a.season.Number)
 			p, seasons, sel, eps, err = a.hit.provider, a.hit.seasons, a.season, a.episodes, nil
+			incomplete = a.incomplete
 		}
 	}
 	if err != nil {
@@ -145,13 +158,34 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		out = append(out, map[string]any{"number": e.Number, "title": e.Title})
 	}
 
-	return emitJSON(map[string]any{
+	payload := map[string]any{
 		"title":    r.Title,
 		"seasons":  seasonNums,
 		"season":   sel.Number,
 		"episodes": out,
 		"provider": providerLabel(p),
-	})
+	}
+	// Additive, and absent when there is nothing to say — the same contract
+	// find's warnings array carries (cmd/find.go), for the same reason: a
+	// consumer that does not know the key is unaffected, and one that does can
+	// tell "this season has 10 episodes" from "10 is as far as enumeration
+	// got".
+	//
+	// A list that cannot be completed is the episodes-shaped version of the
+	// bug `play` had in #66 — a confident answer that was not the one the
+	// evidence supported. Here the count itself is evidence-backed; what was
+	// missing was any way to see that the evidence ran out.
+	if incomplete != "" {
+		payload["warnings"] = []map[string]any{{
+			"code":            "episode_list_incomplete",
+			"provider":        providerLabel(p),
+			"episodes_listed": len(out),
+			"message": fmt.Sprintf(
+				"%s could not establish where this season ends, so the %d episodes above are what it confirmed and there may be more: %s",
+				providerLabel(p), len(out), incomplete),
+		}}
+	}
+	return emitJSON(payload)
 }
 
 // listSeasonEpisodes makes the first episode-listing call, under a deadline
@@ -460,6 +494,10 @@ type episodeAnswer struct {
 	hit      *seasonHit
 	season   media.Season
 	episodes []media.Episode
+	// incomplete is the provider's own reason, when it returned a list it
+	// knows may be short (provider.ErrIncompleteEpisodeList). Empty means the
+	// provider reported a complete list.
+	incomplete string
 }
 
 // firstEpisodeList asks every hit for the requested season's episodes and
@@ -489,11 +527,18 @@ func firstEpisodeList(hits []*seasonHit, wantSeason int) *episodeAnswer {
 		go func(idx int, h *seasonHit, sel media.Season) {
 			defer wg.Done()
 			eps, err := episodesWithContext(ctx, h.provider, h.id, sel.ID)
+			// A prefix a provider measured and flagged beats no list at all,
+			// and the flag travels with it so the caller is never told it is
+			// the whole season. Any other error means no answer.
+			incomplete := ""
+			if len(eps) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
+				incomplete, err = err.Error(), nil
+			}
 			if err != nil || len(eps) == 0 {
 				debugf("episodes: fallback %T cannot list season %d (err=%v, episodes=%d)", h.provider, sel.Number, err, len(eps))
 				return
 			}
-			answers[idx] = &episodeAnswer{hit: h, season: sel, episodes: eps}
+			answers[idx] = &episodeAnswer{hit: h, season: sel, episodes: eps, incomplete: incomplete}
 		}(i, h, sel)
 	}
 	wg.Wait()

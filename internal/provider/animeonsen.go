@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -57,6 +58,22 @@ const (
 // A var, not a const, so a test can shrink it and watch the probe give up
 // rather than having to serve thousands of manifests to reach the ceiling.
 var animeOnsenProbeBudget = 10 * time.Second
+
+// animeOnsenConfirmRounds bounds how many times the episode search is re-run
+// after a 404 turned out not to be the end of the series.
+//
+// One round is the normal case: the search settles on a boundary, a solitary
+// HEAD of the next episode agrees it is absent, done. A round is spent only
+// when that HEAD disagrees, and the re-run starts from the episode it just
+// proved present, so each round strictly advances. Four is far more than a
+// real CDN needs and still bounds a host that answers 404 to every burst — the
+// probe then reports what it measured and says the list is incomplete, rather
+// than walking forward one episode at a time until the budget runs out.
+//
+// A var for the same reason the budget is one: a test can shrink it and watch
+// the probe give up, instead of needing a fixture that lies four times in a
+// row in exactly the right places.
+var animeOnsenConfirmRounds = 4
 
 // AnimeOnsen streams anime from animeonsen.xyz's public v4 API.
 //
@@ -335,12 +352,27 @@ func (p *AnimeOnsen) probeSet(contentID string, ns []int) (map[int]bool, error) 
 // and the ones that answer 404.
 //
 // The result is a measurement, not a guess: the returned count N is an episode
-// that answered 200, and N+1 answered 404. That is the property this search
-// establishes by construction, and it is why this is not the
-// fabricated-episode-list problem of #61 — nothing is reported that was not
-// probed or bracketed by two probes either side of it. The one exception is
-// named in the code: when every episode up to animeOnsenMaxEpisodes answers,
-// the ceiling is reported, because that is as far as anything was measured.
+// that answered 200, and N+1 answered 404 *to a request sent on its own*. That
+// is the property this search establishes by construction, and it is why this
+// is not the fabricated-episode-list problem of #61 — nothing is reported that
+// was not probed or bracketed by two probes either side of it.
+//
+// The "on its own" is the correction to the first version of this, and it was
+// worth two episodes of a 12-episode series. Every 404 the search sees arrives
+// inside a wave of animeOnsenProbeWidth concurrent HEADs, and a CDN shedding
+// that burst answers 404 for a manifest it will serve — indistinguishable,
+// here, from the end of the series, because a 404 is the only thing that ends
+// it. `episodes` reported 10 of KAMUI's 12 three runs in a row while a HEAD of
+// episode 11 sent alone answered 200. So the boundary is re-tested by a
+// solitary probe before it is reported, and a 200 there sends the search back
+// out from the episode it just proved present.
+//
+// When enumeration stops somewhere other than a confirmed boundary — the
+// animeOnsenMaxEpisodes ceiling, or a host that keeps answering 404 for
+// episodes it then serves — the count is still returned, and it is returned
+// with an error wrapping ErrIncompleteEpisodeList. A partial list reported as
+// a whole one is the same dishonesty as an invented one: the caller cannot see
+// the difference, and `lobster episodes` says so in its envelope instead.
 //
 // # Why it is shaped this way
 //
@@ -370,9 +402,51 @@ func (p *AnimeOnsen) episodeCount(contentID string) (int, error) {
 		return nil
 	}
 
-	// lo is the highest episode known to exist (0: none yet). hi is the lowest
-	// known not to (0: not yet found).
-	lo, hi := 0, 0
+	floor := 0
+	for round := 0; round < animeOnsenConfirmRounds; round++ {
+		n, atCeiling, err := p.searchBoundary(contentID, floor, expired)
+		if err != nil {
+			return 0, err
+		}
+		if atCeiling {
+			return n, fmt.Errorf("%w: animeonsen: every episode up to %d answered, so %q may have more",
+				ErrIncompleteEpisodeList, n, contentID)
+		}
+		if err := expired(); err != nil {
+			return 0, err
+		}
+		// Confirm the boundary with a HEAD sent on its own. The search's 404s
+		// arrive inside a wave of animeOnsenProbeWidth concurrent requests,
+		// and a CDN shedding that burst answers 404 for a manifest that
+		// exists — which this probe cannot tell from the end of the series,
+		// because a 404 is the only thing that ends it. A solitary request is
+		// the condition under which the boundary is reproducible by hand, and
+		// it is what the reported count now rests on.
+		//
+		// A 200 here means the 404 was a lie, so the search runs again from
+		// the episode just proved present. It cannot loop: floor strictly
+		// increases, and the ceiling bounds it.
+		ok, err := p.episodeAvailable(contentID, n+1)
+		if err != nil {
+			return 0, err
+		}
+		if !ok {
+			return n, nil
+		}
+		floor = n + 1
+	}
+	return floor, fmt.Errorf("%w: animeonsen: %q answered 404 for an episode it then served, %d times over",
+		ErrIncompleteEpisodeList, contentID, animeOnsenConfirmRounds)
+}
+
+// searchBoundary finds the highest present episode above floor, which is
+// itself known present (0: nothing is known yet). atCeiling reports that
+// animeOnsenMaxEpisodes was reached with everything answering, so the returned
+// count is where the measurement stopped rather than where the series does.
+func (p *AnimeOnsen) searchBoundary(contentID string, floor int, expired func() error) (int, bool, error) {
+	// lo is the highest episode known to exist. hi is the lowest known not to
+	// (0: not yet found).
+	lo, hi := floor, 0
 	note := func(present map[int]bool) {
 		for n, ok := range present {
 			if ok {
@@ -385,45 +459,73 @@ func (p *AnimeOnsen) episodeCount(contentID string) (int, error) {
 		}
 		// Contiguity: a present episode above the first absent one would
 		// contradict the scheme. Trust the absent one, which is the direction
-		// that under-reports.
+		// that under-reports — and which the confirmation probe in
+		// episodeCount then re-tests, because a shed burst produces exactly
+		// this shape.
 		if hi != 0 && lo >= hi {
 			lo = hi - 1
 		}
 	}
 
 	// Bracket.
-	for step := 1; hi == 0 && step <= animeOnsenMaxEpisodes; {
+	for step := 1; hi == 0 && floor+step <= animeOnsenMaxEpisodes; {
 		if err := expired(); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		ns := make([]int, 0, animeOnsenProbeWidth)
-		for len(ns) < animeOnsenProbeWidth && step <= animeOnsenMaxEpisodes {
-			ns = append(ns, step)
+		for len(ns) < animeOnsenProbeWidth && floor+step <= animeOnsenMaxEpisodes {
+			ns = append(ns, floor+step)
 			step *= 2
 		}
 		present, err := p.probeSet(contentID, ns)
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		note(present)
-		if lo == 0 {
-			// Episode 1 itself is absent, which is also what a bogus content
-			// id answers. Either way this is "the catalogue has nothing
-			// here", not a transport failure, so it must not poison the
-			// fallback chain.
-			return 0, fmt.Errorf("%w: animeonsen has no episodes for %q", ErrNoResults, contentID)
+		if lo == floor && floor == 0 {
+			// Episode 1 itself answered absent, which is also what a bogus
+			// content id answers. Either way this looks like "the catalogue
+			// has nothing here", not a transport failure, so it must not
+			// poison the fallback chain.
+			//
+			// But it is the same 404, from the same burst, as the one that
+			// cost two episodes of a 12-episode series — and here it costs
+			// the whole show: the provider would report ErrNoResults for a
+			// series it can stream. So it is confirmed by a solitary probe
+			// too, and a 200 means the wave lied and episode 1 is the floor.
+			//
+			// This arm is reachable only on the first round; a later round has
+			// already watched this content id serve an episode, so "nothing
+			// here" is no longer an available conclusion.
+			if err := expired(); err != nil {
+				return 0, false, err
+			}
+			ok, err := p.episodeAvailable(contentID, 1)
+			if err != nil {
+				return 0, false, err
+			}
+			if !ok {
+				return 0, false, fmt.Errorf("%w: animeonsen has no episodes for %q", ErrNoResults, contentID)
+			}
+			lo, floor, step = 1, 1, 1
+			if hi != 0 && hi <= lo {
+				// The wave's own upper probes are no more trustworthy than
+				// the one just disproved; bracket again from the new floor.
+				hi = 0
+			}
+			continue
 		}
 	}
 	if hi == 0 {
 		// Everything up to the ceiling answered. Report what was measured
-		// rather than widening forever.
-		return lo, nil
+		// rather than widening forever, and say that is what happened.
+		return lo, true, nil
 	}
 
 	// Narrow.
 	for hi-lo > 1 {
 		if err := expired(); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		gap := hi - lo - 1 // unknown episodes strictly between lo and hi
 		ns := make([]int, 0, animeOnsenProbeWidth)
@@ -440,15 +542,15 @@ func (p *AnimeOnsen) episodeCount(contentID string) (int, error) {
 			// Only reachable if the arithmetic above stopped making progress,
 			// which would otherwise be an infinite loop. Report the measured
 			// lower bound instead of spinning.
-			return lo, nil
+			return lo, false, nil
 		}
 		present, err := p.probeSet(contentID, ns)
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		note(present)
 	}
-	return lo, nil
+	return lo, false, nil
 }
 
 // GetSeasons reports the single season AnimeOnsen models. Like every anime
@@ -458,9 +560,15 @@ func (p *AnimeOnsen) GetSeasons(id string) ([]media.Season, error) {
 	return []media.Season{{Number: 1, ID: id}}, nil
 }
 
+// GetEpisodes lists the episodes the CDN actually served a manifest for.
+//
+// It returns a list *and* an error when enumeration could not be carried to a
+// confirmed boundary: the error wraps ErrIncompleteEpisodeList, the list is
+// everything that was measured, and cmd/episodes.go keeps the list while
+// saying in its JSON that it may be short. Every other error returns no list.
 func (p *AnimeOnsen) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
 	n, err := p.episodeCount(id)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrIncompleteEpisodeList) {
 		return nil, fmt.Errorf("episodes: %w", err)
 	}
 	out := make([]media.Episode, 0, n)
@@ -470,6 +578,9 @@ func (p *AnimeOnsen) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
 			Title:  fmt.Sprintf("Episode %d", i),
 			ID:     strconv.Itoa(i),
 		})
+	}
+	if err != nil {
+		return out, fmt.Errorf("episodes: %w", err)
 	}
 	return out, nil
 }
