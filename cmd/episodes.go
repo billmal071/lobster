@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"lobster/internal/config"
 	"lobster/internal/media"
 	"lobster/internal/provider"
 	"lobster/internal/resolver"
@@ -82,6 +83,12 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	if !ok {
 		return emitErr("no_results", exitNoResults, "season %d not found for %q", flagSeason, r.Title)
 	}
+
+	// Whoever answers below, this is who the request named. The chain can
+	// replace p, and when it does the replacement's list is not comparable to
+	// the one the requested source would have given — so the fact of the
+	// substitution is itself the finding. See episodeSourceWarnings.
+	asked := p
 
 	eps, err := listSeasonEpisodes(p, src, sel)
 	// An enumeration that stopped short of the end is an answer, not a
@@ -165,27 +172,83 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		"episodes": out,
 		"provider": providerLabel(p),
 	}
-	// Additive, and absent when there is nothing to say — the same contract
-	// find's warnings array carries (cmd/find.go), for the same reason: a
-	// consumer that does not know the key is unaffected, and one that does can
-	// tell "this season has 10 episodes" from "10 is as far as enumeration
-	// got".
-	//
-	// A list that cannot be completed is the episodes-shaped version of the
-	// bug `play` had in #66 — a confident answer that was not the one the
-	// evidence supported. Here the count itself is evidence-backed; what was
-	// missing was any way to see that the evidence ran out.
-	if incomplete != "" {
-		payload["warnings"] = []map[string]any{{
-			"code":            "episode_list_incomplete",
-			"provider":        providerLabel(p),
-			"episodes_listed": len(out),
-			"message": fmt.Sprintf(
-				"%s could not establish where this season ends, so the %d episodes above are what it confirmed and there may be more: %s",
-				providerLabel(p), len(out), incomplete),
-		}}
+	if w := episodeSourceWarnings(asked, p, incomplete, len(out)); len(w) > 0 {
+		payload["warnings"] = w
 	}
 	return emitJSON(payload)
+}
+
+// episodeSourceWarnings builds the additive warnings array for this command:
+// absent when there is nothing to say, the same contract find's carries
+// (cmd/find.go, baseBroadeningWarnings) and for the same reason — a consumer
+// that does not know the key is unaffected, and one that does can tell "this
+// season has 10 episodes" from "10 is as far as enumeration got".
+//
+// # episode_list_incomplete
+//
+// A list that cannot be completed is the episodes-shaped version of the bug
+// `play` had in #66 — a confident answer that was not the one the evidence
+// supported. The count itself is evidence-backed; what was missing was any way
+// to see that the evidence ran out.
+//
+// # episode_list_from_fallback
+//
+// This one was argued against in the previous round and the argument was
+// wrong, so it is worth writing down why.
+//
+// The case against: the envelope's `provider` key already names whoever
+// answered, and this command documents that key as the thing that makes a
+// listing checkable. True, and still not enough. `provider` tells a caller
+// *who* answered; it does not tell them that someone else was asked first and
+// could not answer. Those are different facts, and the second one is the one
+// that was costing correctness: a 429 on one AnimeOnsen probe sent `episodes`
+// to the chain, and the chain's AniPub answered with ten episodes of a
+// twelve-episode series — from a provider whose stream path returns an
+// encrypted blob, so every episode it listed was unplayable. Exit 0, a
+// plausible list, no indication that anything had been substituted. The same
+// find.go reasoning applies verbatim: "the distinction is inferable only by
+// arithmetic the consumer skips".
+//
+// The count cannot be compared against what the requested source would have
+// given — it did not answer, so there is no number to compare — which is
+// exactly why the substitution rather than the shortfall is what is reported.
+//
+// Silent when no base was named, or "auto" was, or the base does not select
+// the primary at all: broadening is then the documented behaviour rather than
+// a departure from a request, which is the rule find.go already follows.
+func episodeSourceWarnings(asked, answered provider.Provider, incomplete string, listed int) []map[string]any {
+	var out []map[string]any
+	if incomplete != "" {
+		out = append(out, map[string]any{
+			"code":            "episode_list_incomplete",
+			"provider":        providerLabel(answered),
+			"episodes_listed": listed,
+			"message": fmt.Sprintf(
+				"%s could not establish where this season ends, so the %d episodes above are what it confirmed and there may be more: %s",
+				providerLabel(answered), listed, incomplete),
+		})
+	}
+	configured := ""
+	if cfg != nil {
+		configured = config.NormalizeBase(cfg.Base)
+	}
+	// searchProviderBase, not providerBase: it is the same table behind a
+	// package var, which is how a test maps a stub onto a token without the
+	// stub having to be one of the concrete provider types.
+	askedBase := searchProviderBase(asked)
+	if asked != answered && configured != "" && configured != config.BaseAuto &&
+		baseNamedThePrimary(configured, askedBase) {
+		out = append(out, map[string]any{
+			"code":            "episode_list_from_fallback",
+			"base":            configured,
+			"provider":        providerLabel(answered),
+			"episodes_listed": listed,
+			"message": fmt.Sprintf(
+				"base %q could not list this season, so the %d episodes above came from %s instead; a fallback provider can list episodes it cannot stream, so check that a ref from this listing plays before relying on the count",
+				configured, listed, providerLabel(answered)),
+		})
+	}
+	return out
 }
 
 // listSeasonEpisodes makes the first episode-listing call, under a deadline

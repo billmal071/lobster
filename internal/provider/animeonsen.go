@@ -47,17 +47,55 @@ const (
 	// 12-to-26-episode series in two waves without opening a connection per
 	// episode.
 	animeOnsenProbeWidth = 8
+
+	// animeOnsenProbeInFlight caps how many of a wave's probes are on the
+	// wire at once, and it is not the same number as the width.
+	//
+	// The CDN is Cloudflare in front of an origin, and only a request that
+	// misses the edge cache reaches origin. Origin sheds concurrent misses
+	// with 429, and the shedding scales with how many are in flight: measured
+	// against KAMUI on 2026-10-02, a wave of eight concurrent HEADs lost two
+	// to three of them, two-at-a-time lost one in eight, and the same eight
+	// sent strictly sequentially lost none. Neither the protocol nor the
+	// connection count mattered — HTTP/1.1 over eight separate connections
+	// shed as readily as one multiplexed HTTP/2 connection.
+	//
+	// Halving the in-flight count is therefore a real reduction and not a
+	// cure; the retry in probeEpisode is the fix. Serialising the wave
+	// outright would cure it and cannot be afforded: these probes are on
+	// `episodes`, whose whole season scan is abandoned at 5s.
+	animeOnsenProbeInFlight = 4
 )
 
-// animeOnsenProbeBudget is the probe's own deadline, as a backstop rather than
-// as the binding limit. The agent-facing callers bound it from outside and more
-// tightly — cmd.episodesFallbackTimeout is 5 s and abandons the call — so what
-// this covers is the paths with no deadline of their own: resolver.Resolve's
-// 30 s per-attempt budget, and the TUI, which has none at all.
+// animeOnsenProbeBudget is the probe's own deadline, and it is deliberately
+// *below* the tightest caller's, not above it.
+//
+// It was 10 s, on the reasoning that cmd.episodesFallbackTimeout (5 s) binds
+// first anyway and the 10 s only covers the paths with no deadline of their
+// own — resolver.Resolve's 30 s per attempt, and the TUI, which has none.
+// That reasoning had the sign wrong. A budget above the caller's cap can never
+// produce this provider's own answer on the path that matters: the caller
+// abandons the call at 5 s and asks the fallback chain, which is precisely the
+// silent downgrade the rest of this file exists to prevent — the reported bug
+// was `episodes` printing ten episodes of a twelve-episode series, sourced
+// from a provider that cannot stream any of them.
+//
+// Under 4.5 s the probe always gets to answer, and when it has to stop early
+// it answers with the prefix it measured and the ErrIncompleteEpisodeList
+// flag. The cost is that a four-digit series against a slow CDN now reports a
+// flagged prefix where it would previously have been cancelled outright; that
+// is the same contract the animeOnsenMaxEpisodes ceiling already has, and it
+// is visible in the JSON rather than silent.
+//
+// The 500 ms margin is for the probe to notice and return, not for more
+// requests. Worst case inside it, measured round trips against the live CDN
+// (~1 s for a cache miss, ~0.2 s for a hit): two bracket waves at
+// animeOnsenProbeInFlight 4, a serial re-ask of what the waves shed at
+// animeOnsenRetryBase 150 ms, one narrow wave, one confirmation probe.
 //
 // A var, not a const, so a test can shrink it and watch the probe give up
 // rather than having to serve thousands of manifests to reach the ceiling.
-var animeOnsenProbeBudget = 10 * time.Second
+var animeOnsenProbeBudget = 4500 * time.Millisecond
 
 // animeOnsenConfirmRounds bounds how many times the episode search is re-run
 // after a 404 turned out not to be the end of the series.
@@ -74,6 +112,74 @@ var animeOnsenProbeBudget = 10 * time.Second
 // the probe give up, instead of needing a fixture that lies four times in a
 // row in exactly the right places.
 var animeOnsenConfirmRounds = 4
+
+// animeOnsenSleep is the probe's backoff sleep, as a seam so a retry test
+// asserts on the wait the policy chose instead of spending it.
+var animeOnsenSleep = time.Sleep
+
+// The retry policy for a shed probe. 429 is the status the CDN actually sends
+// and it means "ask again", not "no such episode" and not "this provider is
+// broken" — both of which cost the whole enumeration and send `episodes` down
+// the fallback chain to a provider with a shorter list it cannot stream.
+//
+// The numbers are chosen against cmd.episodesFallbackTimeout, which abandons
+// the season scan at 5s: a retry policy that outlives it converts a
+// recoverable 429 into exactly the silent fallback it was meant to prevent.
+// Two retries at 150ms then 300ms is 450ms of waiting per probe, and the
+// probes of a wave wait concurrently, so a wave costs at most one 450ms
+// backoff on top of its round trips however many of its probes are shed.
+//
+// Vars rather than consts for the usual reason here: a test shrinks them, and
+// one asserts the defaults as written-out literals so shrinking the policy
+// cannot satisfy it.
+var (
+	animeOnsenProbeRetries = 2
+	animeOnsenRetryBase    = 150 * time.Millisecond
+	animeOnsenMaxRetryWait = 2 * time.Second
+)
+
+// errAnimeOnsenThrottled marks a probe that kept being shed. It is
+// deliberately neither ErrNoResults nor a bare status error: the caller has to
+// be able to tell "the CDN would not answer" from "the episode is not there",
+// because those two readings produce a short list and a missing show
+// respectively, and both look like a finished answer from outside.
+var errAnimeOnsenThrottled = errors.New("animeonsen: the CDN throttled the availability probe")
+
+// animeOnsenRetryable reports whether status is worth asking again.
+//
+// 429 is the measured one. The 5xx family and 408 are included because they
+// say the same thing — nothing was learnt about the episode — while 403 is
+// pointedly excluded: here it means the Referer or User-Agent was rejected,
+// which no amount of asking again will change, and retrying it would spend
+// the budget three times over to reach the same error.
+func animeOnsenRetryable(status int) bool {
+	switch status {
+	case http.StatusTooManyRequests, http.StatusRequestTimeout:
+		return true
+	}
+	return status >= 500 && status < 600
+}
+
+// animeOnsenRetryWait is how long to wait before asking again.
+//
+// Retry-After wins when the server sends one, in either of the forms RFC 9110
+// allows, clamped to animeOnsenMaxRetryWait so a server cannot park the probe.
+// The live 429s carried no Retry-After at all, which is why there is a default
+// to fall back on rather than a policy built around the header.
+func (p *AnimeOnsen) animeOnsenRetryWait(attempt int, h http.Header) time.Duration {
+	if v := strings.TrimSpace(h.Get("Retry-After")); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
+			return min(time.Duration(secs)*time.Second, animeOnsenMaxRetryWait)
+		}
+		if when, err := http.ParseTime(v); err == nil {
+			if d := when.Sub(p.now()); d > 0 {
+				return min(d, animeOnsenMaxRetryWait)
+			}
+			return 0
+		}
+	}
+	return min(animeOnsenRetryBase<<attempt, animeOnsenMaxRetryWait)
+}
 
 // AnimeOnsen streams anime from animeonsen.xyz's public v4 API.
 //
@@ -122,6 +228,21 @@ type AnimeOnsen struct {
 	apiBase string
 	cdnBase string
 	now     func() time.Time
+
+	// confirmedMu guards confirmed, which remembers the episodes this
+	// provider has watched the CDN serve, so a run does not ask twice.
+	//
+	// Only 200s are remembered, and that asymmetry is the whole design. A
+	// 404 has to stay re-askable: re-asking one on its own is the mechanism
+	// that catches a shed burst, and a cached 404 would feed the
+	// confirmation probe the very answer it exists to re-test. A 200, by
+	// contrast, cannot have been a lie — the CDN does not serve a manifest
+	// for an episode it does not have — so reusing it is free.
+	//
+	// The map is per-provider-instance, i.e. per command, and bounded by
+	// animeOnsenMaxEpisodes entries per content id.
+	confirmedMu sync.Mutex
+	confirmed   map[string]bool
 }
 
 // NewAnimeOnsen returns a provider against the live hosts.
@@ -153,23 +274,32 @@ func NewAnimeOnsenAt(apiBase, cdnBase string) *AnimeOnsen {
 	}
 }
 
-func (p *AnimeOnsen) do(method, rawURL string) (int, []byte, error) {
+// do sends one request with the two headers the CDN enforces and returns the
+// status, the response headers and the body.
+//
+// The headers are returned because Retry-After is the one input the retry
+// policy must defer to; the User-Agent is set on every request, HEAD probes
+// included, because the CDN's deny rule is not limited to ffmpeg's Lavf — a
+// Go-http-client/1.1 User-Agent is answered 403 as well (measured
+// 2026-10-02), so a probe that let net/http fill the header in would be
+// locked out while a browser string sails through.
+func (p *AnimeOnsen) do(method, rawURL string) (int, http.Header, []byte, error) {
 	req, err := http.NewRequest(method, rawURL, nil)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	req.Header.Set("User-Agent", animeOnsenUA)
 	req.Header.Set("Referer", animeOnsenReferer)
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	defer resp.Body.Close()
 	if method == http.MethodHead {
-		return resp.StatusCode, nil, nil
+		return resp.StatusCode, resp.Header, nil, nil
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	return resp.StatusCode, body, err
+	return resp.StatusCode, resp.Header, body, err
 }
 
 // animeOnsenHit is one row of the search response.
@@ -208,7 +338,7 @@ type animeOnsenHit struct {
 // an option: resolver.dedupeByType keys on ID and would collapse them,
 // keeping whichever came first and dropping the spelling that matches.
 func (p *AnimeOnsen) Search(query string) ([]media.SearchResult, error) {
-	status, body, err := p.do(http.MethodGet, p.apiBase+"/search/"+url.PathEscape(query))
+	status, _, body, err := p.do(http.MethodGet, p.apiBase+"/search/"+url.PathEscape(query))
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
@@ -292,55 +422,148 @@ func (p *AnimeOnsen) manifestURL(contentID string, episode int) string {
 	return fmt.Sprintf("%s/%s/%d/manifest.mpd", p.cdnBase, contentID, episode)
 }
 
-// episodeAvailable reports whether contentID has episode n, by HEADing its
+// episodeAvailable reports whether contentID has episode n, under a fresh
+// probe budget. It is the entry point for the single-episode checks that are
+// not part of an enumeration — Watch's availability check, and episodeCount's
+// own confirmation probes.
+func (p *AnimeOnsen) episodeAvailable(contentID string, n int) (bool, error) {
+	return p.probeEpisode(contentID, n, p.now().Add(animeOnsenProbeBudget))
+}
+
+// probeEpisode reports whether contentID has episode n, by HEADing its
 // manifest. A present episode answers 200 and one past the end answers 404 —
 // and a bogus content id answers 404 too, so there is no blanket-200 fallback
 // to mistake for a hit.
-func (p *AnimeOnsen) episodeAvailable(contentID string, n int) (bool, error) {
-	status, _, err := p.do(http.MethodHead, p.manifestURL(contentID, n))
-	if err != nil {
-		return false, err
-	}
-	switch {
-	case status >= 200 && status < 300:
+//
+// A 429 is neither of those answers, and that is the correction this carries.
+// The CDN sheds concurrent cache misses with 429 (see animeOnsenProbeInFlight
+// for the measurements), and the status means "ask again": read as a 404 it
+// ends the series early, and read as a transport failure it loses the whole
+// provider to the fallback chain, which on the reported case answered with ten
+// episodes of a twelve-episode series from a source that cannot stream any of
+// them. So a retryable status is retried, on a budget, and if it still will
+// not answer the caller is told that specifically — errAnimeOnsenThrottled,
+// not ErrNoResults and not a bare status.
+func (p *AnimeOnsen) probeEpisode(contentID string, n int, deadline time.Time) (bool, error) {
+	return p.probeEpisodeWithRetries(contentID, n, deadline, animeOnsenProbeRetries)
+}
+
+// probeEpisodeWithRetries is probeEpisode with the retry count made explicit,
+// because the two callers need different ones.
+//
+// A probe sent on its own retries: that is the measured recovery condition —
+// every shed request, asked again by itself, answered truthfully. A probe sent
+// as part of a concurrent wave does not, and retrying inside the wave would be
+// asking again under exactly the conditions that produced the refusal. probeSet
+// collects what the wave shed and re-asks those one at a time instead.
+func (p *AnimeOnsen) probeEpisodeWithRetries(contentID string, n int, deadline time.Time, retries int) (bool, error) {
+	if p.isConfirmed(contentID, n) {
 		return true, nil
-	case status == http.StatusNotFound:
-		return false, nil
-	default:
-		// 403 (missing/rejected Referer or UA) is not "no such episode", and
-		// reporting it as one would silently shorten every episode list.
-		return false, fmt.Errorf("animeonsen: manifest status %d", status)
+	}
+	for attempt := 0; ; attempt++ {
+		status, hdr, _, err := p.do(http.MethodHead, p.manifestURL(contentID, n))
+		if err != nil {
+			return false, err
+		}
+		switch {
+		case status >= 200 && status < 300:
+			p.confirm(contentID, n)
+			return true, nil
+		case status == http.StatusNotFound:
+			return false, nil
+		case animeOnsenRetryable(status):
+			if attempt >= retries {
+				return false, fmt.Errorf("%w: episode %d of %q answered %d on all %d attempts",
+					errAnimeOnsenThrottled, n, contentID, status, attempt+1)
+			}
+			wait := p.animeOnsenRetryWait(attempt, hdr)
+			if left := deadline.Sub(p.now()); left <= 0 || wait > left {
+				return false, fmt.Errorf("%w: episode %d of %q answered %d and there is no budget left to ask again",
+					errAnimeOnsenThrottled, n, contentID, status)
+			}
+			animeOnsenSleep(wait)
+		default:
+			// 403 (missing/rejected Referer or UA) is not "no such episode",
+			// and reporting it as one would silently shorten every episode
+			// list. It is not retryable either — see animeOnsenRetryable.
+			return false, fmt.Errorf("animeonsen: manifest status %d", status)
+		}
 	}
 }
 
-// probeSet HEADs every manifest in ns concurrently and reports which answered.
+func (p *AnimeOnsen) confirmKey(contentID string, n int) string {
+	return contentID + "/" + strconv.Itoa(n)
+}
+
+func (p *AnimeOnsen) isConfirmed(contentID string, n int) bool {
+	p.confirmedMu.Lock()
+	defer p.confirmedMu.Unlock()
+	return p.confirmed[p.confirmKey(contentID, n)]
+}
+
+func (p *AnimeOnsen) confirm(contentID string, n int) {
+	p.confirmedMu.Lock()
+	defer p.confirmedMu.Unlock()
+	if p.confirmed == nil {
+		p.confirmed = make(map[string]bool)
+	}
+	p.confirmed[p.confirmKey(contentID, n)] = true
+}
+
+// probeSet HEADs every manifest in ns and reports which answered, along with
+// whether any probe was shed for good.
+//
+// At most animeOnsenProbeInFlight of them are on the wire at once: origin
+// sheds concurrent cache misses, and the whole wave arriving together is the
+// worst shape for that. The cap is a reduction rather than a cure — probes
+// that are still shed after their retries are reported as *unknown* (left out
+// of present) with throttled set, which lets the search carry on with what it
+// did learn instead of losing the provider over one refused request.
 //
 // A probe that errors at the transport level, or answers something that is
-// neither 2xx nor 404, fails the whole wave: 403 is what a rejected Referer or
-// User-Agent looks like here, and reading it as "no such episode" would
-// silently shorten every episode list to nothing instead of saying what broke.
-func (p *AnimeOnsen) probeSet(contentID string, ns []int) (map[int]bool, error) {
+// neither 2xx nor 404 nor retryable, still fails the whole wave: 403 is what a
+// rejected Referer or User-Agent looks like here, and reading it as "no such
+// episode" would silently shorten every episode list to nothing instead of
+// saying what broke.
+func (p *AnimeOnsen) probeSet(contentID string, ns []int, deadline time.Time) (map[int]bool, bool, error) {
 	present := make(map[int]bool, len(ns))
 	errs := make([]error, len(ns))
 	oks := make([]bool, len(ns))
 
+	sem := make(chan struct{}, animeOnsenProbeInFlight)
 	var wg sync.WaitGroup
 	for i, n := range ns {
 		wg.Add(1)
 		go func(i, n int) {
 			defer wg.Done()
-			oks[i], errs[i] = p.episodeAvailable(contentID, n)
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			// No retries inside the wave: asking again while the rest of the
+			// wave is still in flight is asking again under the conditions
+			// that caused the refusal.
+			oks[i], errs[i] = p.probeEpisodeWithRetries(contentID, n, deadline, 0)
 		}(i, n)
 	}
 	wg.Wait()
 
+	// Second pass, strictly one request at a time. This is the shape the
+	// recovery was measured under: every probe the live CDN shed answered
+	// truthfully when it was re-sent on its own.
+	throttled := false
 	for i, n := range ns {
-		if errs[i] != nil {
-			return nil, errs[i]
+		if errs[i] != nil && errors.Is(errs[i], errAnimeOnsenThrottled) {
+			oks[i], errs[i] = p.probeEpisodeWithRetries(contentID, n, deadline, animeOnsenProbeRetries)
 		}
-		present[n] = oks[i]
+		switch {
+		case errs[i] == nil:
+			present[n] = oks[i]
+		case errors.Is(errs[i], errAnimeOnsenThrottled):
+			throttled = true
+		default:
+			return nil, false, errs[i]
+		}
 	}
-	return present, nil
+	return present, throttled, nil
 }
 
 // episodeCount returns how many episodes contentID has, by probing the CDN.
@@ -404,16 +627,15 @@ func (p *AnimeOnsen) episodeCount(contentID string) (int, error) {
 
 	floor := 0
 	for round := 0; round < animeOnsenConfirmRounds; round++ {
-		n, atCeiling, err := p.searchBoundary(contentID, floor, expired)
+		n, short, err := p.searchBoundary(contentID, floor, deadline)
 		if err != nil {
 			return 0, err
 		}
-		if atCeiling {
-			return n, fmt.Errorf("%w: animeonsen: every episode up to %d answered, so %q may have more",
-				ErrIncompleteEpisodeList, n, contentID)
+		if short != "" {
+			return p.short(contentID, n, short)
 		}
 		if err := expired(); err != nil {
-			return 0, err
+			return p.short(contentID, n, err.Error())
 		}
 		// Confirm the boundary with a HEAD sent on its own. The search's 404s
 		// arrive inside a wave of animeOnsenProbeWidth concurrent requests,
@@ -426,8 +648,11 @@ func (p *AnimeOnsen) episodeCount(contentID string) (int, error) {
 		// A 200 here means the 404 was a lie, so the search runs again from
 		// the episode just proved present. It cannot loop: floor strictly
 		// increases, and the ceiling bounds it.
-		ok, err := p.episodeAvailable(contentID, n+1)
+		ok, err := p.probeEpisode(contentID, n+1, deadline)
 		if err != nil {
+			if errors.Is(err, errAnimeOnsenThrottled) {
+				return p.short(contentID, n, fmt.Sprintf("the CDN would not answer whether episode %d exists", n+1))
+			}
 			return 0, err
 		}
 		if !ok {
@@ -435,15 +660,50 @@ func (p *AnimeOnsen) episodeCount(contentID string) (int, error) {
 		}
 		floor = n + 1
 	}
-	return floor, fmt.Errorf("%w: animeonsen: %q answered 404 for an episode it then served, %d times over",
-		ErrIncompleteEpisodeList, contentID, animeOnsenConfirmRounds)
+	return p.short(contentID, floor,
+		fmt.Sprintf("the CDN answered 404 for an episode it then served, %d times over", animeOnsenConfirmRounds))
+}
+
+// short reports an enumeration that stopped somewhere other than a confirmed
+// boundary: the ceiling, the budget, a shed probe, or a host that keeps
+// answering 404 for episodes it then serves.
+//
+// There is one rule, and it is the reason this is a single function rather
+// than four call sites. A measured prefix is returned *with* the flag, because
+// the alternative — an error — is read one layer up as "ask someone else", and
+// asking someone else is what produced the reported bug: AnimeOnsen's
+// enumeration failed on a single 429 and `episodes` printed ten episodes of a
+// twelve-episode series, sourced from a provider that cannot stream any of
+// them. A flagged ten from the provider that can play it beats an unflagged
+// ten from one that cannot, and a flagged twelve beats both.
+//
+// Nothing measured at all is the one case that is still a plain error. There
+// is no list to flag, and the chain is then the right place to ask. It is
+// deliberately not ErrNoResults: "the CDN would not answer" is not "the
+// catalogue does not have this", and the chain treats the latter as final.
+func (p *AnimeOnsen) short(contentID string, n int, reason string) (int, error) {
+	if n < 1 {
+		return 0, fmt.Errorf("animeonsen: %q could not be enumerated: %s", contentID, reason)
+	}
+	return n, fmt.Errorf("%w: animeonsen: %s, so %d is as far as %q could be confirmed",
+		ErrIncompleteEpisodeList, reason, n, contentID)
 }
 
 // searchBoundary finds the highest present episode above floor, which is
-// itself known present (0: nothing is known yet). atCeiling reports that
-// animeOnsenMaxEpisodes was reached with everything answering, so the returned
-// count is where the measurement stopped rather than where the series does.
-func (p *AnimeOnsen) searchBoundary(contentID string, floor int, expired func() error) (int, bool, error) {
+// itself known present (0: nothing is known yet).
+//
+// The second return is empty when the boundary is a real one — the returned
+// episode answered 200 and the next one 404 — and otherwise says in words why
+// the measurement stopped where it did: the animeOnsenMaxEpisodes ceiling, the
+// probe budget, or a wave the CDN shed entirely. episodeCount turns that into
+// the ErrIncompleteEpisodeList flag that reaches `episodes`' JSON.
+func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.Time) (int, string, error) {
+	expired := func() error {
+		if p.now().After(deadline) {
+			return fmt.Errorf("the episode probe exceeded %s", animeOnsenProbeBudget)
+		}
+		return nil
+	}
 	// lo is the highest episode known to exist. hi is the lowest known not to
 	// (0: not yet found).
 	lo, hi := floor, 0
@@ -470,18 +730,25 @@ func (p *AnimeOnsen) searchBoundary(contentID string, floor int, expired func() 
 	// Bracket.
 	for step := 1; hi == 0 && floor+step <= animeOnsenMaxEpisodes; {
 		if err := expired(); err != nil {
-			return 0, false, err
+			return lo, err.Error(), nil
 		}
 		ns := make([]int, 0, animeOnsenProbeWidth)
 		for len(ns) < animeOnsenProbeWidth && floor+step <= animeOnsenMaxEpisodes {
 			ns = append(ns, floor+step)
 			step *= 2
 		}
-		present, err := p.probeSet(contentID, ns)
+		wasLo, wasHi := lo, hi
+		present, throttled, err := p.probeSet(contentID, ns, deadline)
 		if err != nil {
-			return 0, false, err
+			return 0, "", err
 		}
 		note(present)
+		if throttled && lo == wasLo && hi == wasHi {
+			// Every probe in the wave was shed, so the wave taught nothing.
+			// Widening and asking again would spend the budget learning
+			// nothing a second time; stop and say the measurement is short.
+			return lo, "the CDN throttled the availability probe", nil
+		}
 		if lo == floor && floor == 0 {
 			// Episode 1 itself answered absent, which is also what a bogus
 			// content id answers. Either way this looks like "the catalogue
@@ -498,14 +765,21 @@ func (p *AnimeOnsen) searchBoundary(contentID string, floor int, expired func() 
 			// already watched this content id serve an episode, so "nothing
 			// here" is no longer an available conclusion.
 			if err := expired(); err != nil {
-				return 0, false, err
+				return lo, err.Error(), nil
 			}
-			ok, err := p.episodeAvailable(contentID, 1)
+			ok, err := p.probeEpisode(contentID, 1, deadline)
 			if err != nil {
-				return 0, false, err
+				if errors.Is(err, errAnimeOnsenThrottled) {
+					// A shed probe of episode 1 must not become "animeonsen
+					// does not have this show". That is the reading the
+					// fallback chain treats as final, and it would retire a
+					// series lobster can stream over one refused request.
+					return 0, "the CDN would not answer whether episode 1 exists", nil
+				}
+				return 0, "", err
 			}
 			if !ok {
-				return 0, false, fmt.Errorf("%w: animeonsen has no episodes for %q", ErrNoResults, contentID)
+				return 0, "", fmt.Errorf("%w: animeonsen has no episodes for %q", ErrNoResults, contentID)
 			}
 			lo, floor, step = 1, 1, 1
 			if hi != 0 && hi <= lo {
@@ -519,13 +793,13 @@ func (p *AnimeOnsen) searchBoundary(contentID string, floor int, expired func() 
 	if hi == 0 {
 		// Everything up to the ceiling answered. Report what was measured
 		// rather than widening forever, and say that is what happened.
-		return lo, true, nil
+		return lo, fmt.Sprintf("every episode up to the %d-episode ceiling answered", animeOnsenMaxEpisodes), nil
 	}
 
 	// Narrow.
 	for hi-lo > 1 {
 		if err := expired(); err != nil {
-			return 0, false, err
+			return lo, err.Error(), nil
 		}
 		gap := hi - lo - 1 // unknown episodes strictly between lo and hi
 		ns := make([]int, 0, animeOnsenProbeWidth)
@@ -542,15 +816,21 @@ func (p *AnimeOnsen) searchBoundary(contentID string, floor int, expired func() 
 			// Only reachable if the arithmetic above stopped making progress,
 			// which would otherwise be an infinite loop. Report the measured
 			// lower bound instead of spinning.
-			return lo, false, nil
+			return lo, "", nil
 		}
-		present, err := p.probeSet(contentID, ns)
+		wasLo, wasHi := lo, hi
+		present, throttled, err := p.probeSet(contentID, ns, deadline)
 		if err != nil {
-			return 0, false, err
+			return 0, "", err
 		}
 		note(present)
+		if throttled && lo == wasLo && hi == wasHi {
+			// Same as in the bracket: nothing was learnt, so narrowing again
+			// would only burn budget. lo is still a measured episode.
+			return lo, "the CDN throttled the availability probe", nil
+		}
 	}
-	return lo, false, nil
+	return lo, "", nil
 }
 
 // GetSeasons reports the single season AnimeOnsen models. Like every anime

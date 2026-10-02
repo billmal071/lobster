@@ -795,3 +795,166 @@ func TestEpisodesWarnsWhenTheSecondChainHopCouldNotFinishEnumerating(t *testing.
 		t.Fatalf("warnings = %+v, want one episode_list_incomplete over 1 episode", got.Warnings)
 	}
 }
+
+// withStubProviderBase maps a stub onto a --base token, so the base-aware
+// warnings can be exercised without a concrete provider that reaches the net.
+func withStubProviderBase(t *testing.T, want provider.Provider, token string) {
+	t.Helper()
+	prev := searchProviderBase
+	searchProviderBase = func(p provider.Provider) string {
+		if p == want {
+			return token
+		}
+		return prev(p)
+	}
+	t.Cleanup(func() { searchProviderBase = prev })
+}
+
+// episodesWarnings decodes just the warnings array.
+type episodesWarning struct {
+	Code           string `json:"code"`
+	Base           string `json:"base"`
+	Provider       string `json:"provider"`
+	EpisodesListed int    `json:"episodes_listed"`
+	Message        string `json:"message"`
+}
+
+func decodeEpisodesWarnings(t *testing.T, b []byte) []episodesWarning {
+	t.Helper()
+	var got struct {
+		Warnings []episodesWarning `json:"warnings"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, string(b))
+	}
+	return got.Warnings
+}
+
+// The silent downgrade, which is the shape of the reported bug: the requested
+// base could not enumerate, a chain member answered instead, and the envelope
+// said only who answered — never that anyone else had been asked. The chain
+// member's list was shorter than the truth and it cannot stream a frame of it,
+// and exit 0 with a plausible list is indistinguishable from a good answer.
+func TestEpisodesWarnsWhenTheRequestedBaseDidNotAnswer(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+	withBase(t, "animeonsen")
+
+	// The primary enumerates seasons and cannot list episodes — the shape a
+	// throttled AnimeOnsen probe produced.
+	primary := twoSeasonStub()
+	primary.episodesErr = errors.New("episodes: animeonsen: manifest status 429")
+	withStubProvider(t, primary)
+	withStubProviderBase(t, primary, "animeonsen")
+
+	fb := twoSeasonStub()
+	fb.results = []media.SearchResult{{ID: "fb/some-show", Title: "Some Show", Type: media.TV}}
+	prevFB := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider {
+		return []provider.Provider{fb}
+	}
+	t.Cleanup(func() { agentFallbackProviders = prevFB })
+
+	withEpisodesFlags(t, tvRef(t, ""), 2)
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	w := decodeEpisodesWarnings(t, buf.Bytes())
+	if len(w) != 1 || w[0].Code != "episode_list_from_fallback" {
+		t.Fatalf("warnings = %+v, want one episode_list_from_fallback", w)
+	}
+	// Written out rather than read back from cfg, which the code also reads.
+	if w[0].Base != "animeonsen" {
+		t.Fatalf("warning base = %q, want animeonsen", w[0].Base)
+	}
+	if w[0].EpisodesListed != 2 {
+		t.Fatalf("warning episodes_listed = %d, want 2", w[0].EpisodesListed)
+	}
+}
+
+// Silence on a clean answer. The requested base answered, so there is nothing
+// to say, and a warning on every listing is noise a caller learns to ignore.
+func TestEpisodesSaysNothingWhenTheRequestedBaseAnswered(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+	withBase(t, "animeonsen")
+
+	primary := twoSeasonStub()
+	withStubProvider(t, primary)
+	withStubProviderBase(t, primary, "animeonsen")
+	withEpisodesFlags(t, tvRef(t, ""), 2)
+
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	if w := decodeEpisodesWarnings(t, buf.Bytes()); len(w) != 0 {
+		t.Fatalf("warnings = %+v, want none", w)
+	}
+}
+
+// Silence under "auto": broadening is then the documented behaviour rather
+// than a departure from what was asked, which is the rule cmd/find.go's
+// baseBroadeningWarnings already follows.
+func TestEpisodesSaysNothingAboutFallbackUnderAutoBase(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+	withBase(t, config.BaseAuto)
+
+	primary := twoSeasonStub()
+	primary.episodesErr = errors.New("nope")
+	withStubProvider(t, primary)
+	withStubProviderBase(t, primary, "animeonsen")
+
+	fb := twoSeasonStub()
+	fb.results = []media.SearchResult{{ID: "fb/some-show", Title: "Some Show", Type: media.TV}}
+	prevFB := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider {
+		return []provider.Provider{fb}
+	}
+	t.Cleanup(func() { agentFallbackProviders = prevFB })
+
+	withEpisodesFlags(t, tvRef(t, ""), 2)
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	if w := decodeEpisodesWarnings(t, buf.Bytes()); len(w) != 0 {
+		t.Fatalf("warnings = %+v, want none under base auto", w)
+	}
+}
+
+// Both warnings can be true at once, and both have to be emitted: the chain
+// answered *and* its answer is short. Collapsing to one would hide whichever
+// the caller most needed.
+func TestEpisodesWarnsAboutBothFallbackAndIncompleteness(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+	withBase(t, "animeonsen")
+
+	primary := twoSeasonStub()
+	primary.episodesErr = errors.New("episodes: animeonsen: manifest status 429")
+	withStubProvider(t, primary)
+	withStubProviderBase(t, primary, "animeonsen")
+
+	fb := twoSeasonStub()
+	fb.results = []media.SearchResult{{ID: "fb/some-show", Title: "Some Show", Type: media.TV}}
+	fb.episodesWithErr = []media.Episode{{ID: "1", Number: 1, Title: "Episode 1"}}
+	fb.episodesErr = fmt.Errorf("%w: stopped at 1", provider.ErrIncompleteEpisodeList)
+	prevFB := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider {
+		return []provider.Provider{fb}
+	}
+	t.Cleanup(func() { agentFallbackProviders = prevFB })
+
+	withEpisodesFlags(t, tvRef(t, ""), 2)
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	w := decodeEpisodesWarnings(t, buf.Bytes())
+	codes := map[string]bool{}
+	for _, x := range w {
+		codes[x.Code] = true
+	}
+	if len(w) != 2 || !codes["episode_list_incomplete"] || !codes["episode_list_from_fallback"] {
+		t.Fatalf("warnings = %+v, want both episode_list_incomplete and episode_list_from_fallback", w)
+	}
+}

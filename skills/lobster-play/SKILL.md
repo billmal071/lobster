@@ -74,6 +74,12 @@ whose base matches when they asked for one.
   source could not establish where the season ends. Say "at least 10" rather
   than "10 episodes", and do not tell the user an episode does not exist
   because it is not on the list.
+- `{"code": "episode_list_from_fallback", "base": "animeonsen",
+  "provider": "anipub", "episodes_listed": 10}` — the base the user asked for
+  could not list this season and a fallback answered instead. Say which source
+  the list came from, and do not promise the episodes will play: a fallback can
+  list episodes it cannot stream. Try the base again before treating its count
+  as settled.
 
 ### 2. Show the user the candidates and stop
 

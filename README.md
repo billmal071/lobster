@@ -280,6 +280,14 @@ listing is the whole season:
   index are enumerated by probing for each episode in turn, so "10 episodes"
   and "10 is as far as we got" are different answers and this is the one that
   distinguishes them. Treat the list as a floor, not a total.
+- `{"code": "episode_list_from_fallback", "base": "animeonsen",
+  "provider": "anipub", "episodes_listed": 10}` — the source named by `--base`
+  (or by the ref) could not list this season, so the listing came from a
+  fallback provider. `provider` has always named whoever answered; this says
+  that someone else was asked first and could not, which is a different fact
+  and the one that matters: a fallback can list episodes it has no way to
+  stream. Check that a ref from this listing actually plays before relying on
+  the count.
 
 The counts describe the rows you actually received, so `--type` and `--limit`
 are already applied. Each row's `ref` names the source that produced it, where

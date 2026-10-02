@@ -46,6 +46,20 @@ type animeOnsenFake struct {
 	// arrive, so the lie is deterministic rather than timing-dependent.
 	lie404 map[int]int
 
+	// throttle is how many times each episode number answers 429 before it
+	// answers truthfully, and throttleAbove makes every episode above it
+	// answer 429 forever (a negative value throttles every episode, episode 1
+	// included). Together they model the live CDN's bot mitigation:
+	// a request that misses the edge cache goes to origin, and origin sheds
+	// concurrent misses with 429. A 429 read as "no such episode" ends the
+	// series early; read as a transport failure it loses the whole provider
+	// to the fallback chain. Neither is what the status means.
+	throttle      map[int]int
+	throttleAbove int
+	// throttleRetryAfter, when non-empty, is sent as the Retry-After header
+	// with every 429. The live CDN sends none, so the default models that.
+	throttleRetryAfter string
+
 	mu        sync.Mutex
 	reqs      []animeOnsenReq
 	inFlight  int
@@ -57,6 +71,10 @@ type animeOnsenReq struct {
 	path    string
 	referer string
 	ua      string
+	// inflight is how many requests were being served when this one arrived,
+	// this one included. It is what makes "the shed probe was re-asked on its
+	// own" a measurable claim rather than a comment: 1 means solitary.
+	inflight int
 }
 
 var animeOnsenManifestPath = regexp.MustCompile(`^/video/mp4-dash/([^/]+)/(\d+)/manifest\.mpd$`)
@@ -80,6 +98,7 @@ func (f *animeOnsenFake) handle(w http.ResponseWriter, r *http.Request) {
 	if f.inFlight > f.maxFlight {
 		f.maxFlight = f.inFlight
 	}
+	f.reqs[len(f.reqs)-1].inflight = f.inFlight
 	f.mu.Unlock()
 	// Hold the request open briefly so concurrent waves genuinely overlap;
 	// without this a fast handler can serialise by accident and the
@@ -93,6 +112,22 @@ func (f *animeOnsenFake) handle(w http.ResponseWriter, r *http.Request) {
 
 	if m := animeOnsenManifestPath.FindStringSubmatch(r.URL.Path); m != nil {
 		n, _ := strconv.Atoi(m[2])
+		if f.throttleAbove != 0 && (f.throttleAbove < 0 || n > f.throttleAbove) {
+			f.throttleResponse(w)
+			return
+		}
+		if f.throttle != nil {
+			f.mu.Lock()
+			left := f.throttle[n]
+			if left > 0 {
+				f.throttle[n] = left - 1
+			}
+			f.mu.Unlock()
+			if left > 0 {
+				f.throttleResponse(w)
+				return
+			}
+		}
 		if f.lie404 != nil {
 			f.mu.Lock()
 			left := f.lie404[n]
@@ -130,6 +165,13 @@ func (f *animeOnsenFake) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNotFound)
+}
+
+func (f *animeOnsenFake) throttleResponse(w http.ResponseWriter) {
+	if f.throttleRetryAfter != "" {
+		w.Header().Set("Retry-After", f.throttleRetryAfter)
+	}
+	w.WriteHeader(http.StatusTooManyRequests)
 }
 
 func (f *animeOnsenFake) provider() *AnimeOnsen {
@@ -674,5 +716,406 @@ func TestAnimeOnsenEpisodeProbeResumesAboveTheFloorAfterADisproved404(t *testing
 	}
 	if ep1 != 1 {
 		t.Fatalf("episode 1 was probed %d times; a re-run is bracketing from 1 again rather than from the episode it proved present", ep1)
+	}
+}
+
+// --- HTTP 429: the CDN sheds concurrent cache misses -----------------------
+//
+// Measured live on 2026-10-02 against cdn.animeonsen.xyz, KAMUI
+// (cvYyOlmbfFWvJYWG, 12 episodes). Eight concurrent HEADs of episodes
+// 1,2,4,8,16,32,64,128 — exactly the probe's first bracket wave:
+//
+//	HTTP/2, one multiplexed connection   1,2,4,8 -> 200 (cf-cache-status HIT)
+//	                                     16,32   -> 429 (cf-cache-status EXPIRED)
+//	                                     64,128  -> 404
+//	HTTP/1.1, --no-keepalive, 8 conns    1,2,4   -> 200
+//	                                     8,32,64 -> 429
+//	                                     16,128  -> 404
+//	strictly sequential, same 8 URLs     8/8 correct, zero 429
+//
+// So it is neither the User-Agent (a Go-http-client/1.1 UA gets 403, not 429,
+// and the probe sends a browser UA anyway) nor HTTP/2 multiplexing. It is
+// concurrency against origin: only cache misses reach origin, and origin sheds
+// them. Retrying the shed request on its own returned the truth every time.
+//
+// No 429 carried a Retry-After header, so the backoff cannot depend on one.
+
+// animeOnsenNoSleep replaces the probe's backoff sleep with a recorder, so the
+// retry tests assert on the waits the policy chose instead of spending them.
+func animeOnsenNoSleep(t *testing.T) *[]time.Duration {
+	t.Helper()
+	var got []time.Duration
+	var mu sync.Mutex
+	prev := animeOnsenSleep
+	animeOnsenSleep = func(d time.Duration) {
+		mu.Lock()
+		got = append(got, d)
+		mu.Unlock()
+	}
+	t.Cleanup(func() { animeOnsenSleep = prev })
+	return &got
+}
+
+// TestAnimeOnsenEpisodeProbeRetriesAThrottledProbe is the live bug: episode 16
+// is the bracket's first cache miss for a 12-episode series, origin sheds it
+// with 429, and the whole enumeration failed — so `episodes` fell through to a
+// provider that reported 10 episodes and cannot stream any of them.
+func TestAnimeOnsenEpisodeProbeRetriesAThrottledProbe(t *testing.T) {
+	animeOnsenNoSleep(t)
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes: map[string]int{"x": 12},
+		throttle: map[int]int{16: 1},
+	})
+	n, err := f.provider().episodeCount("x")
+	if err != nil {
+		t.Fatalf("episodeCount: %v (a 429 is not a failure of the provider; it is a request to ask again)", err)
+	}
+	if n != 12 {
+		t.Fatalf("episodeCount = %d, want 12", n)
+	}
+}
+
+// TestAnimeOnsenThrottledProbeIsNotAnAbsentEpisode pins the other reading a
+// 429 must never get: the status says "ask again", not "no such episode", and
+// taking it for the end of the series is how a 12-episode show becomes a
+// 15-episode one's worth of silence.
+func TestAnimeOnsenThrottledProbeIsNotAnAbsentEpisode(t *testing.T) {
+	animeOnsenNoSleep(t)
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes: map[string]int{"x": 12},
+		throttle: map[int]int{11: 1, 12: 1},
+	})
+	n, err := f.provider().episodeCount("x")
+	if err != nil {
+		t.Fatalf("episodeCount: %v", err)
+	}
+	if n != 12 {
+		t.Fatalf("episodeCount = %d, want 12 (a 429 on episodes 11 and 12 was read as the end of the series)", n)
+	}
+}
+
+// TestAnimeOnsenThrottledProbeIsNotAMissingShow is the worst reading, and the
+// one that poisons the chain: ErrNoResults means "animeonsen does not have
+// this", and a caller cannot tell that from "the CDN would not answer".
+func TestAnimeOnsenThrottledProbeIsNotAMissingShow(t *testing.T) {
+	animeOnsenNoSleep(t)
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes:      map[string]int{"x": 12},
+		throttleAbove: -1, // every episode, episode 1 included
+	})
+	n, err := f.provider().episodeCount("x")
+	if err == nil {
+		t.Fatalf("episodeCount = %d with no error; nothing was measured and saying so is the only honest answer", n)
+	}
+	if errors.Is(err, ErrNoResults) {
+		t.Fatalf("episodeCount error wraps ErrNoResults (%v); a throttled probe is not an empty catalogue", err)
+	}
+}
+
+// TestAnimeOnsenPersistentThrottleYieldsThePrefixAndSaysSo covers property 3:
+// enumeration that cannot be completed reports what it measured and flags it,
+// rather than erroring and handing the question to a provider whose answer is
+// shorter and unplayable.
+func TestAnimeOnsenPersistentThrottleYieldsThePrefixAndSaysSo(t *testing.T) {
+	animeOnsenNoSleep(t)
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes:      map[string]int{"x": 12},
+		throttleAbove: 12, // every miss is shed, forever
+	})
+	p := f.provider()
+	n, err := p.episodeCount("x")
+	if !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("episodeCount error = %v, want one wrapping ErrIncompleteEpisodeList", err)
+	}
+	// 8 is the measured prefix: the bracket wave proves 1,2,4,8 present and
+	// every probe above 12 is shed, so 8 is the highest episode confirmed.
+	if n != 8 {
+		t.Fatalf("episodeCount = %d, want the measured prefix 8", n)
+	}
+	eps, err := p.GetEpisodes("x", "1")
+	if !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("GetEpisodes error = %v, want one wrapping ErrIncompleteEpisodeList", err)
+	}
+	if len(eps) != 8 {
+		t.Fatalf("GetEpisodes returned %d episodes alongside the sentinel, want 8", len(eps))
+	}
+}
+
+// TestAnimeOnsenRetryHonoursRetryAfter checks the one input the policy must
+// defer to when it is present. Live 429s carried none, so this is the
+// contract rather than the observed case.
+func TestAnimeOnsenRetryHonoursRetryAfter(t *testing.T) {
+	waits := animeOnsenNoSleep(t)
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes:           map[string]int{"x": 3},
+		throttle:           map[int]int{1: 1},
+		throttleRetryAfter: "1",
+	})
+	if _, err := f.provider().episodeAvailable("x", 1); err != nil {
+		t.Fatalf("episodeAvailable: %v", err)
+	}
+	if len(*waits) != 1 {
+		t.Fatalf("the probe slept %d times for one 429, want 1: %v", len(*waits), *waits)
+	}
+	// Retry-After: 1 is one second. Written out rather than read back from the
+	// policy's own constants, which would move with a mutant.
+	if (*waits)[0] != time.Second {
+		t.Fatalf("waited %v after Retry-After: 1, want 1s", (*waits)[0])
+	}
+}
+
+// TestAnimeOnsenRetryBackoffIsBoundedWithoutRetryAfter pins the default the
+// live CDN actually makes it use, and that it is bounded: the whole retry
+// policy has to fit inside cmd.episodesFallbackTimeout (5s) or the fix just
+// moves the silent fallback from a 429 to a deadline.
+func TestAnimeOnsenRetryBackoffIsBoundedWithoutRetryAfter(t *testing.T) {
+	waits := animeOnsenNoSleep(t)
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes:      map[string]int{"x": 3},
+		throttleAbove: -1,
+	})
+	if _, err := f.provider().episodeAvailable("x", 1); err == nil {
+		t.Fatal("episodeAvailable succeeded against a host that answers 429 to everything")
+	}
+	// Measured literals, not the policy's constants: three attempts means two
+	// waits, 150ms then 300ms, 450ms spent in total on one probe.
+	want := []time.Duration{150 * time.Millisecond, 300 * time.Millisecond}
+	if len(*waits) != len(want) {
+		t.Fatalf("probe slept %v, want %v", *waits, want)
+	}
+	total := time.Duration(0)
+	for i, w := range *waits {
+		if w != want[i] {
+			t.Fatalf("probe slept %v, want %v", *waits, want)
+		}
+		total += w
+	}
+	if total != 450*time.Millisecond {
+		t.Fatalf("one probe spent %v retrying, want 450ms", total)
+	}
+}
+
+// TestAnimeOnsenRetryStopsAtTheBudget stops the retry policy from spending
+// time the caller does not have. cmd/episodes abandons the call at 5s; a
+// backoff that keeps sleeping past the probe's own deadline turns a recoverable
+// 429 into the same silent fallback by a different route.
+func TestAnimeOnsenRetryStopsAtTheBudget(t *testing.T) {
+	waits := animeOnsenNoSleep(t)
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes:      map[string]int{"x": 12},
+		throttleAbove: -1,
+	})
+	p := f.provider()
+	// A clock that is already past the budget the moment the probe consults
+	// it: every retry must be refused rather than slept through.
+	calls := 0
+	base := time.Now()
+	p.now = func() time.Time {
+		calls++
+		if calls <= 1 {
+			return base
+		}
+		return base.Add(animeOnsenProbeBudget + time.Second)
+	}
+	if _, err := p.episodeCount("x"); err == nil {
+		t.Fatal("episodeCount succeeded past its budget")
+	}
+	if n := len(*waits); n != 0 {
+		t.Fatalf("the probe slept %d times with no budget left: %v", n, *waits)
+	}
+}
+
+// TestAnimeOnsenProbeReusesConfirmedEpisodesWithinARun is property 4: fewer
+// requests, without trading any correctness for them. Only 200s are reused —
+// a 404 has to stay re-askable, because re-asking it on its own is the whole
+// mechanism that catches a shed burst.
+func TestAnimeOnsenProbeReusesConfirmedEpisodesWithinARun(t *testing.T) {
+	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": 12}})
+	p := f.provider()
+	if _, err := p.episodeCount("x"); err != nil {
+		t.Fatalf("first episodeCount: %v", err)
+	}
+	first := len(f.requests())
+	if _, err := p.episodeCount("x"); err != nil {
+		t.Fatalf("second episodeCount: %v", err)
+	}
+	second := len(f.requests()) - first
+	// Measured literals. The first enumeration of a 12-episode series costs
+	// 18 requests; the second costs 10, because the eleven episodes the first
+	// one watched answer 200 are not asked again while every 404 still is.
+	// Measured literals, written out rather than compared against each other
+	// or against the probe's own constants. A 12-episode series costs 16
+	// requests to enumerate cold and 8 to enumerate again, because the eight
+	// episodes the first pass watched answer 200 are not asked a second time
+	// while every 404 still is.
+	if first != 16 {
+		t.Fatalf("first enumeration cost %d requests, want 16", first)
+	}
+	if second != 8 {
+		t.Fatalf("second enumeration cost %d requests, want 8", second)
+	}
+	// And a known-present episode costs nothing at all to re-check, which is
+	// the path resolver takes: GetEpisodes, then Watch on one of them.
+	before := len(f.requests())
+	if _, err := p.Watch("x", "1", "", ""); err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	if n := len(f.requests()) - before; n != 0 {
+		t.Fatalf("Watch re-probed episode 1 with %d requests after enumeration already proved it present", n)
+	}
+}
+
+// TestAnimeOnsenWatchRecoversFromAThrottledProbe: a 429 on the availability
+// check must not become "no episode N", which is what `play` would have said.
+func TestAnimeOnsenWatchRecoversFromAThrottledProbe(t *testing.T) {
+	animeOnsenNoSleep(t)
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes: map[string]int{"x": 12},
+		throttle: map[int]int{11: 2},
+	})
+	st, err := f.provider().Watch("x", "11", "", "")
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	if !strings.HasSuffix(st.URL, "/x/11/manifest.mpd") {
+		t.Fatalf("Watch URL = %q", st.URL)
+	}
+}
+
+// TestAnimeOnsenProbeCapsItsInFlightRequests addresses the cause rather than
+// the symptom: the 429s came from concurrent cache misses arriving at origin
+// together, and the shedding scaled with how many were in flight. The probe
+// stays parallel — it has a 5s budget to meet — but not the whole wave at once.
+func TestAnimeOnsenProbeCapsItsInFlightRequests(t *testing.T) {
+	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": 12}})
+	p := f.provider()
+	if _, err := p.episodeCount("x"); err != nil {
+		t.Fatalf("episodeCount: %v", err)
+	}
+	// Still parallel: a serialised walk would peak at one.
+	if got := f.peakConcurrency(); got < 2 {
+		t.Fatalf("peak concurrency %d; the wave is serialised and cannot meet its budget", got)
+	}
+	// But not all eight at once. 8 is written out rather than read from
+	// animeOnsenProbeWidth, so shrinking the constant cannot satisfy this.
+	if got := f.peakConcurrency(); got >= 8 {
+		t.Fatalf("peak concurrency %d; the whole wave is in flight at once, which is what origin sheds", got)
+	}
+}
+
+// TestAnimeOnsenProbeBudgetFitsInsideItsCallersDeadline pins the relationship
+// the budget exists to hold, which is the half a value on its own cannot show.
+//
+// cmd.episodesFallbackTimeout is 5s and abandons the episode call at it. A
+// probe budget above that can never produce this provider's own answer on that
+// path — the caller gives up first and asks the fallback chain, which is the
+// silent downgrade the rest of this file is about. The 5s is written out
+// rather than imported, because internal/provider cannot import cmd and
+// because a literal is what makes this a claim about the caller rather than a
+// restatement of the constant under test.
+func TestAnimeOnsenProbeBudgetFitsInsideItsCallersDeadline(t *testing.T) {
+	const episodesFallbackTimeout = 5 * time.Second
+	if animeOnsenProbeBudget >= episodesFallbackTimeout {
+		t.Fatalf("animeOnsenProbeBudget is %s, which is not below the %s cmd/episodes.go abandons the call at; the probe can never answer on that path",
+			animeOnsenProbeBudget, episodesFallbackTimeout)
+	}
+	// And it has to leave the probe room to notice and return, not just to be
+	// nominally smaller.
+	if margin := episodesFallbackTimeout - animeOnsenProbeBudget; margin < 250*time.Millisecond {
+		t.Fatalf("animeOnsenProbeBudget leaves only %s to return in; want at least 250ms", margin)
+	}
+}
+
+// TestAnimeOnsenReAsksAShedProbeOnItsOwn is the measured recovery condition,
+// asserted as a condition and not as a comment.
+//
+// Every probe the live CDN shed answered truthfully when it was re-sent by
+// itself, and re-sending it while the rest of its wave is still in flight is
+// asking again under the circumstances that caused the refusal. So the wave
+// does not retry; it collects what it lost and re-asks those one at a time.
+//
+// The fixture sheds every probe of the first wave exactly once, which is the
+// case the narrowing cannot paper over: without the re-ask the wave teaches
+// nothing, the search gives up with nothing measured, and `episodes` is back
+// to asking the chain.
+func TestAnimeOnsenReAsksAShedProbeOnItsOwn(t *testing.T) {
+	animeOnsenNoSleep(t)
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes: map[string]int{"x": 12},
+		throttle: map[int]int{1: 1, 2: 1, 4: 1, 8: 1, 16: 1, 32: 1, 64: 1, 128: 1},
+	})
+	n, err := f.provider().episodeCount("x")
+	if err != nil {
+		t.Fatalf("episodeCount: %v", err)
+	}
+	if n != 12 {
+		t.Fatalf("episodeCount = %d, want 12", n)
+	}
+	// Every repeat of a path is a re-ask, and a re-ask must have been alone on
+	// the wire. 1 is written out: it is the claim, not a constant the code
+	// also reads.
+	seen := map[string]int{}
+	repeats := 0
+	for _, r := range f.requests() {
+		seen[r.path]++
+		if seen[r.path] > 1 {
+			repeats++
+			if r.inflight != 1 {
+				t.Fatalf("a re-ask of %s arrived with %d requests in flight, want 1", r.path, r.inflight)
+			}
+		}
+	}
+	if repeats < 8 {
+		t.Fatalf("only %d probes were re-asked; the fixture shed 8 and the re-ask pass is not running", repeats)
+	}
+}
+
+// TestAnimeOnsenRetryRefusesToSleepPastItsDeadline aims straight at the
+// deadline check inside the retry, which the budget test above cannot reach:
+// there, the budget is already spent when searchBoundary first looks, so no
+// probe is ever sent and no backoff is ever considered.
+func TestAnimeOnsenRetryRefusesToSleepPastItsDeadline(t *testing.T) {
+	waits := animeOnsenNoSleep(t)
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes:      map[string]int{"x": 12},
+		throttleAbove: -1,
+	})
+	p := f.provider()
+	// A deadline already in the past. The first request still goes out — the
+	// probe does not pre-check — and the 429 it gets back must not be slept on.
+	if _, err := p.probeEpisodeWithRetries("x", 1, p.now().Add(-time.Second), animeOnsenProbeRetries); err == nil {
+		t.Fatal("probeEpisodeWithRetries succeeded against a host that answers 429 to everything")
+	}
+	if n := len(*waits); n != 0 {
+		t.Fatalf("the probe slept %d times with a deadline already past: %v", n, *waits)
+	}
+	// Exactly one request: the first attempt, and no retry it had no time for.
+	if got := len(f.requests()); got != 1 {
+		t.Fatalf("the probe made %d requests with no budget to retry, want 1", got)
+	}
+}
+
+// TestAnimeOnsenShedEpisodeOneProbeIsNotAnEmptyCatalogue reaches the one arm
+// that can still answer ErrNoResults.
+//
+// It needs a wave that learns something while episode 1 itself stays unknown,
+// which is a one-episode series whose only episode is shed: everything above
+// it genuinely 404s, so the bracket does not give up, and the search arrives
+// at the "episode 1 answered absent" arm with a 429 rather than a 404 behind
+// it. ErrNoResults there means "animeonsen does not have this show", which the
+// fallback chain treats as final — it would retire a series lobster can stream
+// over one refused request.
+func TestAnimeOnsenShedEpisodeOneProbeIsNotAnEmptyCatalogue(t *testing.T) {
+	animeOnsenNoSleep(t)
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes: map[string]int{"x": 1},
+		throttle: map[int]int{1: 99},
+	})
+	n, err := f.provider().episodeCount("x")
+	if err == nil {
+		t.Fatalf("episodeCount = %d with no error; episode 1 never answered", n)
+	}
+	if errors.Is(err, ErrNoResults) {
+		t.Fatalf("episodeCount err = %v; it wraps ErrNoResults, which tells the chain animeonsen does not have this show", err)
 	}
 }
