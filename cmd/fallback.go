@@ -292,6 +292,20 @@ func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 	}
 }
 
+// isDASHManifest reports whether a stream URL is an MPEG-DASH manifest.
+//
+// The test is on the path, not on a substring of the whole URL: a query string
+// can legitimately carry ".mpd" (a referrer or a filename parameter) without
+// the resource being a manifest, and classifying such a URL as DASH would
+// refuse a download that would have worked.
+func isDASHManifest(rawURL string) bool {
+	path := rawURL
+	if i := strings.IndexAny(path, "?#"); i >= 0 {
+		path = path[:i]
+	}
+	return strings.HasSuffix(strings.ToLower(path), ".mpd")
+}
+
 // streamToResult converts a media.Stream to a dlmanager.StreamResult.
 func streamToResult(s *media.Stream) *dlmanager.StreamResult {
 	streamType := "http"
@@ -309,9 +323,25 @@ func streamToResult(s *media.Stream) *dlmanager.StreamResult {
 // open a magnet. The classification above is substring-based, so a magnet would
 // otherwise be labelled "http" and handed to an engine that fails on it long
 // after the user stopped watching. Refuse it up front and say why.
+// MPEG-DASH is refused for the same reason and by the same reasoning, one step
+// further on — and it is the worse case of the two. dlmanager's engine has
+// exactly two arms, "hls" and "http" (internal/dlmanager/manager.go), and the
+// classification above is a substring test that finds neither ".m3u8" nor
+// "hls" in a .mpd URL. So a DASH manifest is labelled "http", handed to the
+// plain-file engine, and saved verbatim: an 8 kB XML document under a video
+// filename, and a download the manager reports as complete. That is strictly
+// worse than a failure, because nothing tells the user until they try to play
+// it.
+//
+// This is not a claim that DASH cannot be downloaded. `lobster -d` goes
+// through internal/download, which is ffmpeg, and ffmpeg demuxes DASH
+// natively. It is this queue that cannot, and the message says which.
 func streamToResultChecked(s *media.Stream) (*dlmanager.StreamResult, error) {
 	if torrentstream.IsMagnet(s.URL) {
 		return nil, fmt.Errorf("this source is a torrent, which cannot be downloaded this way: play it instead, or pick another source")
+	}
+	if isDASHManifest(s.URL) {
+		return nil, fmt.Errorf("this source is an MPEG-DASH stream, which the download queue cannot assemble: play it instead, or download it with -d, which goes through ffmpeg")
 	}
 	return streamToResult(s), nil
 }
