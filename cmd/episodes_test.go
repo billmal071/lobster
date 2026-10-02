@@ -1005,3 +1005,58 @@ func TestEpisodesWarnsWhenTheRequestedBaseCouldNotEvenEnumerateSeasons(t *testin
 		t.Fatalf("warning = %+v, want the chain member named over its 2 episodes", w[0])
 	}
 }
+
+// TestEpisodesSaysNothingAboutFallbackWhenTheBaseNamedNothing is the other
+// half of F1: which provider's base token the "was this base actually named?"
+// test is applied to.
+//
+// newProvider has no unknown-base arm — it ends in an unconditional MovieBox —
+// so an unrecognised --base silently selects MovieBox and named nothing.
+// baseNamedThePrimary exists to keep that case quiet, and it has to be asked
+// about the provider the *request* selected. Asked about the chain member that
+// answered instead, it reports a base the user never got as the base that
+// could not answer, which is a different and untrue claim.
+//
+// The fixture is the only shape where the two disagree: the primary is the
+// fall-through and the chain member is not.
+func TestEpisodesSaysNothingAboutFallbackWhenTheBaseNamedNothing(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+	// A base no arm of newProvider recognises, so MovieBox is what it
+	// actually built.
+	withBase(t, "sopa2day")
+
+	primary := twoSeasonStub()
+	primary.episodesErr = errors.New("nope")
+	withStubProvider(t, primary)
+
+	fb := twoSeasonStub()
+	fb.results = []media.SearchResult{{ID: "fb/some-show", Title: "Some Show", Type: media.TV}}
+	prevFB := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider {
+		return []provider.Provider{fb}
+	}
+	t.Cleanup(func() { agentFallbackProviders = prevFB })
+
+	// The primary is the fall-through provider; the chain member is a real
+	// named base. Reading the wrong one flips the answer.
+	prevBase := searchProviderBase
+	searchProviderBase = func(p provider.Provider) string {
+		switch p {
+		case provider.Provider(primary):
+			return fallThroughBase
+		case provider.Provider(fb):
+			return "animeonsen"
+		}
+		return prevBase(p)
+	}
+	t.Cleanup(func() { searchProviderBase = prevBase })
+
+	withEpisodesFlags(t, tvRef(t, ""), 2)
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	if w := decodeEpisodesWarnings(t, buf.Bytes()); len(w) != 0 {
+		t.Fatalf("warnings = %+v; %q selected nothing, so there is no named base that failed to answer", w, "sopa2day")
+	}
+}
