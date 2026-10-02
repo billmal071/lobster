@@ -361,6 +361,18 @@ download_dir = "~/Videos/lobster"
 # for you on a run that may stream a torrent (GUIDE.md -> "Torrent storage
 # backend"). Pieces land in a temp directory and are removed when playback ends.
 
+# Lift AllAnime's adult filter on search. Off by default.
+#
+# It is not only an adult-content switch: AllAnime's catalogue hides some
+# ordinary titles behind the same filter, and they are unreachable without
+# this. It does also surface genuine adult titles, though only on suggestive
+# queries — measured over a 40-row cap, "naruto", "school", "sister" and
+# "nurse" returned identical results either way, while "love" gained two
+# hentai entries. It restores discovery only: AllAnime's sources endpoint is
+# still crypto-gated, so a title found this way is played from the fallback
+# chain.
+# allow_adult_anime = false
+
 # Optional: use a consumet API backend instead of the built-in scraper.
 # Self-host from: https://github.com/consumet/api.consumet.org
 # When set, lobster uses this API for search, streaming, etc. It overrides

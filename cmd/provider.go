@@ -94,7 +94,9 @@ func newProvider() provider.Provider {
 		return provider.NewAnimeOnsen()
 	}
 	if strings.Contains(base, "allanime") {
-		return provider.NewAllAnime(cfg.AnimeDub)
+		aa := provider.NewAllAnime(cfg.AnimeDub)
+		aa.SetAllowAdult(cfg.AllowAdultAnime)
+		return aa
 	}
 	// Default: MovieBox
 	return provider.NewMovieBox()

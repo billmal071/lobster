@@ -52,6 +52,9 @@ type AllAnime struct {
 	cfg    allanimeConfig
 	client httpDoer
 	trans  string // "sub" | "dub" | "raw"
+	// allowAdult lifts the catalogue's adult filter on search. Off unless
+	// asked for; see config.AllowAdultAnime.
+	allowAdult bool
 }
 
 // NewAllAnime constructs a provider defaulting to dub or sub.
@@ -65,6 +68,13 @@ func NewAllAnime(dub bool) *AllAnime {
 
 func (a *AllAnime) Translation() string     { return a.trans }
 func (a *AllAnime) SetTranslation(t string) { a.trans = t }
+
+// AllowAdult reports whether search lifts AllAnime's adult filter, and
+// SetAllowAdult sets it. See config.AllowAdultAnime for what the filter
+// actually covers — it hides some ordinary titles too — and why this is a
+// setting rather than a constant.
+func (a *AllAnime) AllowAdult() bool     { return a.allowAdult }
+func (a *AllAnime) SetAllowAdult(v bool) { a.allowAdult = v }
 
 // --- GraphQL query constants ---
 
@@ -140,7 +150,7 @@ func (a *AllAnime) queryShows(search map[string]any, limit int, country string) 
 }
 
 func (a *AllAnime) Search(query string) ([]media.SearchResult, error) {
-	out, err := a.queryShows(map[string]any{"allowAdult": false, "allowUnknown": false, "query": query}, 40, "ALL")
+	out, err := a.queryShows(map[string]any{"allowAdult": a.allowAdult, "allowUnknown": false, "query": query}, 40, "ALL")
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
@@ -150,7 +160,7 @@ func (a *AllAnime) Search(query string) ([]media.SearchResult, error) {
 	// so a broad base ("KAMUI") can't surface unrelated shows.
 	if len(out) == 0 {
 		if base := baseTitle(query); base != "" {
-			alt, aerr := a.queryShows(map[string]any{"allowAdult": false, "allowUnknown": false, "query": base}, 40, "ALL")
+			alt, aerr := a.queryShows(map[string]any{"allowAdult": a.allowAdult, "allowUnknown": false, "query": base}, 40, "ALL")
 			if aerr == nil {
 				out = filterByTitle(alt, query, base)
 			}
