@@ -59,6 +59,16 @@ type animeOnsenFake struct {
 	// throttleRetryAfter, when non-empty, is sent as the Retry-After header
 	// with every 429. The live CDN sends none, so the default models that.
 	throttleRetryAfter string
+	// throttleAfter names episodes that answer truthfully for their first k
+	// requests and are shed with 429 from then on. It is throttle read the
+	// other way round, and it exists because the one state neither of the
+	// others can express is the one the confirmation probe lives in: an
+	// episode has to answer the search's wave with a real 404 and then shed
+	// the solitary HEAD that re-checks that 404. A fixture that sheds from the
+	// first request never lets the search locate a boundary at all, so the
+	// confirmation arm is never reached and a test aimed at it silently scores
+	// against the wave instead.
+	throttleAfter map[int]int
 
 	// stallAfter names the episodes that hold their request open for stallFor
 	// before answering, unless the request's own context is cancelled first —
@@ -147,6 +157,18 @@ func (f *animeOnsenFake) handle(w http.ResponseWriter, r *http.Request) {
 			}
 			f.mu.Unlock()
 			if left > 0 {
+				f.throttleResponse(w)
+				return
+			}
+		}
+		if f.throttleAfter != nil {
+			f.mu.Lock()
+			left, ok := f.throttleAfter[n]
+			if ok && left > 0 {
+				f.throttleAfter[n] = left - 1
+			}
+			f.mu.Unlock()
+			if ok && left == 0 {
 				f.throttleResponse(w)
 				return
 			}
@@ -1417,6 +1439,11 @@ func TestAnimeOnsenAStalledConfirmationProbeStillYieldsThePrefix(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("episodeCount = %d, want the 1 episode that answered", n)
 	}
+	// And it is the weak flag: the bracket measured episode 2 absent, so the
+	// end of the series was located and only the re-check of it was lost.
+	if !errors.Is(err, ErrUnconfirmedEpisodeList) {
+		t.Fatalf("episodeCount err = %v, want one wrapping ErrUnconfirmedEpisodeList", err)
+	}
 	// Proof the arm under test is the one reached, and not the between-waves
 	// budget check: episode 2 has to have been asked about twice, once by the
 	// bracket and once by the confirmation probe that then stalled.
@@ -1428,5 +1455,138 @@ func TestAnimeOnsenAStalledConfirmationProbeStillYieldsThePrefix(t *testing.T) {
 	}
 	if asked != 2 {
 		t.Fatalf("episode 2 was probed %d times, want 2 (the bracket, then the confirmation probe); this test is not reaching the confirmation probe at all", asked)
+	}
+}
+
+// A boundary the search located and could not re-confirm is a different answer
+// from a list that never found the end, and the two have to be separable by a
+// caller that is not reading English.
+//
+// Measured, live: nine `episodes` runs against KAMUI (12 episodes) returned the
+// right 12 eight times, and the one incompleteness code fired on six of the
+// nine — five of those on a correct list. Under one code the signal that says
+// "this list is short" fires on two thirds of healthy runs, which is how a
+// caller learns to ignore it. These three tests pin which state produces which
+// sentinel.
+//
+// This one is the shed confirmation probe: the search settles on 12, and the
+// solitary HEAD of episode 13 that would confirm it is refused until the retry
+// policy gives up.
+func TestAnimeOnsenAShedConfirmationProbeReportsAnUnconfirmedEnd(t *testing.T) {
+	animeOnsenNoSleep(t)
+	// A one-episode series, so the bracket lands on the boundary directly
+	// (1 present, 2 absent) and the narrowing never runs. Episode 2 answers
+	// the bracket's probe with a real 404 and sheds every request after it,
+	// which makes the shed requests the confirmation probe and its retries and
+	// nothing else.
+	//
+	// The first version of this test shed episode 13 of a twelve-episode
+	// series from the first request, and it scored the strong code — correctly,
+	// as it turned out: 13 is inside the narrowing wave, so shedding it leaves
+	// episode 13 unknown between a present 12 and an absent 14, which is a gap
+	// and not a located end. The arm under test was never reached.
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes:      map[string]int{"x": 1},
+		throttleAfter: map[int]int{2: 1},
+	})
+	p := f.provider()
+	n, err := p.episodeCount("x")
+	if n != 1 {
+		t.Fatalf("episodeCount = %d, want the 1 episode the bracket measured", n)
+	}
+	if !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("episodeCount err = %v, want one wrapping ErrIncompleteEpisodeList", err)
+	}
+	if !errors.Is(err, ErrUnconfirmedEpisodeList) {
+		t.Fatalf("episodeCount err = %v; the bracket measured episode 2 absent and only the re-check was refused, which is not the same as never finding the end", err)
+	}
+	// Proof the arm reached is the confirmation probe's and not the wave's:
+	// episode 2 answered the bracket once and was then asked three more times,
+	// which is the solitary re-check plus the retry policy's two retries.
+	asked := 0
+	for _, r := range f.requests() {
+		if strings.HasSuffix(r.path, "/2/manifest.mpd") {
+			asked++
+		}
+	}
+	if asked != 4 {
+		t.Fatalf("episode 2 was probed %d times, want 4 (the bracket, then the confirmation probe and its two retries); this test is not reaching the confirmation probe", asked)
+	}
+}
+
+// The other half of the split, and the live symptom: a measurement that never
+// located the end at all. Every probe above 12 is shed, so the bracket proves
+// 1,2,4,8 present, learns nothing from its second wave, and stops at 8 — four
+// episodes short of a series it could have listed. That list really is missing
+// episodes and must keep the strong code.
+func TestAnimeOnsenAListThatNeverFoundTheEndIsNotMerelyUnconfirmed(t *testing.T) {
+	animeOnsenNoSleep(t)
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes:      map[string]int{"x": 12},
+		throttleAbove: 12,
+	})
+	n, err := f.provider().episodeCount("x")
+	if n != 8 {
+		t.Fatalf("episodeCount = %d, want the measured prefix 8", n)
+	}
+	if !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("episodeCount err = %v, want one wrapping ErrIncompleteEpisodeList", err)
+	}
+	if errors.Is(err, ErrUnconfirmedEpisodeList) {
+		t.Fatalf("episodeCount err = %v; nothing above episode 8 ever answered, so episodes 9-12 are missing from this list and calling the end merely unconfirmed understates it", err)
+	}
+}
+
+// The ceiling is the other never-found-the-end case: a host that answers 200 to
+// everything is not a series whose end was located.
+func TestAnimeOnsenTheCeilingIsNotAnUnconfirmedEnd(t *testing.T) {
+	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": -1}})
+	_, err := f.provider().episodeCount("x")
+	if !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("episodeCount err = %v, want one wrapping ErrIncompleteEpisodeList", err)
+	}
+	if errors.Is(err, ErrUnconfirmedEpisodeList) {
+		t.Fatalf("episodeCount err = %v; the probe stopped at its own ceiling without ever seeing an absent episode, so there is no located end to be unconfirmed about", err)
+	}
+}
+
+// The third way a located boundary goes unconfirmed: the budget is gone by the
+// time the search hands the boundary back, so the confirmation probe is never
+// sent at all.
+//
+// It is a separate arm from the two above — the check between searchBoundary
+// returning and the probe going out — and the request count is what proves this
+// test reaches it rather than one of them: eight requests is the bracket wave
+// and nothing else, so no confirmation probe was ever attempted.
+func TestAnimeOnsenABoundaryHandedBackWithNoBudgetLeftIsUnconfirmed(t *testing.T) {
+	animeOnsenNoSleep(t)
+	// One episode, so the bracket lands on the boundary directly (1 present,
+	// 2 absent) and the narrowing never runs.
+	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": 1}})
+	p := f.provider()
+	// A clock that stays put until the bracket's whole wave has arrived and
+	// then jumps past the deadline. It cannot jump earlier: headManifest sizes
+	// each request's context from the remaining budget, so a clock already past
+	// the deadline would cancel every request instead of letting the wave
+	// measure the boundary.
+	base := time.Now()
+	p.now = func() time.Time {
+		if len(f.requests()) >= 8 {
+			return base.Add(2 * animeOnsenProbeBudget)
+		}
+		return base
+	}
+	n, err := p.episodeCount("x")
+	if n != 1 {
+		t.Fatalf("episodeCount = %d, want the 1 episode the bracket measured", n)
+	}
+	if !errors.Is(err, ErrUnconfirmedEpisodeList) {
+		t.Fatalf("episodeCount err = %v; the bracket measured episode 2 absent, so the end was located and only the re-check was missed", err)
+	}
+	if !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("episodeCount err = %v, want one wrapping ErrIncompleteEpisodeList as well", err)
+	}
+	if got := len(f.requests()); got != 8 {
+		t.Fatalf("the probe made %d requests, want the bracket's 8 and no confirmation probe; this test is not reaching the arm between the search and the probe", got)
 	}
 }

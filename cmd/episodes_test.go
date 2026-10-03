@@ -1060,3 +1060,110 @@ func TestEpisodesSaysNothingAboutFallbackWhenTheBaseNamedNothing(t *testing.T) {
 		t.Fatalf("warnings = %+v; %q selected nothing, so there is no named base that failed to answer", w, "sopa2day")
 	}
 }
+
+// A boundary the source located and could not re-confirm gets its own code,
+// and the code is the only thing a scripted caller can switch on.
+//
+// This is the practical half of the split. Live, the one incompleteness code
+// fired on six of nine `episodes` runs against a twelve-episode series that
+// came back correct and complete eight times — so the field that is supposed
+// to say "this list is short" was saying it on two thirds of healthy runs, and
+// a caller had no way to tell those from the one run that really was four
+// episodes short.
+func TestEpisodesSeparatesAnUnconfirmedEndFromAShortList(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+
+	p := twoSeasonStub()
+	p.episodesWithErr = []media.Episode{
+		{ID: "1", Number: 1, Title: "Episode 1"},
+		{ID: "2", Number: 2, Title: "Episode 2"},
+	}
+	// Both sentinels, which is the contract: the weak one is always wrapped
+	// alongside the broad one rather than instead of it, so everything that
+	// only asks "may this be short?" is unaffected.
+	p.episodesErr = fmt.Errorf("%w: %w: could not re-check episode 3",
+		provider.ErrIncompleteEpisodeList, provider.ErrUnconfirmedEpisodeList)
+	withStubProvider(t, p)
+	withNoFallbackProviders(t)
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	w := decodeEpisodesWarnings(t, buf.Bytes())
+	if len(w) != 1 {
+		t.Fatalf("warnings = %+v, want exactly one", w)
+	}
+	// Written out rather than read from the implementation: a comparison
+	// against the same literal the code emits passes for any code at all.
+	if w[0].Code != "episode_list_unconfirmed" {
+		t.Fatalf("warning code = %q, want %q; an unconfirmed end reported under episode_list_incomplete is what made that code unreadable", w[0].Code, "episode_list_unconfirmed")
+	}
+	if w[0].EpisodesListed != 2 {
+		t.Fatalf("warning episodes_listed = %d, want 2", w[0].EpisodesListed)
+	}
+	if w[0].Message == "" {
+		t.Fatalf("warning carries no message: %+v", w[0])
+	}
+}
+
+// The second hop computes the code for itself, so it needs its own fixture.
+//
+// firstEpisodeList is the route a list usually arrives by — the real chain
+// leads with two providers that enumerate seasons and not episodes — and §4's
+// mutation round already caught one warning that was carried on the primary
+// route only.
+func TestEpisodesSeparatesAnUnconfirmedEndFromAFallbackProvider(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+
+	withStubProvider(t, &stubProvider{})
+
+	fb := twoSeasonStub()
+	fb.results = []media.SearchResult{{ID: "fb/some-show", Title: "Some Show", Type: media.TV}}
+	fb.episodesWithErr = []media.Episode{{ID: "1", Number: 1, Title: "Episode 1"}}
+	fb.episodesErr = fmt.Errorf("%w: %w: could not re-check episode 2",
+		provider.ErrIncompleteEpisodeList, provider.ErrUnconfirmedEpisodeList)
+	prevFB := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider {
+		return []provider.Provider{fb}
+	}
+	t.Cleanup(func() { agentFallbackProviders = prevFB })
+
+	withEpisodesFlags(t, tvRef(t, ""), 2)
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	w := decodeEpisodesWarnings(t, buf.Bytes())
+	if len(w) != 1 || w[0].Code != "episode_list_unconfirmed" || w[0].EpisodesListed != 1 {
+		t.Fatalf("warnings = %+v, want one episode_list_unconfirmed over 1 episode", w)
+	}
+}
+
+// A provider that says only "this list may be short", with no word on whether
+// it ever found the end, keeps the strong code.
+//
+// It is the safe direction and it is also the compatibility case: every other
+// provider in the chain that reports incompleteness does it with the broad
+// sentinel alone, and reading that as "probably complete" would tell a caller
+// to trust a list nobody claimed to have finished.
+func TestEpisodesKeepsTheStrongCodeWhenTheProviderDidNotNarrowIt(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+
+	p := twoSeasonStub()
+	p.episodesWithErr = []media.Episode{{ID: "1", Number: 1, Title: "Episode 1"}}
+	p.episodesErr = fmt.Errorf("%w: stopped at 1", provider.ErrIncompleteEpisodeList)
+	withStubProvider(t, p)
+	withNoFallbackProviders(t)
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	w := decodeEpisodesWarnings(t, buf.Bytes())
+	if len(w) != 1 || w[0].Code != "episode_list_incomplete" {
+		t.Fatalf("warnings = %+v, want one episode_list_incomplete", w)
+	}
+}
