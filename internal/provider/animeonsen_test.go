@@ -718,6 +718,13 @@ func TestAnimeOnsenEpisodeProbeSaysSoWhenItCannotConfirmABoundary(t *testing.T) 
 	if n != 11 {
 		t.Fatalf("episodeCount = %d, want the 11 the confirmation probe proved present", n)
 	}
+	// And it is the strong flag. The round bound is only spent by a
+	// confirmation probe *disproving* the boundary the search found, so what
+	// this reports is a count with no located end behind it at all — the
+	// opposite of a boundary that was found and merely not re-checked.
+	if errors.Is(err, ErrUnconfirmedEpisodeList) {
+		t.Fatalf("episodeCount err = %v; every boundary this measurement found was disproved, so there is no unconfirmed end here, only a short list", err)
+	}
 }
 
 // Episode 1 answering 404 inside the first wave is not "this source does not

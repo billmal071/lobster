@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1103,31 +1104,49 @@ func TestEpisodesSeparatesAnUnconfirmedEndFromAShortList(t *testing.T) {
 	if w[0].EpisodesListed != 2 {
 		t.Fatalf("warning episodes_listed = %d, want 2", w[0].EpisodesListed)
 	}
-	if w[0].Message == "" {
-		t.Fatalf("warning carries no message: %+v", w[0])
+	// The words have to differ too, not only the code. The human half of the
+	// reported problem was reading "there may be more" on a list that was
+	// complete, and a caller that renders the message verbatim would still be
+	// told that under a renamed code.
+	if strings.Contains(w[0].Message, "there may be more") {
+		t.Fatalf("warning message = %q; the end of the season was found, so the strong code's claim that the list may be missing episodes is the wrong thing to say", w[0].Message)
+	}
+	if !strings.Contains(w[0].Message, "very likely") {
+		t.Fatalf("warning message = %q, want one saying the count is very likely the whole season", w[0].Message)
 	}
 }
 
-// The second hop computes the code for itself, so it needs its own fixture.
+// The second hop computes the code for itself, so it needs its own fixture —
+// and the fixture has to be the one that actually reaches it.
 //
-// firstEpisodeList is the route a list usually arrives by — the real chain
-// leads with two providers that enumerate seasons and not episodes — and §4's
-// mutation round already caught one warning that was carried on the primary
-// route only.
-func TestEpisodesSeparatesAnUnconfirmedEndFromAFallbackProvider(t *testing.T) {
+// firstEpisodeList is the route a list usually arrives by: the real chain leads
+// with two providers that enumerate seasons and not episodes. The first version
+// of this test gave the primary no seasons at all, which makes seasonSource put
+// a chain member in p and sends its answer through the *primary* route's code —
+// so a mutant that hardcoded the strong code on the second hop survived while
+// this test passed. It takes two chain members, one that enumerates seasons and
+// cannot list episodes and one that lists a prefix, to get there. That is the
+// same lesson §4's M12 taught, which is why the assertion below is backed by a
+// mutant rather than by reading the code.
+func TestEpisodesSeparatesAnUnconfirmedEndFromASecondChainHop(t *testing.T) {
 	hostileEnv(t)
 	buf := captureAgentOut(t)
 
 	withStubProvider(t, &stubProvider{})
 
-	fb := twoSeasonStub()
-	fb.results = []media.SearchResult{{ID: "fb/some-show", Title: "Some Show", Type: media.TV}}
-	fb.episodesWithErr = []media.Episode{{ID: "1", Number: 1, Title: "Episode 1"}}
-	fb.episodesErr = fmt.Errorf("%w: %w: could not re-check episode 2",
+	hit := []media.SearchResult{{ID: "fb/some-show", Title: "Some Show", Type: media.TV}}
+	seasonsOnly := twoSeasonStub()
+	seasonsOnly.results = hit
+	seasonsOnly.episodesErr = errors.New("upstream 503")
+	partial := twoSeasonStub()
+	partial.results = hit
+	partial.episodesWithErr = []media.Episode{{ID: "1", Number: 1, Title: "Episode 1"}}
+	partial.episodesErr = fmt.Errorf("%w: %w: could not re-check episode 2",
 		provider.ErrIncompleteEpisodeList, provider.ErrUnconfirmedEpisodeList)
+
 	prevFB := agentFallbackProviders
 	agentFallbackProviders = func(provider.Provider) []provider.Provider {
-		return []provider.Provider{fb}
+		return []provider.Provider{seasonsOnly, partial}
 	}
 	t.Cleanup(func() { agentFallbackProviders = prevFB })
 
@@ -1165,5 +1184,60 @@ func TestEpisodesKeepsTheStrongCodeWhenTheProviderDidNotNarrowIt(t *testing.T) {
 	w := decodeEpisodesWarnings(t, buf.Bytes())
 	if len(w) != 1 || w[0].Code != "episode_list_incomplete" {
 		t.Fatalf("warnings = %+v, want one episode_list_incomplete", w)
+	}
+}
+
+// A warning must not outlive the list it was about.
+//
+// The primary route keeps the shortfall in a variable that survives the chain
+// call, so a provider that flagged a short list and then returned nothing at
+// all would hand its warning to whatever list the chain supplied instead —
+// `episodes` would say the printed count may be short, naming a provider whose
+// answer was discarded. The `len(eps) > 0` condition is what stops that, and
+// without this test it was a term no fixture exercised.
+func TestEpisodesDoesNotCarryAWarningFromAProviderThatListedNothing(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+
+	// Flags a shortfall and returns no list with it, which is the one
+	// combination the condition is about.
+	primary := twoSeasonStub()
+	primary.episodesWithErr = nil
+	primary.episodesErr = fmt.Errorf("%w: %w: measured nothing",
+		provider.ErrIncompleteEpisodeList, provider.ErrUnconfirmedEpisodeList)
+	withStubProvider(t, primary)
+
+	fb := twoSeasonStub()
+	fb.results = []media.SearchResult{{ID: "fb/some-show", Title: "Some Show", Type: media.TV}}
+	fb.episodesBySeason = map[string][]media.Episode{
+		"s1": {
+			{ID: "1", Number: 1, Title: "Episode 1"},
+			{ID: "2", Number: 2, Title: "Episode 2"},
+			{ID: "3", Number: 3, Title: "Episode 3"},
+		},
+	}
+	prevFB := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider {
+		return []provider.Provider{fb}
+	}
+	t.Cleanup(func() { agentFallbackProviders = prevFB })
+
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	var got struct {
+		Episodes []struct {
+			Number int `json:"number"`
+		} `json:"episodes"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("bad JSON: %v (%q)", err, buf.String())
+	}
+	if len(got.Episodes) != 3 {
+		t.Fatalf("episodes = %+v, want the 3 the chain listed", got.Episodes)
+	}
+	if w := decodeEpisodesWarnings(t, buf.Bytes()); len(w) != 0 {
+		t.Fatalf("warnings = %+v; the complete list came from the chain, and the provider that flagged a shortfall returned no episodes at all", w)
 	}
 }

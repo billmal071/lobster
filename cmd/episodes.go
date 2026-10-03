@@ -127,8 +127,8 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	// warning below is the whole reason this case is kept rather than
 	// rejected.
 	shortfall := episodeShortfall{}
-	if len(eps) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
-		shortfall, err = shortfallFor(err), nil
+	if sf := shortfallFor(err); len(eps) > 0 && sf.code != "" {
+		shortfall, err = sf, nil
 	}
 	if err != nil || len(eps) == 0 {
 		// Enumerating seasons and enumerating episodes are different
@@ -325,8 +325,15 @@ type episodeShortfall struct {
 	reason string
 }
 
-// shortfallFor reads a GetEpisodes error that came back alongside a usable
-// list and says which warning code it is.
+// shortfallFor reads a GetEpisodes error and says which warning code it is, or
+// nothing at all when the error is not a provider reporting a short list.
+//
+// The "or nothing at all" is why the broad test lives here rather than at the
+// two call sites: with it duplicated there, this function could only ever be
+// handed an error it had already been decided about, so its own guard was a
+// line no test could reach and a mutant could delete unseen. Here it is the
+// single place that decides whether an error is an answer or a failure, and
+// deleting it turns every ordinary provider error into a swallowed warning.
 //
 // It asks the narrow question first and the broad one second, which is the
 // only order that works: provider.ErrUnconfirmedEpisodeList is always wrapped
@@ -690,8 +697,8 @@ func firstEpisodeList(hits []*seasonHit, wantSeason int) *episodeAnswer {
 			// and the flag travels with it so the caller is never told it is
 			// the whole season. Any other error means no answer.
 			shortfall := episodeShortfall{}
-			if len(eps) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
-				shortfall, err = shortfallFor(err), nil
+			if sf := shortfallFor(err); len(eps) > 0 && sf.code != "" {
+				shortfall, err = sf, nil
 			}
 			if err != nil || len(eps) == 0 {
 				debugf("episodes: fallback %T cannot list season %d (err=%v, episodes=%d)", h.provider, sel.Number, err, len(eps))
