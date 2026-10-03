@@ -271,6 +271,24 @@ never mentioned `--base`:
   An unrecognised base is not rejected; it falls through to MovieBox, which is
   what the results came from. Fix the spelling rather than retrying.
 
+`episodes` carries the same array for a different question — whether the
+listing is the whole season:
+
+- `{"code": "episode_list_incomplete", "provider": "animeonsen",
+  "episodes_listed": 10}` — every episode printed was confirmed to exist, and
+  enumeration stopped before it found the end. Sources that have no episode
+  index are enumerated by probing for each episode in turn, so "10 episodes"
+  and "10 is as far as we got" are different answers and this is the one that
+  distinguishes them. Treat the list as a floor, not a total.
+- `{"code": "episode_list_from_fallback", "base": "animeonsen",
+  "provider": "anipub", "episodes_listed": 10}` — the source named by `--base`
+  (or by the ref) could not list this season, so the listing came from a
+  fallback provider. `provider` has always named whoever answered; this says
+  that someone else was asked first and could not, which is a different fact
+  and the one that matters: a fallback can list episodes it has no way to
+  stream. Check that a ref from this listing actually plays before relying on
+  the count.
+
 The counts describe the rows you actually received, so `--type` and `--limit`
 are already applied. Each row's `ref` names the source that produced it, where
 that source has a base token of its own; a few are reachable only as fallbacks
@@ -342,7 +360,7 @@ download_dir = "~/Videos/lobster"
 # anything YTS does not carry falls back to soap2day. Any other value is an
 # explicit choice and is used for both content types.
 # Available: auto, moviebox, flixhq.to, flixhq.ws, soap2day, kimcartoon,
-# vaplayer, vidnest, tbcpl, 1shows.org, allanime, yts
+# vaplayer, vidnest, tbcpl, 1shows.org, animeonsen, allanime, yts
 # All other providers are automatically used as fallbacks.
 # What each value covers, and which of them cannot list a series' episodes, is
 # in GUIDE.md -> "Content sources"; `lobster doctor` reports which are working
@@ -360,6 +378,18 @@ download_dir = "~/Videos/lobster"
 # Needs a 64-bit build, or the classic storage backend, which lobster selects
 # for you on a run that may stream a torrent (GUIDE.md -> "Torrent storage
 # backend"). Pieces land in a temp directory and are removed when playback ends.
+
+# Lift AllAnime's adult filter on search. Off by default.
+#
+# It is not only an adult-content switch: AllAnime's catalogue hides some
+# ordinary titles behind the same filter, and they are unreachable without
+# this. It does also surface genuine adult titles, though only on suggestive
+# queries — measured over a 40-row cap, "naruto", "school", "sister" and
+# "nurse" returned identical results either way, while "love" gained two
+# hentai entries. It restores discovery only: AllAnime's sources endpoint is
+# still crypto-gated, so a title found this way is played from the fallback
+# chain.
+# allow_adult_anime = false
 
 # Optional: use a consumet API backend instead of the built-in scraper.
 # Self-host from: https://github.com/consumet/api.consumet.org

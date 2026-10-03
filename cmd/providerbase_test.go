@@ -53,6 +53,7 @@ func TestProviderBaseRoundTripsThroughNewProvider(t *testing.T) {
 		provider.NewVaPlayer(),
 		provider.NewYTS(),
 		provider.NewAllAnime(false),
+		provider.NewAnimeOnsen(),
 		provider.NewMovieBox(),
 	} {
 		want := fmt.Sprintf("%T", p)

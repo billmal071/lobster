@@ -81,6 +81,8 @@ type stubProvider struct {
 	searchErr        error
 	seasonsErr       error
 	episodesErr      error
+	// episodesWithErr is the list returned *together with* episodesErr.
+	episodesWithErr []media.Episode
 
 	// lastSeasonID records what GetEpisodes was actually asked for.
 	lastSeasonID string
@@ -98,7 +100,11 @@ func (s *stubProvider) GetSeasons(string) ([]media.Season, error) {
 func (s *stubProvider) GetEpisodes(_, seasonID string) ([]media.Episode, error) {
 	s.lastSeasonID = seasonID
 	if s.episodesErr != nil {
-		return nil, s.episodesErr
+		// Both, when the stub is set up that way: a provider that measured a
+		// prefix returns the prefix alongside provider.ErrIncompleteEpisodeList
+		// (internal/provider/errors.go), and a stub that could only ever
+		// return one of the two cannot express the case at all.
+		return s.episodesWithErr, s.episodesErr
 	}
 	if s.episodesBySeason != nil {
 		return s.episodesBySeason[seasonID], nil

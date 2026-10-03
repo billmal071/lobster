@@ -53,6 +53,27 @@ type Config struct {
 	TBCPLFeed              bool                `toml:"tbcpl_feed"`
 	TBCPLRegion            string              `toml:"tbcpl_region"`
 	TBCPLIncludeUntrusted  bool                `toml:"tbcpl_include_untrusted"`
+	// AllowAdultAnime lifts AllAnime's adult filter on search.
+	//
+	// It is a setting rather than a constant because the filter is not only
+	// about adult titles. AllAnime's catalogue hides some ordinary shows
+	// behind it — "Ushiro no Shoumen Kamui-san" is invisible with it off and
+	// the first hit with it on — so leaving it hardcoded off makes those
+	// titles unreachable, and hardcoding it on changes what an unrelated
+	// search returns. Measured over a 40-row cap: "naruto", "school",
+	// "sister" and "nurse" were byte-identical either way, while "love"
+	// gained two genuine hentai entries. So the leak is real but confined to
+	// suggestive queries, which is a trade for the user to make and not for
+	// lobster to make silently.
+	//
+	// Off by default. It restores *discovery* only: AllAnime's sources
+	// endpoint is still crypto-gated behind a bot challenge, so a title found
+	// this way is played from the fallback chain, not from AllAnime.
+	//
+	// (AllAnime's other filter, allowUnknown, does nothing for this and is
+	// left off: all four combinations were probed and only allowAdult
+	// changed the answer.)
+	AllowAdultAnime bool `toml:"allow_adult_anime"`
 	// TorrentFallback lets the resolver fall back to YTS when the streaming
 	// providers fail. Off by default and deliberately so: YTS resolves to a
 	// magnet, so falling back to it joins a BitTorrent swarm and exposes the

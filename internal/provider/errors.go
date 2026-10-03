@@ -33,3 +33,24 @@ var ErrNoResults = errors.New("no results found")
 // provider reached?" must get no for this, and errors.Is would otherwise say
 // yes.
 var ErrUnrecognisedResponse = errors.New("response was not a recognisable search page")
+
+// ErrIncompleteEpisodeList reports that an episode list is everything the
+// provider could measure, and that the provider knows it may be short.
+//
+// It is returned *alongside a usable list*, which is the point: a provider
+// that enumerates by probing has two different failures, and only one of them
+// should cost the caller the list it already has. A probe that cannot reach
+// the host has nothing to offer. A probe that ran out of budget, hit its own
+// ceiling, or could not confirm where the series ends has a measured prefix —
+// and reporting that prefix as the whole series is the fabricated-episode-list
+// problem of #61 wearing different clothes. Nothing is invented, but the
+// caller is told a complete list when it has a partial one, and it cannot see
+// the difference.
+//
+// So the contract is: a non-nil list plus an error wrapping this sentinel
+// means "here is what was measured, do not treat it as the end". cmd/episodes
+// keeps the list and adds an episode_list_incomplete warning to its JSON.
+//
+// It deliberately does not wrap ErrNoResults: the catalogue does have this
+// show, and a caller asking "does this source have it?" must get yes.
+var ErrIncompleteEpisodeList = errors.New("episode list may be incomplete")
