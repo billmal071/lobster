@@ -265,3 +265,124 @@ func TestNewTempDirAcceptsASymlinkThatStaysInsideHome(t *testing.T) {
 		t.Errorf("staging dir %q resolved to rel %q; the symlinked base inside $HOME should have been used, not skipped", td.Path(), rel)
 	}
 }
+
+// backdateStaging makes dir look like a run that was abandoned more than
+// staleAfter ago. The marker is what carries liveness — a live run refreshes it,
+// and the directory's own mtime does not move once the subtitle files are
+// written — so both have to be aged for the directory to read as dead.
+func backdateStaging(t *testing.T, dir string) {
+	t.Helper()
+	old := time.Now().Add(-staleAfter - time.Hour)
+	for _, p := range []string{filepath.Join(dir, userdir.Marker), dir} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatalf("backdating %q: %v", p, err)
+		}
+	}
+}
+
+// awaitFreshMarker waits for dir's marker to come back inside the stale window,
+// which is what proves something is refreshing it.
+func awaitFreshMarker(t *testing.T, dir string, window time.Duration, what string) {
+	t.Helper()
+	marker := filepath.Join(dir, userdir.Marker)
+	cutoff := time.Now().Add(-window)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		fi, err := os.Stat(marker)
+		if err != nil {
+			t.Fatalf("stat marker: %v", err)
+		}
+		if fi.ModTime().After(cutoff) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s marker was still at %v after 2s; nothing refreshes it, so a second lobster will sweep this live directory", what, fi.ModTime())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// A staging directory lives for as long as the playback it staged subtitles for.
+// A film paused overnight outlasts staleAfter, at which point a second lobster
+// starting up swept the first one's staging directory out from under its running
+// player — the directory's own mtime froze when the files were written, so it was
+// no evidence the session was over.
+func TestStagingDirSurvivesASessionLongerThanTheStaleWindow(t *testing.T) {
+	restore := stagingTouchEvery
+	stagingTouchEvery = 5 * time.Millisecond
+	t.Cleanup(func() { stagingTouchEvery = restore })
+	fakeHome(t)
+
+	live, err := NewTempDir()
+	if err != nil {
+		t.Fatalf("NewTempDir: %v", err)
+	}
+	t.Cleanup(live.Cleanup)
+	staged := filepath.Join(live.Path(), "track.srt")
+	if err := os.WriteFile(staged, []byte("1\n"), 0o600); err != nil {
+		t.Fatalf("staging subtitle: %v", err)
+	}
+	// 25 hours in: the directory and everything about it looks abandoned.
+	backdateStaging(t, live.Path())
+	awaitFreshMarker(t, live.Path(), staleAfter, "the session's staging")
+
+	// A second lobster starts and sweeps on the way in.
+	second, err := NewTempDir()
+	if err != nil {
+		t.Fatalf("second NewTempDir: %v", err)
+	}
+	t.Cleanup(second.Cleanup)
+
+	if _, err := os.Stat(staged); err != nil {
+		t.Errorf("a second run deleted %q while the first player was still using it: %v", staged, err)
+	}
+	if _, err := os.Stat(live.Path()); err != nil {
+		t.Errorf("a second run deleted the live session's staging dir %q: %v", live.Path(), err)
+	}
+}
+
+// Cleanup ends the session, so the refresh has to end with it. A goroutine that
+// outlives the directory writes the marker back — userdir.Touch recreates a
+// missing one — into a path this run no longer owns, which would hand a later
+// run's directory an ownership claim it did not make.
+func TestCleanupStopsTheLivenessRefresh(t *testing.T) {
+	restore := stagingTouchEvery
+	stagingTouchEvery = 5 * time.Millisecond
+	t.Cleanup(func() { stagingTouchEvery = restore })
+	fakeHome(t)
+
+	td, err := NewTempDir()
+	if err != nil {
+		t.Fatalf("NewTempDir: %v", err)
+	}
+	path := td.Path()
+	td.Cleanup()
+	// Cleanup is called from a defer that can run twice on some paths; stopping
+	// has to tolerate that rather than panic on a closed channel.
+	td.Cleanup()
+
+	// Whatever ends up at that path next is not this session's.
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatalf("recreating %q: %v", path, err)
+	}
+	time.Sleep(20 * stagingTouchEvery)
+
+	if _, err := os.Stat(filepath.Join(path, userdir.Marker)); err == nil {
+		t.Errorf("a finished session is still marking %q as its own; its refresh goroutine outlived it", path)
+	}
+}
+
+// A TempDir can be built around a directory this package did not create — no
+// refresh was started, so there is nothing to stop. Cleanup must still remove
+// the directory rather than panic on a nil stopAlive, which is what the
+// documented nil-safety is for.
+func TestCleanupToleratesATempDirWithNoRefresh(t *testing.T) {
+	dir := t.TempDir()
+	td := &TempDir{path: dir}
+
+	td.Cleanup()
+
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("Cleanup left %q behind (stat err %v)", dir, err)
+	}
+}
