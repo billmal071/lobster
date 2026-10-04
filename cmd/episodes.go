@@ -126,9 +126,9 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	// for a complete list — that is the same dishonesty one layer up, and the
 	// warning below is the whole reason this case is kept rather than
 	// rejected.
-	incomplete := ""
-	if len(eps) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
-		incomplete, err = err.Error(), nil
+	shortfall := episodeShortfall{}
+	if sf := shortfallFor(err); len(eps) > 0 && sf.code != "" {
+		shortfall, err = sf, nil
 	}
 	if err != nil || len(eps) == 0 {
 		// Enumerating seasons and enumerating episodes are different
@@ -158,7 +158,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		if a := firstEpisodeList(alts, wantSeason); a != nil {
 			debugf("episodes: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), a.season.Number)
 			p, seasons, sel, eps, err = a.hit.provider, a.hit.seasons, a.season, a.episodes, nil
-			incomplete = a.incomplete
+			shortfall = a.shortfall
 		}
 	}
 	if err != nil {
@@ -200,7 +200,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		"episodes": out,
 		"provider": providerLabel(p),
 	}
-	if w := episodeSourceWarnings(asked, p, incomplete, len(out)); len(w) > 0 {
+	if w := episodeSourceWarnings(asked, p, shortfall, len(out)); len(w) > 0 {
 		payload["warnings"] = w
 	}
 	return emitJSON(payload)
@@ -212,12 +212,41 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 // that does not know the key is unaffected, and one that does can tell "this
 // season has 10 episodes" from "10 is as far as enumeration got".
 //
-// # episode_list_incomplete
+// # episode_list_incomplete and episode_list_unconfirmed
 //
 // A list that cannot be completed is the episodes-shaped version of the bug
 // `play` had in #66 — a confident answer that was not the one the evidence
 // supported. The count itself is evidence-backed; what was missing was any way
 // to see that the evidence ran out.
+//
+// Two codes rather than one, which is find.go's rule applied to a case that
+// had already shown why it exists: "the code is the discriminator because a
+// caller switches on it", and folding cases together leaves the distinction
+// inferable only by arithmetic the consumer skips. Here there was not even
+// arithmetic available — one code covered both "the list is missing episodes"
+// and "the list is whole but its last 404 was not double-checked", and the
+// second is the normal outcome of a probing enumeration. Nine live `episodes`
+// runs against a 12-episode AnimeOnsen series: eight returned the correct 12,
+// one returned 8, and the single code fired on six of the nine. A warning that
+// fires on two thirds of healthy runs is one a caller stops reading, and this
+// is the signal that is supposed to say the list is short.
+//
+// Split, each code carries one next step. episode_list_incomplete means the
+// source never found the end of the series, so the count is where its probe
+// schedule stopped: treat it as a floor and expect more episodes.
+// episode_list_unconfirmed means it did find the end and could not re-confirm
+// it on a request of its own: treat the count as very likely right.
+//
+// The weak case is still reported rather than silent, and the argument for
+// silence is worth answering because it is a reasonable one — nothing a caller
+// can *do* differs between a confirmed and an unconfirmed boundary, and an
+// unactionable warning is worse than none. What settles it is that the single
+// unconfirmed observation is the exact one measured to lie: a 404 answered
+// inside a concurrent wave for a manifest the CDN then served is what reported
+// 10 episodes of KAMUI's 12, and that is the shape an unconfirmed boundary has.
+// The episodes it can hide are the last ones, which is where a caller is most
+// likely to be looking. So it is reported, under its own code, with wording
+// that says the list is probably whole.
 //
 // # episode_list_from_fallback
 //
@@ -244,16 +273,22 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 // Silent when no base was named, or "auto" was, or the base does not select
 // the primary at all: broadening is then the documented behaviour rather than
 // a departure from a request, which is the rule find.go already follows.
-func episodeSourceWarnings(asked, answered provider.Provider, incomplete string, listed int) []map[string]any {
+func episodeSourceWarnings(asked, answered provider.Provider, shortfall episodeShortfall, listed int) []map[string]any {
 	var out []map[string]any
-	if incomplete != "" {
+	if shortfall.code != "" {
+		message := fmt.Sprintf(
+			"%s could not establish where this season ends, so the %d episodes above are what it confirmed and there may be more: %s",
+			providerLabel(answered), listed, shortfall.reason)
+		if shortfall.code == "episode_list_unconfirmed" {
+			message = fmt.Sprintf(
+				"%s found nothing beyond the %d episodes above, but could not re-check that on a request of its own, so the count is very likely the whole season rather than certainly: %s",
+				providerLabel(answered), listed, shortfall.reason)
+		}
 		out = append(out, map[string]any{
-			"code":            "episode_list_incomplete",
+			"code":            shortfall.code,
 			"provider":        providerLabel(answered),
 			"episodes_listed": listed,
-			"message": fmt.Sprintf(
-				"%s could not establish where this season ends, so the %d episodes above are what it confirmed and there may be more: %s",
-				providerLabel(answered), listed, incomplete),
+			"message":         message,
 		})
 	}
 	configured := ""
@@ -277,6 +312,46 @@ func episodeSourceWarnings(asked, answered provider.Provider, incomplete string,
 		})
 	}
 	return out
+}
+
+// episodeShortfall is what a provider said about an episode list it knows may
+// be short: the warning code `episodes` reports it under, and the provider's
+// own words for why the measurement stopped where it did.
+//
+// Its zero value means there is nothing to say, which is also what a complete
+// list produces, so the two are the same case to every caller here.
+type episodeShortfall struct {
+	code   string
+	reason string
+}
+
+// shortfallFor reads a GetEpisodes error and says which warning code it is, or
+// nothing at all when the error is not a provider reporting a short list.
+//
+// The "or nothing at all" is why the broad test lives here rather than at the
+// two call sites: with it duplicated there, this function could only ever be
+// handed an error it had already been decided about, so its own guard was a
+// line no test could reach and a mutant could delete unseen. Here it is the
+// single place that decides whether an error is an answer or a failure, and
+// deleting it turns every ordinary provider error into a swallowed warning.
+//
+// It asks the narrow question first and the broad one second, which is the
+// only order that works: provider.ErrUnconfirmedEpisodeList is always wrapped
+// *alongside* provider.ErrIncompleteEpisodeList rather than instead of it, so
+// errors.Is answers yes to both for the weak case and testing the broad one
+// first would send every weak case to the strong code.
+//
+// A provider that reports a short list without saying which kind gets the
+// strong code. That is the safe direction: it over-warns rather than telling a
+// caller to trust a list the provider never claimed to have finished.
+func shortfallFor(err error) episodeShortfall {
+	if err == nil || !errors.Is(err, provider.ErrIncompleteEpisodeList) {
+		return episodeShortfall{}
+	}
+	if errors.Is(err, provider.ErrUnconfirmedEpisodeList) {
+		return episodeShortfall{code: "episode_list_unconfirmed", reason: err.Error()}
+	}
+	return episodeShortfall{code: "episode_list_incomplete", reason: err.Error()}
 }
 
 // listSeasonEpisodes makes the first episode-listing call, under a deadline
@@ -585,10 +660,10 @@ type episodeAnswer struct {
 	hit      *seasonHit
 	season   media.Season
 	episodes []media.Episode
-	// incomplete is the provider's own reason, when it returned a list it
-	// knows may be short (provider.ErrIncompleteEpisodeList). Empty means the
-	// provider reported a complete list.
-	incomplete string
+	// shortfall is what the provider said about a list it knows may be short
+	// (provider.ErrIncompleteEpisodeList). Its zero value means the provider
+	// reported a complete list.
+	shortfall episodeShortfall
 }
 
 // firstEpisodeList asks every hit for the requested season's episodes and
@@ -621,15 +696,15 @@ func firstEpisodeList(hits []*seasonHit, wantSeason int) *episodeAnswer {
 			// A prefix a provider measured and flagged beats no list at all,
 			// and the flag travels with it so the caller is never told it is
 			// the whole season. Any other error means no answer.
-			incomplete := ""
-			if len(eps) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
-				incomplete, err = err.Error(), nil
+			shortfall := episodeShortfall{}
+			if sf := shortfallFor(err); len(eps) > 0 && sf.code != "" {
+				shortfall, err = sf, nil
 			}
 			if err != nil || len(eps) == 0 {
 				debugf("episodes: fallback %T cannot list season %d (err=%v, episodes=%d)", h.provider, sel.Number, err, len(eps))
 				return
 			}
-			answers[idx] = &episodeAnswer{hit: h, season: sel, episodes: eps, incomplete: incomplete}
+			answers[idx] = &episodeAnswer{hit: h, season: sel, episodes: eps, shortfall: shortfall}
 		}(i, h, sel)
 	}
 	wg.Wait()

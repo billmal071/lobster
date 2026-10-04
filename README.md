@@ -275,11 +275,21 @@ never mentioned `--base`:
 listing is the whole season:
 
 - `{"code": "episode_list_incomplete", "provider": "animeonsen",
-  "episodes_listed": 10}` — every episode printed was confirmed to exist, and
-  enumeration stopped before it found the end. Sources that have no episode
-  index are enumerated by probing for each episode in turn, so "10 episodes"
-  and "10 is as far as we got" are different answers and this is the one that
-  distinguishes them. Treat the list as a floor, not a total.
+  "episodes_listed": 8}` — every episode printed was confirmed to exist, and
+  enumeration never found the end of the season. Sources that have no episode
+  index are enumerated by probing for each episode in turn, so "8 episodes" and
+  "8 is as far as we got" are different answers and this is the one that
+  distinguishes them. The count is where the probing stopped, not where the
+  season does: treat the list as a floor, and expect more episodes.
+- `{"code": "episode_list_unconfirmed", "provider": "animeonsen",
+  "episodes_listed": 12}` — the weaker version of the same thing, and the
+  common one. Enumeration did find the end — the episode after the last one
+  printed answered "not found" — but could not re-check that on a request of
+  its own, which is the check these sources need because a CDN under load
+  answers "not found" for episodes it will serve. The list is very likely the
+  whole season. It is not a floor in the way the code above is, and the two are
+  separate codes because a single code fired on most correct runs and so said
+  nothing.
 - `{"code": "episode_list_from_fallback", "base": "animeonsen",
   "provider": "anipub", "episodes_listed": 10}` — the source named by `--base`
   (or by the ref) could not list this season, so the listing came from a

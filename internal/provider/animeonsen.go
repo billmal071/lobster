@@ -692,7 +692,10 @@ func (p *AnimeOnsen) episodeCount(contentID string) (int, error) {
 			return p.short(contentID, n, short)
 		}
 		if err := expired(); err != nil {
-			return p.short(contentID, n, err.Error())
+			// searchBoundary found the end — it returned no reason, which it
+			// only does with the next episode measured absent — so the one
+			// thing missing is the solitary re-confirmation below.
+			return p.unconfirmed(contentID, n, err.Error())
 		}
 		// Confirm the boundary with a HEAD sent on its own. The search's 404s
 		// arrive inside a wave of animeOnsenProbeWidth concurrent requests,
@@ -708,10 +711,10 @@ func (p *AnimeOnsen) episodeCount(contentID string) (int, error) {
 		ok, err := p.probeEpisode(contentID, n+1, deadline)
 		if err != nil {
 			if errors.Is(err, errAnimeOnsenProbeExpired) {
-				return p.short(contentID, n, expiredBudgetReason())
+				return p.unconfirmed(contentID, n, expiredBudgetReason())
 			}
 			if errors.Is(err, errAnimeOnsenThrottled) {
-				return p.short(contentID, n, fmt.Sprintf("the CDN would not answer whether episode %d exists", n+1))
+				return p.unconfirmed(contentID, n, fmt.Sprintf("the CDN would not answer whether episode %d exists", n+1))
 			}
 			return 0, err
 		}
@@ -741,12 +744,44 @@ func (p *AnimeOnsen) episodeCount(contentID string) (int, error) {
 // is no list to flag, and the chain is then the right place to ask. It is
 // deliberately not ErrNoResults: "the CDN would not answer" is not "the
 // catalogue does not have this", and the chain treats the latter as final.
+//
+// short is the strong form: the end of the series was never located, so the
+// reported count is where the probe schedule stopped and episodes above it are
+// missing. unconfirmed is the weak form — see there.
 func (p *AnimeOnsen) short(contentID string, n int, reason string) (int, error) {
 	if n < 1 {
 		return 0, fmt.Errorf("animeonsen: %q could not be enumerated: %s", contentID, reason)
 	}
 	return n, fmt.Errorf("%w: animeonsen: %s, so %d is as far as %q could be confirmed",
 		ErrIncompleteEpisodeList, reason, n, contentID)
+}
+
+// unconfirmed reports an enumeration that located the end of the series and
+// could not re-confirm it: episode n answered present, episode n+1 answered
+// absent inside a wave, and the solitary HEAD that re-tests that absence
+// either was shed or had no budget left to be sent in.
+//
+// It is the weak form of short, and the two are separated because collapsing
+// them made the warning unreadable. This one is the steady state of a probing
+// enumeration against this CDN — the confirmation probe is the last request
+// inside the budget and it is always a cache miss, since nobody watches the
+// episode after the last one — and it fired on five of nine live runs that
+// returned a complete and correct list. short's cases are the ones where
+// episodes really are absent from the list.
+//
+// Both wrap ErrIncompleteEpisodeList, so nothing that asks only "may this be
+// short?" changes behaviour; this one additionally wraps
+// ErrUnconfirmedEpisodeList, which is what cmd/episodes.go switches its warning
+// code on.
+func (p *AnimeOnsen) unconfirmed(contentID string, n int, reason string) (int, error) {
+	if n < 1 {
+		// Not reachable from the current call sites — a located boundary means
+		// at least episode 1 answered — but the weak form must not be able to
+		// claim a confirmed-looking zero either.
+		return p.short(contentID, n, reason)
+	}
+	return n, fmt.Errorf("%w: %w: animeonsen: %s, so the %d episodes measured are reported without a second look at whether %q has an episode %d",
+		ErrIncompleteEpisodeList, ErrUnconfirmedEpisodeList, reason, n, contentID, n+1)
 }
 
 // expiredBudgetReason is how a measurement the probe budget cut off is worded
@@ -766,6 +801,15 @@ func expiredBudgetReason() string {
 // the measurement stopped where it did: the animeOnsenMaxEpisodes ceiling, the
 // probe budget, or a wave the CDN shed entirely. episodeCount turns that into
 // the ErrIncompleteEpisodeList flag that reaches `episodes`' JSON.
+//
+// Which of the two flags it gets is decided by that emptiness and nothing else,
+// so it is worth stating what emptiness implies. Both clean returns leave
+// hi == lo+1: the narrowing loop exits only on that condition, and the arm
+// above it returns a reason whenever hi is still 0. So an empty reason means
+// the next episode was measured absent at least once, which is exactly the
+// observation episodeCount's confirmation probe re-tests — and a non-empty one
+// means it never was, which is the state where episodes really are missing
+// from the list.
 func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.Time) (int, string, error) {
 	expired := func() error {
 		if p.now().After(deadline) {

@@ -67,13 +67,19 @@ Do not tell the user a row came from their base unless it did; each `ref`
 names its own source where that source has a base token, so prefer the rows
 whose base matches when they asked for one.
 
-`episodes` uses the same array for one entry of its own:
+`episodes` uses the same array for three entries of its own:
 
 - `{"code": "episode_list_incomplete", "provider": "animeonsen",
-  "episodes_listed": 10}` — the episodes listed were all confirmed, and the
-  source could not establish where the season ends. Say "at least 10" rather
-  than "10 episodes", and do not tell the user an episode does not exist
-  because it is not on the list.
+  "episodes_listed": 8}` — the episodes listed were all confirmed, and the
+  source never found where the season ends, so there are very likely more. Say
+  "at least 8" rather than "8 episodes", and do not tell the user an episode
+  does not exist because it is not on the list.
+- `{"code": "episode_list_unconfirmed", "provider": "animeonsen",
+  "episodes_listed": 12}` — the source did find the end of the season and could
+  not double-check it. The count is very likely right, so use it; just do not
+  tell the user an episode past it definitely does not exist, and offer to try
+  playing it if they ask for one. This is the normal outcome for sources that
+  enumerate by probing, so do not present it to the user as a problem.
 - `{"code": "episode_list_from_fallback", "base": "animeonsen",
   "provider": "anipub", "episodes_listed": 10}` — the base the user asked for
   could not list this season and a fallback answered instead. Say which source
