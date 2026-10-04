@@ -48,6 +48,20 @@ func resolvedRel(t *testing.T, home, path string) string {
 	return rel
 }
 
+// backdate makes dir look like a run that was abandoned more than dataStaleAfter
+// ago. The marker is what carries liveness — a live run refreshes it, and the
+// directory's own mtime does not move while pieces are written into files that
+// already exist — so both have to be aged for the directory to read as dead.
+func backdate(t *testing.T, dir string) {
+	t.Helper()
+	old := time.Now().Add(-dataStaleAfter - time.Hour)
+	for _, p := range []string{filepath.Join(dir, userdir.Marker), dir} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatalf("backdating %q: %v", p, err)
+		}
+	}
+}
+
 // A torrent payload is the largest thing lobster writes — a 4K remux runs to
 // tens of gigabytes — so the default must land on the user's home volume, not
 // on whatever small filesystem backs os.TempDir(). (The same path is invisible
@@ -135,10 +149,7 @@ func TestNewDataDirPrunesAbandonedSiblings(t *testing.T) {
 		if err := userdir.MarkOwned(d); err != nil {
 			t.Fatalf("marking %q: %v", d, err)
 		}
-		old := time.Now().Add(-dataStaleAfter - time.Hour)
-		if err := os.Chtimes(d, old, old); err != nil {
-			t.Fatalf("backdating %q: %v", d, err)
-		}
+		backdate(t, d)
 	}
 
 	data, err := newDataDir(configured)
@@ -232,10 +243,12 @@ func TestNewDataDirSweepsItsOwnAbandonedRun(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(abandoned, "piece.bin"), []byte("x"), 0o600); err != nil {
 		t.Fatalf("writing payload: %v", err)
 	}
-	old := time.Now().Add(-dataStaleAfter - time.Hour)
-	if err := os.Chtimes(abandoned, old, old); err != nil {
-		t.Fatalf("backdating %q: %v", abandoned, err)
+	// A process killed without reaching Close stops refreshing its marker,
+	// which is the whole mechanism: nothing it left behind claims it is alive.
+	if abandonedData.stopAlive != nil {
+		abandonedData.stopAlive()
 	}
+	backdate(t, abandoned)
 
 	data, err := newDataDir(configured)
 	if err != nil {
@@ -312,5 +325,120 @@ func TestCloseTidiesTheDefaultParent(t *testing.T) {
 
 	if _, err := os.Stat(parent); !os.IsNotExist(err) {
 		t.Errorf("lobster's own parent %q survived removal of the last run directory in it (stat err %v)", parent, err)
+	}
+}
+
+// The directory's own mtime freezes when the run allocates its files, so a
+// session longer than dataStaleAfter looks abandoned to a second lobster
+// starting up — which would delete the pieces out from under the player
+// mid-stream. A live run keeps saying so.
+func TestNewDataDirKeepsALongRunningRunAlive(t *testing.T) {
+	restore := dataTouchEvery
+	dataTouchEvery = 5 * time.Millisecond
+	t.Cleanup(func() { dataTouchEvery = restore })
+
+	configured := filepath.Join(t.TempDir(), "torrents")
+	live, err := newDataDir(configured)
+	if err != nil {
+		t.Fatalf("newDataDir(%q): %v", configured, err)
+	}
+	t.Cleanup(live.remove)
+	payload := filepath.Join(live.path, "movie.mkv")
+	if err := os.WriteFile(payload, make([]byte, 64), 0o600); err != nil {
+		t.Fatalf("allocating payload: %v", err)
+	}
+	// 25 hours in: the directory and everything about it looks abandoned.
+	backdate(t, live.path)
+
+	marker := filepath.Join(live.path, userdir.Marker)
+	cutoff := time.Now().Add(-dataStaleAfter)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		fi, err := os.Stat(marker)
+		if err != nil {
+			t.Fatalf("stat marker: %v", err)
+		}
+		if fi.ModTime().After(cutoff) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the run's marker was still at %v after 2s; nothing refreshes it, so a second run will sweep this live payload", fi.ModTime())
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// A second lobster starts and sweeps on the way in.
+	second, err := newDataDir(configured)
+	if err != nil {
+		t.Fatalf("second newDataDir(%q): %v", configured, err)
+	}
+	t.Cleanup(second.remove)
+
+	if _, err := os.Stat(payload); err != nil {
+		t.Errorf("a second run deleted %q while the first was still streaming it: %v", payload, err)
+	}
+	if _, err := os.Stat(live.path); err != nil {
+		t.Errorf("a second run deleted the live run's data dir %q: %v", live.path, err)
+	}
+}
+
+// The default path goes through userdir.Make rather than creating the directory
+// here, and needs the same liveness refresh: Make's own sweep inside
+// ~/<base>/.lobster is what would delete a long-running default run.
+func TestNewDataDirKeepsALongRunningDefaultRunAlive(t *testing.T) {
+	restore := dataTouchEvery
+	dataTouchEvery = 5 * time.Millisecond
+	t.Cleanup(func() { dataTouchEvery = restore })
+	fakeHome(t)
+
+	live, err := newDataDir("")
+	if err != nil {
+		t.Fatalf("newDataDir(\"\"): %v", err)
+	}
+	t.Cleanup(live.remove)
+	backdate(t, live.path)
+
+	marker := filepath.Join(live.path, userdir.Marker)
+	cutoff := time.Now().Add(-dataStaleAfter)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		fi, err := os.Stat(marker)
+		if err != nil {
+			t.Fatalf("stat marker: %v", err)
+		}
+		if fi.ModTime().After(cutoff) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the default run's marker was still at %v after 2s; a later run would sweep this live payload", fi.ModTime())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// remove ends the run, so the refresh has to end with it. A goroutine that
+// outlives the directory writes the marker back — Touch recreates a missing one —
+// into a path this run no longer owns.
+func TestRunDirRemoveStopsTheLivenessRefresh(t *testing.T) {
+	restore := dataTouchEvery
+	dataTouchEvery = 5 * time.Millisecond
+	t.Cleanup(func() { dataTouchEvery = restore })
+
+	configured := filepath.Join(t.TempDir(), "torrents")
+	data, err := newDataDir(configured)
+	if err != nil {
+		t.Fatalf("newDataDir(%q): %v", configured, err)
+	}
+	path := data.path
+	data.remove()
+
+	// Whatever ends up at that path next is not this run's.
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatalf("recreating %q: %v", path, err)
+	}
+	time.Sleep(20 * dataTouchEvery)
+
+	if _, err := os.Stat(filepath.Join(path, userdir.Marker)); err == nil {
+		t.Errorf("a finished run is still marking %q as its own; its refresh goroutine outlived it", path)
 	}
 }

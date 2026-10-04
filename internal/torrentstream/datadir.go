@@ -16,16 +16,23 @@ import (
 // sweep deletes nothing without it.
 const dataPrefix = "torrent"
 
-// dataStaleAfter is how long an abandoned data directory is kept before a
-// later run sweeps it.
+// dataStaleAfter is how long a data directory may go without a sign of life
+// before a later run sweeps it.
 //
-// A data directory's mtime advances while pieces are written, so a download in
-// progress is never a sweep candidate; what stops advancing is a payload that
-// has finished downloading while playback continues. 24 hours is therefore
-// chosen to sit well beyond the longest plausible single sitting, and the only
-// cost of being wrong is that a still-playing file is unlinked underneath a
-// player that already holds it open — the bytes stay readable until it closes.
+// The sign of life is the ownership marker, refreshed every dataTouchEvery while
+// this run is alive — not the directory's own mtime, which does not move while
+// the client writes into files it already allocated and so says nothing about
+// whether the run is over. 24 hours is then simply how long after a kill the
+// payload is left alone, and the only way a live run is swept is if it stops
+// being scheduled for a whole day.
 const dataStaleAfter = 24 * time.Hour
+
+// dataTouchEvery is how often a live run refreshes its directory's marker. A
+// quarter of the stale window leaves three missed refreshes of slack before a
+// second lobster could consider this run abandoned, at a cost of one timestamp
+// update per run every six hours. It is a var so a test can drive the loop
+// rather than wait out a real interval.
+var dataTouchEvery = dataStaleAfter / 4
 
 // newDataDir creates the directory a run's torrent pieces land in.
 //
@@ -55,7 +62,7 @@ func newDataDir(configured string) (runDir, error) {
 		if err != nil {
 			return runDir{}, err
 		}
-		return runDir{path: dir, ownParent: true}, nil
+		return runDir{path: dir, ownParent: true, stopAlive: userdir.Keepalive(dir, dataTouchEvery)}, nil
 	}
 	if err := os.MkdirAll(configured, 0o700); err != nil {
 		return runDir{}, err
@@ -73,7 +80,7 @@ func newDataDir(configured string) (runDir, error) {
 		_ = os.RemoveAll(dir)
 		return runDir{}, err
 	}
-	return runDir{path: dir}, nil
+	return runDir{path: dir, stopAlive: userdir.Keepalive(dir, dataTouchEvery)}, nil
 }
 
 // runDir is where one run's pieces land, together with how much of the path
@@ -93,11 +100,20 @@ type runDir struct {
 	// — with its permissions — the first time a run finished. A configured
 	// directory is never lobster's to remove, whatever it is called.
 	ownParent bool
+
+	// stopAlive ends the goroutine that keeps refreshing the directory's
+	// liveness marker. A run that is killed without reaching it stops
+	// refreshing by itself, which is what keeps growth bounded — see
+	// userdir.Keepalive.
+	stopAlive func()
 }
 
 // remove deletes the run's data directory, and lobster's own shared parent with
 // it when that parent is now empty.
 func (d runDir) remove() {
+	if d.stopAlive != nil {
+		d.stopAlive()
+	}
 	if d.path == "" {
 		return
 	}

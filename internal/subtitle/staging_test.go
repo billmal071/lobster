@@ -146,8 +146,13 @@ func TestNewTempDirPrunesStaleSiblings(t *testing.T) {
 		t.Fatalf("writing subtitle: %v", err)
 	}
 	old := time.Now().Add(-48 * time.Hour)
-	if err := os.Chtimes(stale, old, old); err != nil {
-		t.Fatalf("backdating staging dir: %v", err)
+	// userdir reads staleness off the ownership marker, which a live run
+	// refreshes and a killed one does not; the directory is aged alongside it
+	// only so nothing here looks fresh for the wrong reason.
+	for _, p := range []string{filepath.Join(stale, userdir.Marker), stale} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatalf("backdating %q: %v", p, err)
+		}
 	}
 
 	second, err := NewTempDir()
