@@ -486,6 +486,31 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		stopEps := ui.StartSpinner("Fetching episodes...")
 		episodes, err := p.GetEpisodes(providerID, selectedSeason.ID)
 		stopEps()
+
+		// A prefix the provider measured and flagged is an answer, not a
+		// failure. provider.ErrIncompleteEpisodeList is documented as "here is
+		// what was measured, do not treat it as the end"
+		// (internal/provider/errors.go) and arrives *alongside* a usable list:
+		// `episodes` keeps it and warns (shortfallFor, cmd/episodes.go), and so
+		// does the chain scan (firstEpisodeList, same file). This call site
+		// read any non-nil error as "no list at all", which is how AnimeOnsen's
+		// twelve measured episodes were thrown away, playback handed to a chain
+		// that cannot stream the show, and the run killed with "animeonsen
+		// cannot list season 1 of ..." about a list it was holding. Nothing
+		// played, so no subtitle search ran either — the absent subtitles
+		// reported against this source were an absent playback.
+		//
+		// The requested episode has to be inside the measured prefix. A list
+		// that says it may be short is not evidence that an episode above it
+		// does not exist, so that case still falls through to the recovery
+		// below, which needs no list.
+		if sf := shortfallFor(err); sf.code != "" && len(episodes) > 0 &&
+			(episode == 0 || episodeIndex(episodes, episode) >= 0) {
+			err = nil
+			warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",
+				providerLabel(p), selectedSeason.Number, title, sf.reason)
+		}
+
 		if err != nil || len(episodes) == 0 {
 			// The primary has season data but cannot enumerate this season's
 			// episodes. MovieBox and VidNest are exactly that shape: their
@@ -779,13 +804,16 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		subs := subtitle.FilterByEpisode(
 			mergeSubtitles(
 				subtitle.Filter(stream.Subtitles, cfg.SubsLanguage),
-				searchExternalSubs(selected.Title, season, episode),
+				externalSubs(selected.Title, season, episode),
 			),
 			season, episode,
 		)
 		// Limit to 3 subtitle downloads to avoid stream URL expiry.
 		if len(subs) > 3 {
 			subs = subs[:3]
+		}
+		if len(subs) == 0 {
+			reportNoSubtitles(title)
 		}
 		if len(subs) > 0 {
 			tmpDir, err := subtitle.NewTempDir()
@@ -937,6 +965,54 @@ func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle, season,
 	}
 	return tmpDir.Download(sub)
 }
+
+// reportNoSubtitles says, out loud and exactly once, that this playback has no
+// subtitles at all — and which kind of absence it is.
+//
+// Every "we looked" line on this path is debug-only (searchExternalSubs), so a
+// source that ships no text track of its own was indistinguishable from a run
+// that never asked anybody: both produced silence. AnimeOnsen is that source —
+// Japanese audio, no text AdaptationSet — and the silence is what made
+// "subtitles are missing" unreadable as either "nothing has any" or "lobster
+// did not try". Only one of the two is actionable by the user, and naming the
+// sources that were asked is what makes it so.
+func reportNoSubtitles(title string) {
+	if cfg == nil {
+		return
+	}
+	lang := cfg.SubsLanguage
+	if lang == "" {
+		lang = "matching"
+	}
+	asked := configuredSubSources()
+	if len(asked) == 0 {
+		warnf("no %s subtitles for %s: this source ships none, and no external subtitle source is configured (set subdl_api_key or os_api_key)",
+			lang, title)
+		return
+	}
+	warnf("no %s subtitles for %s: this source ships none, and %s had none for it",
+		lang, title, strings.Join(asked, " and "))
+}
+
+// configuredSubSources names the external subtitle sources this run can
+// actually ask, in the order searchExternalSubs asks them. Empty means none is
+// configured, which is a different answer from "asked and found nothing".
+func configuredSubSources() []string {
+	var names []string
+	if cfg.SubDLAPIKey != "" {
+		names = append(names, "SubDL")
+	}
+	if cfg.OSAPIKey != "" {
+		names = append(names, "OpenSubtitles")
+	}
+	return names
+}
+
+// externalSubs is searchExternalSubs as a package var, seamed like
+// subtitleDownload and newPlayer so a test can observe whether the external
+// subtitle search was attempted at all — and under which title — without
+// reaching SubDL or OpenSubtitles over the network.
+var externalSubs = searchExternalSubs
 
 // searchExternalSubs tries SubDL first, then OpenSubtitles as fallback.
 func searchExternalSubs(title string, season, episode int) []media.Subtitle {
