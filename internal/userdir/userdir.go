@@ -34,6 +34,17 @@ import (
 // dot-prefixed, not nested ones.
 const Parent = ".lobster"
 
+// Marker is the file lobster writes inside every directory it creates here. It
+// is proof of ownership, and PruneStale deletes nothing without it.
+//
+// A prefix match is not proof. PruneStale's parent is a directory the user
+// chose, so it may already hold directories of their own, and "starts with
+// torrent-" is a name a user is entitled to use — a ~/Downloads/torrent-backups
+// older than the stale window would be removed recursively by a sweep that
+// trusted the name alone. The marker distinguishes "lobster made this and lost
+// track of it" from "this was already here".
+const Marker = ".lobster-dir"
+
 // baseNames are the candidate base directories, relative to $HOME and most
 // preferred first.
 //
@@ -101,9 +112,13 @@ func Make(prefix string, staleAfter time.Duration, usable func(dir string) bool)
 			if err := root.MkdirAll(parent, 0o700); err != nil {
 				continue
 			}
-			pruneStaleIn(root, parent, prefix, staleAfter)
+			pruneStaleIn(root, parent, prefix, staleAfter, false)
 			name, err := mkdirRandomIn(root, parent, prefix)
 			if err != nil {
+				continue
+			}
+			if err := markOwnedIn(root, name); err != nil {
+				_ = root.RemoveAll(name)
 				continue
 			}
 			candidate := filepath.Join(root.Name(), filepath.FromSlash(name))
@@ -117,6 +132,10 @@ func Make(prefix string, staleAfter time.Duration, usable func(dir string) bool)
 
 	candidate, err := os.MkdirTemp("", "lobster-"+prefix+"-*")
 	if err != nil {
+		return "", false, err
+	}
+	if err := MarkOwned(candidate); err != nil {
+		Remove(candidate)
 		return "", false, err
 	}
 	if usable != nil && !usable(candidate) {
@@ -199,9 +218,30 @@ func randomSuffix() string {
 	return hex.EncodeToString(b[:])
 }
 
-// PruneStale removes "<prefix>-*" directories directly inside parent that have
-// not been written to for staleAfter, i.e. those left behind by runs that were
-// killed before they could clean up. Unlike /tmp, a directory under $HOME is
+// MarkOwned writes the ownership marker into a directory lobster created, so a
+// later PruneStale is allowed to sweep it. Callers that create their own
+// directory inside a user-chosen parent — rather than going through Make — must
+// call this, or their abandoned directories accumulate forever.
+func MarkOwned(dir string) error {
+	return os.WriteFile(filepath.Join(dir, Marker), nil, 0o600)
+}
+
+// markOwnedIn is MarkOwned performed root-relative, so it cannot be redirected
+// outside the home directory by a component swapped for a symlink.
+func markOwnedIn(root *os.Root, dir string) error {
+	f, err := root.Create(path.Join(dir, Marker))
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// PruneStale removes "<prefix>-*" directories directly inside parent that carry
+// the ownership Marker and have not been written to for staleAfter, i.e. those
+// left behind by runs that were killed before they could clean up. A directory
+// without the marker is never touched, however old it is and whatever it is
+// called: parent here is a directory the user chose, and anything in it that
+// lobster did not create is theirs. Unlike /tmp, a directory under $HOME is
 // never reclaimed by the system, so somebody has to.
 //
 // A directory's mtime is set when its files are written and does not advance
@@ -216,10 +256,15 @@ func PruneStale(parent, prefix string, staleAfter time.Duration) {
 		return
 	}
 	defer root.Close()
-	pruneStaleIn(root, ".", prefix, staleAfter)
+	pruneStaleIn(root, ".", prefix, staleAfter, true)
 }
 
-func pruneStaleIn(root *os.Root, parent, prefix string, staleAfter time.Duration) {
+// pruneStaleIn sweeps parent, relative to root. requireMarker is set for the
+// exported PruneStale, whose parent is user-chosen; it is not set for the sweep
+// Make does inside its own Parent directory, which lobster creates 0o700 and
+// nothing else writes to. Requiring the marker there would permanently orphan
+// the directories earlier versions left behind, with nothing left to sweep them.
+func pruneStaleIn(root *os.Root, parent, prefix string, staleAfter time.Duration, requireMarker bool) {
 	d, err := root.Open(parent)
 	if err != nil {
 		return
@@ -238,7 +283,13 @@ func pruneStaleIn(root *os.Root, parent, prefix string, staleAfter time.Duration
 		if err != nil || info.ModTime().After(cutoff) {
 			continue
 		}
-		_ = root.RemoveAll(path.Join(parent, e.Name()))
+		name := path.Join(parent, e.Name())
+		if requireMarker {
+			if _, err := root.Stat(path.Join(name, Marker)); err != nil {
+				continue
+			}
+		}
+		_ = root.RemoveAll(name)
 	}
 }
 

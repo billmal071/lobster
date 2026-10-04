@@ -163,6 +163,11 @@ func TestPruneStaleSweepsOnlyItsOwnStalePrefix(t *testing.T) {
 		if err := os.Mkdir(d, 0o700); err != nil {
 			t.Fatalf("creating %s: %v", d, err)
 		}
+		// All three are lobster's, so what the sweep does here turns on the
+		// prefix and the age, which is what this test is about.
+		if err := MarkOwned(d); err != nil {
+			t.Fatalf("marking %s: %v", d, err)
+		}
 	}
 	for _, d := range []string{mine, theirs} {
 		if err := os.Chtimes(d, stale, stale); err != nil {
@@ -407,5 +412,49 @@ func TestMakeNeverCreatesOutsideHomeWhenTheBaseIsSwappedAfterValidation(t *testi
 	}
 	if !visible {
 		t.Errorf("Make fell back to the temp dir; another base under $HOME was still usable")
+	}
+}
+
+// The sweep's parent is a directory the user chose, so a stale directory that
+// happens to match the prefix may be theirs. Deleting it is recursive and
+// unrecoverable, so the marker — not the name — is what authorises removal.
+func TestPruneStaleSparesUnmarkedDirectories(t *testing.T) {
+	parent := t.TempDir()
+	theirs := filepath.Join(parent, "probe-backups")
+	theirFile := filepath.Join(theirs, "keepme.txt")
+	if err := os.Mkdir(theirs, 0o700); err != nil {
+		t.Fatalf("creating %s: %v", theirs, err)
+	}
+	if err := os.WriteFile(theirFile, []byte("not lobster's"), 0o600); err != nil {
+		t.Fatalf("seeding %s: %v", theirFile, err)
+	}
+	stale := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(theirs, stale, stale); err != nil {
+		t.Fatalf("ageing %s: %v", theirs, err)
+	}
+
+	PruneStale(parent, "probe", 24*time.Hour)
+
+	if _, err := os.Stat(theirFile); err != nil {
+		t.Errorf("the sweep deleted %q, which lobster never created and did not mark: %v", theirFile, err)
+	}
+	if _, err := os.Stat(theirs); err != nil {
+		t.Errorf("the sweep deleted the unmarked directory %q: %v", theirs, err)
+	}
+}
+
+// Make is where the marker comes from for every caller that does not create its
+// own directory, so a directory it made must be sweepable by a later run.
+func TestMakeMarksTheDirectoryItCreates(t *testing.T) {
+	fakeHome(t)
+
+	dir, _, err := Make("probe", time.Hour, nil)
+	if err != nil {
+		t.Fatalf("Make: %v", err)
+	}
+	t.Cleanup(func() { Remove(dir) })
+
+	if _, err := os.Stat(filepath.Join(dir, Marker)); err != nil {
+		t.Errorf("Make left %q unmarked, so no later run may sweep it: %v", dir, err)
 	}
 }

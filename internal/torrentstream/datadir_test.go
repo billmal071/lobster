@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"lobster/internal/userdir"
 )
 
 // fakeHome points os.UserHomeDir at a throwaway directory containing the
@@ -124,6 +126,11 @@ func TestNewDataDirPrunesAbandonedSiblings(t *testing.T) {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatalf("seeding %q: %v", d, err)
 		}
+		// Both are marked as lobster's, so the prefix is the only thing that
+		// separates them here — the marker is covered by the lookalike test.
+		if err := userdir.MarkOwned(d); err != nil {
+			t.Fatalf("marking %q: %v", d, err)
+		}
 		old := time.Now().Add(-dataStaleAfter - time.Hour)
 		if err := os.Chtimes(d, old, old); err != nil {
 			t.Fatalf("backdating %q: %v", d, err)
@@ -169,5 +176,67 @@ func TestCloseRemovesTheDataDirButNotItsParent(t *testing.T) {
 	}
 	if _, err := os.Stat(configured); err != nil {
 		t.Errorf("configured parent %q was removed by Close: %v", configured, err)
+	}
+}
+
+// A configured torrent_dir is a directory the user chose, so it can hold
+// directories lobster never created — and "starts with torrent-" is a name a
+// user is entitled to use. Pruning by name alone deletes their data: the sweep
+// is recursive and the window is only 24 hours.
+func TestNewDataDirKeepsUnownedLookalikeDirectories(t *testing.T) {
+	configured := filepath.Join(t.TempDir(), "Downloads")
+	theirs := filepath.Join(configured, dataPrefix+"-backups")
+	theirFile := filepath.Join(theirs, "2019-tax-return.pdf")
+	if err := os.MkdirAll(theirs, 0o700); err != nil {
+		t.Fatalf("seeding %q: %v", theirs, err)
+	}
+	if err := os.WriteFile(theirFile, []byte("not lobster's"), 0o600); err != nil {
+		t.Fatalf("seeding %q: %v", theirFile, err)
+	}
+	old := time.Now().Add(-dataStaleAfter - time.Hour)
+	if err := os.Chtimes(theirs, old, old); err != nil {
+		t.Fatalf("backdating %q: %v", theirs, err)
+	}
+
+	dir, err := newDataDir(configured)
+	if err != nil {
+		t.Fatalf("newDataDir(%q): %v", configured, err)
+	}
+	t.Cleanup(func() { removeDataDir(dir) })
+
+	if _, err := os.Stat(theirFile); err != nil {
+		t.Errorf("a run deleted %q, a file lobster never created, because its parent directory's name begins with %q-: %v", theirFile, dataPrefix, err)
+	}
+	if _, err := os.Stat(theirs); err != nil {
+		t.Errorf("a run deleted the user's own directory %q: %v", theirs, err)
+	}
+}
+
+// Pruning by marker only works if lobster marks what it creates: the marker is
+// what bounds growth in the configured case, where a run killed before Close
+// leaves tens of gigabytes behind and nothing else reclaims it.
+func TestNewDataDirSweepsItsOwnAbandonedRun(t *testing.T) {
+	configured := filepath.Join(t.TempDir(), "torrents")
+
+	abandoned, err := newDataDir(configured)
+	if err != nil {
+		t.Fatalf("newDataDir(%q): %v", configured, err)
+	}
+	if err := os.WriteFile(filepath.Join(abandoned, "piece.bin"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("writing payload: %v", err)
+	}
+	old := time.Now().Add(-dataStaleAfter - time.Hour)
+	if err := os.Chtimes(abandoned, old, old); err != nil {
+		t.Fatalf("backdating %q: %v", abandoned, err)
+	}
+
+	dir, err := newDataDir(configured)
+	if err != nil {
+		t.Fatalf("second newDataDir(%q): %v", configured, err)
+	}
+	t.Cleanup(func() { removeDataDir(dir) })
+
+	if _, err := os.Stat(abandoned); !os.IsNotExist(err) {
+		t.Errorf("a data dir this code created itself survived a later run (stat err %v); payloads would accumulate unbounded in the configured dir", err)
 	}
 }
