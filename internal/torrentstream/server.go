@@ -35,8 +35,8 @@ type Server struct {
 	srv    *http.Server
 	ln     net.Listener
 	base   string
-	// dataDir holds this run's pieces and is removed on Close.
-	dataDir string
+	// data holds this run's pieces and is removed on Close.
+	data runDir
 
 	// entries is read by HTTP handler goroutines while Serve writes it, so it
 	// needs the mutex even though writes only happen at stream setup.
@@ -68,14 +68,14 @@ func New(dataDir string) (*Server, error) {
 			"torrent streaming needs a 64-bit build: this one is 32-bit and cannot memory-map a multi-gigabyte file.\n"+
 				"Either rebuild with GOARCH=amd64, or re-run with %s=%s", fileIoEnv, classicIo)
 	}
-	dataDir, err := newDataDir(dataDir)
+	data, err := newDataDir(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("creating torrent data directory: %w", err)
 	}
 
 	cfg := torrent.NewDefaultClientConfig()
-	cfg.DataDir = dataDir
-	cfg.DefaultStorage = storage.NewFile(dataDir)
+	cfg.DataDir = data.path
+	cfg.DefaultStorage = storage.NewFile(data.path)
 	// Seeding is what turns watching into distributing. Leave it off by default;
 	// the swarm still sees this peer while it leeches, so this is not anonymity,
 	// only a smaller footprint.
@@ -84,14 +84,14 @@ func New(dataDir string) (*Server, error) {
 
 	client, err := torrent.NewClient(cfg)
 	if err != nil {
-		removeDataDir(dataDir)
+		data.remove()
 		return nil, fmt.Errorf("starting torrent client: %w", err)
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		client.Close()
-		removeDataDir(dataDir)
+		data.remove()
 		return nil, err
 	}
 
@@ -99,7 +99,7 @@ func New(dataDir string) (*Server, error) {
 		client:  client,
 		ln:      ln,
 		base:    fmt.Sprintf("http://%s", ln.Addr().String()),
-		dataDir: dataDir,
+		data:    data,
 		entries: make(map[string]*serveEntry),
 	}
 	mux := http.NewServeMux()
@@ -190,14 +190,14 @@ func (s *Server) Close() error {
 	if s.client != nil {
 		s.client.Close()
 	}
-	removeDataDir(s.dataDir)
+	s.data.remove()
 	return nil
 }
 
 // DataDir is where this run's pieces land. The caller shows it: the default is
 // chosen rather than configured, and when no directory under $HOME is usable
 // it degrades to a temp directory, which is worth seeing rather than guessing.
-func (s *Server) DataDir() string { return s.dataDir }
+func (s *Server) DataDir() string { return s.data.path }
 
 // IsMagnet reports whether a stream URL is a magnet rather than an HTTP stream.
 func IsMagnet(u string) bool {

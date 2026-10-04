@@ -44,7 +44,7 @@ const dataStaleAfter = 24 * time.Hour
 // there, and what stops a run killed before Close from leaving its partial
 // download behind forever: unlike /tmp, nothing reclaims a directory under
 // $HOME.
-func newDataDir(configured string) (string, error) {
+func newDataDir(configured string) (runDir, error) {
 	if configured == "" {
 		// userdir falls back to os.MkdirTemp when no base under $HOME is
 		// usable (a container with no writable home, say). That is the
@@ -52,28 +52,58 @@ func newDataDir(configured string) (string, error) {
 		// all is worse — so it is accepted and surfaced instead: the caller
 		// prints the path it is about to fill.
 		dir, _, err := userdir.Make(dataPrefix, dataStaleAfter, nil)
-		return dir, err
+		if err != nil {
+			return runDir{}, err
+		}
+		return runDir{path: dir, ownParent: true}, nil
 	}
 	if err := os.MkdirAll(configured, 0o700); err != nil {
-		return "", err
+		return runDir{}, err
 	}
 	userdir.PruneStale(configured, dataPrefix, dataStaleAfter)
 	dir, err := os.MkdirTemp(configured, dataPrefix+"-")
 	if err != nil {
-		return "", err
+		return runDir{}, err
 	}
 	// Without the marker a later run will not sweep this directory, so a run
 	// killed before Close would leave its payload in the user's directory
 	// forever. Failing here is the honest answer: a directory we just created
 	// and cannot write a zero-byte file into will not hold a download either.
 	if err := userdir.MarkOwned(dir); err != nil {
-		userdir.Remove(dir)
-		return "", err
+		_ = os.RemoveAll(dir)
+		return runDir{}, err
 	}
-	return dir, nil
+	return runDir{path: dir}, nil
 }
 
-// removeDataDir deletes a run's data directory, and the shared parent with it
-// when that parent is lobster's own and now empty. A user-chosen torrent_dir
-// is never removed.
-func removeDataDir(dir string) { userdir.Remove(dir) }
+// runDir is where one run's pieces land, together with how much of the path
+// above it the run is entitled to delete.
+type runDir struct {
+	path string
+
+	// ownParent records that lobster chose the parent directory as well as the
+	// run directory — the default, where userdir.Make creates
+	// <base>/.lobster/<run>. Only then may cleanup tidy the parent away once
+	// it empties.
+	//
+	// It is false for a configured torrent_dir, and that is not a detail:
+	// userdir.Remove decides whether to remove the parent by comparing its
+	// *name* to userdir.Parent, so a user who points torrent_dir at a
+	// directory of their own called ".lobster" would otherwise have it deleted
+	// — with its permissions — the first time a run finished. A configured
+	// directory is never lobster's to remove, whatever it is called.
+	ownParent bool
+}
+
+// remove deletes the run's data directory, and lobster's own shared parent with
+// it when that parent is now empty.
+func (d runDir) remove() {
+	if d.path == "" {
+		return
+	}
+	if d.ownParent {
+		userdir.Remove(d.path)
+		return
+	}
+	_ = os.RemoveAll(d.path)
+}

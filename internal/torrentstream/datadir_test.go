@@ -3,6 +3,7 @@ package torrentstream
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -54,11 +55,12 @@ func resolvedRel(t *testing.T, home, path string) string {
 func TestNewDataDirDefaultsUnderHome(t *testing.T) {
 	home := fakeHome(t)
 
-	dir, err := newDataDir("")
+	data, err := newDataDir("")
 	if err != nil {
 		t.Fatalf("newDataDir(\"\"): %v", err)
 	}
-	t.Cleanup(func() { removeDataDir(dir) })
+	dir := data.path
+	t.Cleanup(data.remove)
 
 	if rel := resolvedRel(t, home, dir); strings.HasPrefix(rel, "..") {
 		t.Errorf("torrent data dir %q resolves outside the home directory (rel %q); a multi-gigabyte payload must not land on the root filesystem", dir, rel)
@@ -90,11 +92,12 @@ func TestNewDataDirUsesAFreshSubdirOfTheConfiguredDir(t *testing.T) {
 		t.Fatalf("seeding configured dir: %v", err)
 	}
 
-	dir, err := newDataDir(configured)
+	data, err := newDataDir(configured)
 	if err != nil {
 		t.Fatalf("newDataDir(%q): %v", configured, err)
 	}
-	t.Cleanup(func() { removeDataDir(dir) })
+	dir := data.path
+	t.Cleanup(data.remove)
 
 	if parent := filepath.Dir(dir); parent != configured {
 		t.Errorf("data dir %q is not directly inside the configured dir %q", dir, configured)
@@ -106,11 +109,12 @@ func TestNewDataDirUsesAFreshSubdirOfTheConfiguredDir(t *testing.T) {
 		t.Errorf("data dir %q is not named %q-<random>; the prune sweep only recognises that prefix", dir, dataPrefix)
 	}
 
-	second, err := newDataDir(configured)
+	secondData, err := newDataDir(configured)
 	if err != nil {
 		t.Fatalf("second newDataDir(%q): %v", configured, err)
 	}
-	t.Cleanup(func() { removeDataDir(second) })
+	second := secondData.path
+	t.Cleanup(secondData.remove)
 	if second == dir {
 		t.Errorf("two runs got the same data dir %q; concurrent runs would corrupt each other's pieces", dir)
 	}
@@ -137,11 +141,12 @@ func TestNewDataDirPrunesAbandonedSiblings(t *testing.T) {
 		}
 	}
 
-	dir, err := newDataDir(configured)
+	data, err := newDataDir(configured)
 	if err != nil {
 		t.Fatalf("newDataDir(%q): %v", configured, err)
 	}
-	t.Cleanup(func() { removeDataDir(dir) })
+	dir := data.path
+	t.Cleanup(data.remove)
 
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Errorf("abandoned data dir %q survived a later run (stat err %v); torrent payloads would accumulate unbounded", stale, err)
@@ -158,15 +163,16 @@ func TestNewDataDirPrunesAbandonedSiblings(t *testing.T) {
 // gigabytes per film with nothing deleting it.
 func TestCloseRemovesTheDataDirButNotItsParent(t *testing.T) {
 	configured := filepath.Join(t.TempDir(), "torrents")
-	dir, err := newDataDir(configured)
+	data, err := newDataDir(configured)
 	if err != nil {
 		t.Fatalf("newDataDir(%q): %v", configured, err)
 	}
+	dir := data.path
 	if err := os.WriteFile(filepath.Join(dir, "piece.bin"), []byte("x"), 0o600); err != nil {
 		t.Fatalf("writing payload: %v", err)
 	}
 
-	s := &Server{dataDir: dir}
+	s := &Server{data: data}
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -198,11 +204,11 @@ func TestNewDataDirKeepsUnownedLookalikeDirectories(t *testing.T) {
 		t.Fatalf("backdating %q: %v", theirs, err)
 	}
 
-	dir, err := newDataDir(configured)
+	data, err := newDataDir(configured)
 	if err != nil {
 		t.Fatalf("newDataDir(%q): %v", configured, err)
 	}
-	t.Cleanup(func() { removeDataDir(dir) })
+	t.Cleanup(data.remove)
 
 	if _, err := os.Stat(theirFile); err != nil {
 		t.Errorf("a run deleted %q, a file lobster never created, because its parent directory's name begins with %q-: %v", theirFile, dataPrefix, err)
@@ -218,10 +224,11 @@ func TestNewDataDirKeepsUnownedLookalikeDirectories(t *testing.T) {
 func TestNewDataDirSweepsItsOwnAbandonedRun(t *testing.T) {
 	configured := filepath.Join(t.TempDir(), "torrents")
 
-	abandoned, err := newDataDir(configured)
+	abandonedData, err := newDataDir(configured)
 	if err != nil {
 		t.Fatalf("newDataDir(%q): %v", configured, err)
 	}
+	abandoned := abandonedData.path
 	if err := os.WriteFile(filepath.Join(abandoned, "piece.bin"), []byte("x"), 0o600); err != nil {
 		t.Fatalf("writing payload: %v", err)
 	}
@@ -230,13 +237,80 @@ func TestNewDataDirSweepsItsOwnAbandonedRun(t *testing.T) {
 		t.Fatalf("backdating %q: %v", abandoned, err)
 	}
 
-	dir, err := newDataDir(configured)
+	data, err := newDataDir(configured)
 	if err != nil {
 		t.Fatalf("second newDataDir(%q): %v", configured, err)
 	}
-	t.Cleanup(func() { removeDataDir(dir) })
+	t.Cleanup(data.remove)
 
 	if _, err := os.Stat(abandoned); !os.IsNotExist(err) {
 		t.Errorf("a data dir this code created itself survived a later run (stat err %v); payloads would accumulate unbounded in the configured dir", err)
+	}
+}
+
+// userdir.Remove tidies the shared parent away once the last run directory
+// leaves it, and recognises that parent by its name. A user is free to point
+// torrent_dir at a directory of their own called ".lobster" — at which point
+// the same cleanup deletes the directory they configured, along with whatever
+// permissions they set on it. A configured directory is never lobster's to
+// remove.
+func TestCloseKeepsAConfiguredParentCalledDotLobster(t *testing.T) {
+	configured := filepath.Join(t.TempDir(), userdir.Parent)
+	if err := os.MkdirAll(configured, 0o750); err != nil {
+		t.Fatalf("creating configured dir: %v", err)
+	}
+	before, err := os.Stat(configured)
+	if err != nil {
+		t.Fatalf("stat configured dir: %v", err)
+	}
+
+	data, err := newDataDir(configured)
+	if err != nil {
+		t.Fatalf("newDataDir(%q): %v", configured, err)
+	}
+	dir := data.path
+
+	s := &Server{data: data}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("data dir %q survived Close (stat err %v)", dir, err)
+	}
+	after, err := os.Stat(configured)
+	if err != nil {
+		t.Fatalf("Close removed the configured torrent_dir %q because it is named %q: %v", configured, userdir.Parent, err)
+	}
+	if runtime.GOOS != "windows" && after.Mode().Perm() != before.Mode().Perm() {
+		t.Errorf("configured dir %q came back with mode %v, was %v", configured, after.Mode().Perm(), before.Mode().Perm())
+	}
+}
+
+// The other direction: lobster's own .lobster parent under $HOME is lobster's
+// to tidy, and must still be removed once the last run leaves it. Sparing every
+// parent would leave an empty dot-directory in the user's Videos folder forever.
+func TestCloseTidiesTheDefaultParent(t *testing.T) {
+	fakeHome(t)
+
+	data, err := newDataDir("")
+	if err != nil {
+		t.Fatalf("newDataDir(\"\"): %v", err)
+	}
+	dir := data.path
+	// The temp-dir fallback has no .lobster parent to tidy, so there would be
+	// nothing to assert; it only happens when no base under $HOME is usable.
+	parent := filepath.Dir(dir)
+	if filepath.Base(parent) != userdir.Parent {
+		t.Skipf("default landed in %q, whose parent is not %q; no home base was usable", dir, userdir.Parent)
+	}
+
+	s := &Server{data: data}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if _, err := os.Stat(parent); !os.IsNotExist(err) {
+		t.Errorf("lobster's own parent %q survived removal of the last run directory in it (stat err %v)", parent, err)
 	}
 }
