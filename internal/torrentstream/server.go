@@ -35,9 +35,8 @@ type Server struct {
 	srv    *http.Server
 	ln     net.Listener
 	base   string
-	dir    string
-	// tmpDir is removed on Close when the data directory was not user-chosen.
-	tmpDir string
+	// dataDir holds this run's pieces and is removed on Close.
+	dataDir string
 
 	// entries is read by HTTP handler goroutines while Serve writes it, so it
 	// needs the mutex even though writes only happen at stream setup.
@@ -54,8 +53,11 @@ type serveEntry struct {
 // multi-gigabyte film.
 const is32Bit = ^uint(0)>>32 == 0
 
-// New starts a torrent client and a loopback HTTP server. dataDir is where
-// pieces land; empty uses a temp directory removed on Close.
+// New starts a torrent client and a loopback HTTP server.
+//
+// dataDir is the user's configured torrent directory, empty for the default.
+// Either way the pieces land in a fresh subdirectory of it, which Close
+// removes — see newDataDir for where the default points and why.
 func New(dataDir string) (*Server, error) {
 	// A 32-bit build cannot map a 2 GB file, and the failure surfaces deep in
 	// the library as "mapping file: invalid argument" after the download has
@@ -66,16 +68,9 @@ func New(dataDir string) (*Server, error) {
 			"torrent streaming needs a 64-bit build: this one is 32-bit and cannot memory-map a multi-gigabyte file.\n"+
 				"Either rebuild with GOARCH=amd64, or re-run with %s=%s", fileIoEnv, classicIo)
 	}
-	tmp := ""
-	if dataDir == "" {
-		d, err := os.MkdirTemp("", "lobster-torrent-")
-		if err != nil {
-			return nil, err
-		}
-		dataDir, tmp = d, d
-	}
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return nil, err
+	dataDir, err := newDataDir(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("creating torrent data directory: %w", err)
 	}
 
 	cfg := torrent.NewDefaultClientConfig()
@@ -89,18 +84,14 @@ func New(dataDir string) (*Server, error) {
 
 	client, err := torrent.NewClient(cfg)
 	if err != nil {
-		if tmp != "" {
-			_ = os.RemoveAll(tmp)
-		}
+		removeDataDir(dataDir)
 		return nil, fmt.Errorf("starting torrent client: %w", err)
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		client.Close()
-		if tmp != "" {
-			_ = os.RemoveAll(tmp)
-		}
+		removeDataDir(dataDir)
 		return nil, err
 	}
 
@@ -108,8 +99,7 @@ func New(dataDir string) (*Server, error) {
 		client:  client,
 		ln:      ln,
 		base:    fmt.Sprintf("http://%s", ln.Addr().String()),
-		dir:     dataDir,
-		tmpDir:  tmp,
+		dataDir: dataDir,
 		entries: make(map[string]*serveEntry),
 	}
 	mux := http.NewServeMux()
@@ -185,8 +175,14 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, entry.name, time.Time{}, reader)
 }
 
-// Close stops the HTTP server and the torrent client, and removes the temporary
-// data directory when one was created.
+// Close stops the HTTP server and the torrent client, and removes this run's
+// data directory.
+//
+// The payload is deliberately not kept for a later resume. lobster persists no
+// torrent state, so nothing could resume it; what a kept directory would
+// actually do is accumulate tens of gigabytes per film on the user's home
+// volume with nothing ever deleting it — trading the sudden failure this
+// replaces for a slow one.
 func (s *Server) Close() error {
 	if s.srv != nil {
 		_ = s.srv.Close()
@@ -194,11 +190,14 @@ func (s *Server) Close() error {
 	if s.client != nil {
 		s.client.Close()
 	}
-	if s.tmpDir != "" {
-		_ = os.RemoveAll(s.tmpDir)
-	}
+	removeDataDir(s.dataDir)
 	return nil
 }
+
+// DataDir is where this run's pieces land. The caller shows it: the default is
+// chosen rather than configured, and when no directory under $HOME is usable
+// it degrades to a temp directory, which is worth seeing rather than guessing.
+func (s *Server) DataDir() string { return s.dataDir }
 
 // IsMagnet reports whether a stream URL is a magnet rather than an HTTP stream.
 func IsMagnet(u string) bool {

@@ -739,6 +739,11 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	return playStream(fbStream, title, selected, season, episode)
 }
 
+// newTorrentServer stands up the loopback torrent server. A package var so a
+// test can assert which data directory playStream hands it without starting a
+// torrent client or joining a swarm.
+var newTorrentServer = torrentstream.New
+
 // newPlayer constructs the player playStream launches. A package var, seamed
 // like agentProvider and agentResolveAndPlay (cmd/play.go), so tests can
 // exercise playStream's post-playback handling without a real media player.
@@ -809,11 +814,19 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	// film over loopback, then carry on with an ordinary HTTP URL.
 	if torrentstream.IsMagnet(stream.URL) {
 		fmt.Fprintln(os.Stderr, "Torrent source: joining swarm — your IP is visible to its peers.")
-		ts, err := torrentstream.New("")
+		// The data directory is where tens of gigabytes may land, so it is
+		// not lobster's to pick silently: torrent_dir names it, and an empty
+		// value lets torrentstream choose a place on the user's home volume.
+		torrentDir, err := cfg.ExpandTorrentDir()
+		if err != nil {
+			return fmt.Errorf("resolving torrent_dir: %w", err)
+		}
+		ts, err := newTorrentServer(torrentDir)
 		if err != nil {
 			return fmt.Errorf("starting torrent stream: %w", err)
 		}
 		defer func() { _ = ts.Close() }()
+		fmt.Fprintf(os.Stderr, "Torrent data: %s (removed when playback ends)\n", ts.DataDir())
 
 		stopT := ui.StartSpinner("Fetching torrent metadata...")
 		localURL, err := ts.Serve(stream.URL)

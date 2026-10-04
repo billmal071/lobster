@@ -88,8 +88,12 @@ type Config struct {
 	// own an opt-out either: fallbackProviders appends YTS whenever this is
 	// true, regardless of Base or APIURL (cmd/fallback.go). Staying out of a
 	// swarm takes both — a named source and this left false.
-	TorrentFallback bool         `toml:"torrent_fallback"`
-	LiveTV          LiveTVConfig `toml:"live_tv"`
+	TorrentFallback bool `toml:"torrent_fallback"`
+	// TorrentDir is where a torrent's pieces are written while it streams.
+	// Empty — the default — means lobster chooses (see
+	// internal/torrentstream.newDataDir).
+	TorrentDir string       `toml:"torrent_dir"`
+	LiveTV     LiveTVConfig `toml:"live_tv"`
 }
 
 // XtreamConfig holds optional Xtream-codes credentials for a paid IPTV sub.
@@ -339,6 +343,23 @@ func (c *Config) ExpandDownloadDir() (string, error) {
 		dir = filepath.Join(home, dir[2:])
 	}
 	return filepath.Abs(dir)
+}
+
+// ExpandTorrentDir resolves the configured torrent data directory, leaving the
+// unset sentinel alone.
+//
+// Empty must stay empty: it is what tells torrentstream to choose the location
+// itself, and filepath.Abs would turn it into the process's working directory —
+// a plausible-looking path that would silently become a user-chosen one.
+//
+// Unlike ExpandDownloadDir this goes through expandTilde, so a leading `~\` is
+// expanded on Windows and left as the ordinary filename character it is
+// everywhere else.
+func (c *Config) ExpandTorrentDir() (string, error) {
+	if c.TorrentDir == "" {
+		return "", nil
+	}
+	return filepath.Abs(expandTilde(c.TorrentDir))
 }
 
 // HistoryPath returns the path to the history file.
