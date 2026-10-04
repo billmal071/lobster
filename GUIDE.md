@@ -284,6 +284,13 @@ auto_next = true
 # Download directory
 download_dir = "~/Videos/lobster"
 
+# Where a streaming torrent's pieces are written while it plays. This is not
+# the same thing as download_dir: download_dir is a library of finished files
+# you keep, while this holds a partial payload that is deleted when playback
+# ends. Unset — the default — means ~/Videos/.lobster/torrent-<random>. See
+# "Where torrent data lands".
+# torrent_dir = "/mnt/scratch/lobster"
+
 # Fall back to YTS torrents when every streaming provider fails.
 #
 # This is NOT the swarm opt-in, and leaving it false does not keep you out of
@@ -382,6 +389,28 @@ base = "flixhq.ws"
 
 Resuming *across* sources needs the history file to identify a title by
 something portable rather than by provider ID, which is a change of its own.
+
+### Where torrent data lands
+
+A streaming torrent writes its pieces to disk as they arrive, and a film can be
+tens of gigabytes — a 4K remux commonly 15-50GB. By default they go to
+`~/Videos/.lobster/torrent-<random>`, which is on the same volume as your home
+directory. That is deliberate: `/tmp` is frequently a small partition or a
+tmpfs sized from RAM, so a single large torrent there can fill the root
+filesystem outright, and `/tmp` is also private to a snap-confined process, so
+a path written there is not reachable from outside it. (It is the same reason
+subtitle staging lives under `~/Videos/.lobster/`.)
+
+Set `torrent_dir` to put the data somewhere else — another drive, say. Whatever
+the location, each run gets its own `torrent-<random>` subdirectory inside it
+and nothing else in that directory is touched.
+
+The directory is removed when playback ends. The payload is not kept for a
+later resume: lobster stores no torrent state, so nothing could resume it, and
+a kept directory would instead grow by a film's worth of data per run with
+nothing deleting it. A run killed outright — power cut, `kill -9` — cannot
+clean up after itself, so a later run sweeps any `torrent-*` directory that has
+not been written to for 24 hours.
 
 ### Torrent storage backend
 

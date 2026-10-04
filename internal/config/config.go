@@ -88,8 +88,12 @@ type Config struct {
 	// own an opt-out either: fallbackProviders appends YTS whenever this is
 	// true, regardless of Base or APIURL (cmd/fallback.go). Staying out of a
 	// swarm takes both — a named source and this left false.
-	TorrentFallback bool         `toml:"torrent_fallback"`
-	LiveTV          LiveTVConfig `toml:"live_tv"`
+	TorrentFallback bool `toml:"torrent_fallback"`
+	// TorrentDir is where a torrent's pieces are written while it streams.
+	// Empty — the default — means lobster chooses (see
+	// internal/torrentstream.newDataDir).
+	TorrentDir string       `toml:"torrent_dir"`
+	LiveTV     LiveTVConfig `toml:"live_tv"`
 }
 
 // XtreamConfig holds optional Xtream-codes credentials for a paid IPTV sub.
@@ -317,15 +321,29 @@ func (c *Config) Validate() error {
 // a real relative path; expanding it there would quietly load a different file
 // than the one written in the config.
 func expandTilde(p string) string {
-	if !strings.HasPrefix(p, "~/") &&
-		!(runtime.GOOS == "windows" && strings.HasPrefix(p, `~\`)) {
-		return p
-	}
-	home, err := os.UserHomeDir()
+	expanded, err := expandTildeErr(p)
 	if err != nil {
 		return p
 	}
-	return filepath.Join(home, p[2:])
+	return expanded
+}
+
+// expandTildeErr is expandTilde for callers that turn the result into a
+// directory they are about to create and write to. Those cannot take the silent
+// passthrough: filepath.Abs resolves an unexpanded "~/torrents" to
+// "<working dir>/~/torrents", so the caller would create a literal "~"
+// directory wherever the process happens to have been started rather than
+// reporting that it never found the home directory at all.
+func expandTildeErr(p string) (string, error) {
+	if !strings.HasPrefix(p, "~/") &&
+		!(runtime.GOOS == "windows" && strings.HasPrefix(p, `~\`)) {
+		return p, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("expanding home dir in %q: %w", p, err)
+	}
+	return filepath.Join(home, p[2:]), nil
 }
 
 // ExpandDownloadDir resolves ~ in the download directory path.
@@ -337,6 +355,29 @@ func (c *Config) ExpandDownloadDir() (string, error) {
 			return "", fmt.Errorf("expanding home dir: %w", err)
 		}
 		dir = filepath.Join(home, dir[2:])
+	}
+	return filepath.Abs(dir)
+}
+
+// ExpandTorrentDir resolves the configured torrent data directory, leaving the
+// unset sentinel alone.
+//
+// Empty must stay empty: it is what tells torrentstream to choose the location
+// itself, and filepath.Abs would turn it into the process's working directory —
+// a plausible-looking path that would silently become a user-chosen one.
+//
+// Unlike ExpandDownloadDir this gates the `~\` form on Windows, so off Windows
+// a backslash stays the ordinary filename character it is there. Both agree on
+// the failure: a home directory that cannot be resolved is an error, not a path
+// with a literal "~" left in it, because this one names a directory lobster is
+// about to create and fill with tens of gigabytes.
+func (c *Config) ExpandTorrentDir() (string, error) {
+	if c.TorrentDir == "" {
+		return "", nil
+	}
+	dir, err := expandTildeErr(c.TorrentDir)
+	if err != nil {
+		return "", err
 	}
 	return filepath.Abs(dir)
 }

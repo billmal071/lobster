@@ -109,16 +109,23 @@ func BestMatch(subtitles []media.Subtitle, language string) *media.Subtitle {
 // TempDir manages the throwaway directory downloaded subtitles are staged in.
 type TempDir struct {
 	path string
+
+	// stopAlive ends the goroutine that keeps refreshing the directory's
+	// liveness marker, so a session outlasting staleAfter is not swept by a
+	// second lobster starting in the meantime. A run killed without reaching it
+	// stops refreshing by itself, which is what keeps abandoned directories
+	// collectable at all — see userdir.Keepalive.
+	stopAlive func()
 }
 
 // NewTempDir creates a randomized staging directory for subtitle files in a
 // location sandboxed players can actually read.
 func NewTempDir() (*TempDir, error) {
-	dir, err := newStagingDir()
+	dir, stopAlive, err := newStagingDir()
 	if err != nil {
 		return nil, fmt.Errorf("creating subtitle staging dir: %w", err)
 	}
-	return &TempDir{path: dir}, nil
+	return &TempDir{path: dir, stopAlive: stopAlive}, nil
 }
 
 // Path returns the directory subtitle files are written into.
@@ -128,7 +135,7 @@ func (t *TempDir) Path() string { return t.path }
 // unlike /tmp, the staging directory lives under $HOME and nothing else
 // reclaims it.
 func (t *TempDir) Cleanup() {
-	removeStagingDir(t.path)
+	removeStagingDir(t.path, t.stopAlive)
 }
 
 // Download fetches a subtitle file to the temp directory and returns the local path.
