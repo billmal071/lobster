@@ -585,9 +585,17 @@ func (p *AnimeOnsen) confirm(contentID string, n int) {
 	p.confirmed[p.confirmKey(contentID, n)] = true
 }
 
-// probeSet HEADs every manifest in ns and reports which answered, along with
+// probeSet HEADs every manifest in ns and reports which answered, which of
+// those answers came from a request that was the only one in flight, and
 // whether any probe was left unanswered — shed for good, or still in flight
 // when the budget ran out.
+//
+// The solitary half is not bookkeeping for its own sake. A 404 observed inside
+// a concurrent wave is the unreliable observation this whole file is about, and
+// one observed alone is the reliable one; a caller that knows which it got can
+// tell whether the boundary still needs re-checking. It is decided by
+// construction rather than measured: a wave of one request is alone on the
+// wire, and the second pass below is serial by definition.
 //
 // At most animeOnsenProbeInFlight of them are on the wire at once: origin
 // sheds concurrent cache misses, and the whole wave arriving together is the
@@ -601,10 +609,16 @@ func (p *AnimeOnsen) confirm(contentID string, n int) {
 // rejected Referer or User-Agent looks like here, and reading it as "no such
 // episode" would silently shorten every episode list to nothing instead of
 // saying what broke.
-func (p *AnimeOnsen) probeSet(contentID string, ns []int, deadline time.Time) (map[int]bool, bool, error) {
+func (p *AnimeOnsen) probeSet(contentID string, ns []int, deadline time.Time) (map[int]bool, map[int]bool, bool, error) {
 	present := make(map[int]bool, len(ns))
+	alone := make(map[int]bool, len(ns))
 	errs := make([]error, len(ns))
 	oks := make([]bool, len(ns))
+	solo := make([]bool, len(ns))
+	for i := range solo {
+		// A wave of one request has nothing to be concurrent with.
+		solo[i] = len(ns) == 1
+	}
 
 	sem := make(chan struct{}, animeOnsenProbeInFlight)
 	var wg sync.WaitGroup
@@ -631,17 +645,19 @@ func (p *AnimeOnsen) probeSet(contentID string, ns []int, deadline time.Time) (m
 	for i, n := range ns {
 		if errs[i] != nil && errors.Is(errs[i], errAnimeOnsenThrottled) {
 			oks[i], errs[i] = p.probeEpisodeWithRetries(contentID, n, deadline, animeOnsenProbeRetries)
+			solo[i] = true
 		}
 		switch {
 		case errs[i] == nil:
 			present[n] = oks[i]
+			alone[n] = solo[i]
 		case errors.Is(errs[i], errAnimeOnsenThrottled), errors.Is(errs[i], errAnimeOnsenProbeExpired):
 			unanswered = true
 		default:
-			return nil, false, errs[i]
+			return nil, nil, false, errs[i]
 		}
 	}
-	return present, unanswered, nil
+	return present, alone, unanswered, nil
 }
 
 // episodeCount returns how many episodes contentID has, by probing the CDN.
@@ -705,12 +721,30 @@ func (p *AnimeOnsen) episodeCount(contentID string) (int, error) {
 
 	floor := 0
 	for round := 0; round < animeOnsenConfirmRounds; round++ {
-		n, short, err := p.searchBoundary(contentID, floor, deadline)
+		n, short, confirmed, err := p.searchBoundary(contentID, floor, deadline)
 		if err != nil {
 			return 0, err
 		}
 		if short != "" {
 			return p.short(contentID, n, short)
+		}
+		if confirmed {
+			// The search already measured episode n+1 absent with nothing else
+			// in flight, which is the standard the probe below exists to
+			// apply. Asking again would spend the budget's last and most
+			// expensive round trip re-establishing a fact already established
+			// to that standard: the manifest after the end of a series is
+			// never in the edge cache, so that probe is always an origin miss
+			// — the ~1s round trip here, against a 4500ms budget — and
+			// spending it is what left healthy runs reporting an unconfirmed
+			// end.
+			//
+			// This is the only shortcut taken, and it is the same oracle
+			// rather than a weaker one. A boundary whose absence was observed
+			// inside a concurrent wave gets no shortcut: that is the
+			// observation a shedding CDN falsifies, and re-asking it is what
+			// two episodes of a twelve-episode series rested on.
+			return n, nil
 		}
 		if err := expired(); err != nil {
 			// searchBoundary found the end — it returned no reason, which it
@@ -831,7 +865,7 @@ func expiredBudgetReason() string {
 // observation episodeCount's confirmation probe re-tests — and a non-empty one
 // means it never was, which is the state where episodes really are missing
 // from the list.
-func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.Time) (int, string, error) {
+func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.Time) (int, string, bool, error) {
 	expired := func() error {
 		if p.now().After(deadline) {
 			return errors.New(expiredBudgetReason())
@@ -841,14 +875,19 @@ func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.T
 	// lo is the highest episode known to exist. hi is the lowest known not to
 	// (0: not yet found).
 	lo, hi := floor, 0
-	note := func(present map[int]bool) {
+	// hiAlone records whether hi's absence was measured by a request that was
+	// the only one in flight. It is paired with hi and reassigned with it, so
+	// it always describes the episode currently believed absent rather than
+	// some earlier, higher one.
+	hiAlone := false
+	note := func(present, alone map[int]bool) {
 		for n, ok := range present {
 			if ok {
 				if n > lo {
 					lo = n
 				}
 			} else if hi == 0 || n < hi {
-				hi = n
+				hi, hiAlone = n, alone[n]
 			}
 		}
 		// Contiguity: a present episode above the first absent one would
@@ -864,7 +903,7 @@ func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.T
 	// Bracket.
 	for step := 1; hi == 0 && floor+step <= animeOnsenMaxEpisodes; {
 		if err := expired(); err != nil {
-			return lo, err.Error(), nil
+			return lo, err.Error(), false, nil
 		}
 		ns := make([]int, 0, animeOnsenProbeWidth)
 		for len(ns) < animeOnsenProbeWidth && floor+step <= animeOnsenMaxEpisodes {
@@ -872,11 +911,11 @@ func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.T
 			step *= 2
 		}
 		wasLo, wasHi := lo, hi
-		present, unanswered, err := p.probeSet(contentID, ns, deadline)
+		present, alone, unanswered, err := p.probeSet(contentID, ns, deadline)
 		if err != nil {
-			return 0, "", err
+			return 0, "", false, err
 		}
-		note(present)
+		note(present, alone)
 		if unanswered && lo == wasLo && hi == wasHi {
 			// Every probe in the wave went unanswered, so the wave taught
 			// nothing. Widening and asking again would spend the budget
@@ -884,9 +923,9 @@ func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.T
 			// short. The budget is checked first so a wave the deadline cut
 			// off is reported as the expiry it was, not as throttling.
 			if err := expired(); err != nil {
-				return lo, err.Error(), nil
+				return lo, err.Error(), false, nil
 			}
-			return lo, "the CDN throttled the availability probe", nil
+			return lo, "the CDN throttled the availability probe", false, nil
 		}
 		if lo == floor && floor == 0 {
 			// Episode 1 itself answered absent, which is also what a bogus
@@ -904,7 +943,7 @@ func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.T
 			// already watched this content id serve an episode, so "nothing
 			// here" is no longer an available conclusion.
 			if err := expired(); err != nil {
-				return lo, err.Error(), nil
+				return lo, err.Error(), false, nil
 			}
 			ok, err := p.probeEpisode(contentID, 1, deadline)
 			if err != nil {
@@ -919,18 +958,18 @@ func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.T
 					// also not ErrNoResults, and there is nothing measured to
 					// prefer over asking the chain. An arm here would only
 					// reword it, and would be a line no test could reach.
-					return 0, "the CDN would not answer whether episode 1 exists", nil
+					return 0, "the CDN would not answer whether episode 1 exists", false, nil
 				}
-				return 0, "", err
+				return 0, "", false, err
 			}
 			if !ok {
-				return 0, "", fmt.Errorf("%w: animeonsen has no episodes for %q", ErrNoResults, contentID)
+				return 0, "", false, fmt.Errorf("%w: animeonsen has no episodes for %q", ErrNoResults, contentID)
 			}
 			lo, floor, step = 1, 1, 1
 			if hi != 0 && hi <= lo {
 				// The wave's own upper probes are no more trustworthy than
 				// the one just disproved; bracket again from the new floor.
-				hi = 0
+				hi, hiAlone = 0, false
 			}
 			continue
 		}
@@ -938,13 +977,13 @@ func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.T
 	if hi == 0 {
 		// Everything up to the ceiling answered. Report what was measured
 		// rather than widening forever, and say that is what happened.
-		return lo, fmt.Sprintf("every episode up to the %d-episode ceiling answered", animeOnsenMaxEpisodes), nil
+		return lo, fmt.Sprintf("every episode up to the %d-episode ceiling answered", animeOnsenMaxEpisodes), false, nil
 	}
 
 	// Narrow.
 	for hi-lo > 1 {
 		if err := expired(); err != nil {
-			return lo, err.Error(), nil
+			return lo, err.Error(), false, nil
 		}
 		gap := hi - lo - 1 // unknown episodes strictly between lo and hi
 		ns := make([]int, 0, animeOnsenNarrowWidth)
@@ -961,24 +1000,24 @@ func (p *AnimeOnsen) searchBoundary(contentID string, floor int, deadline time.T
 			// Only reachable if the arithmetic above stopped making progress,
 			// which would otherwise be an infinite loop. Report the measured
 			// lower bound instead of spinning.
-			return lo, "", nil
+			return lo, "", hiAlone, nil
 		}
 		wasLo, wasHi := lo, hi
-		present, unanswered, err := p.probeSet(contentID, ns, deadline)
+		present, alone, unanswered, err := p.probeSet(contentID, ns, deadline)
 		if err != nil {
-			return 0, "", err
+			return 0, "", false, err
 		}
-		note(present)
+		note(present, alone)
 		if unanswered && lo == wasLo && hi == wasHi {
 			// Same as in the bracket: nothing was learnt, so narrowing again
 			// would only burn budget. lo is still a measured episode.
 			if err := expired(); err != nil {
-				return lo, err.Error(), nil
+				return lo, err.Error(), false, nil
 			}
-			return lo, "the CDN throttled the availability probe", nil
+			return lo, "the CDN throttled the availability probe", false, nil
 		}
 	}
-	return lo, "", nil
+	return lo, "", hiAlone, nil
 }
 
 // GetSeasons reports the single season AnimeOnsen models. Like every anime

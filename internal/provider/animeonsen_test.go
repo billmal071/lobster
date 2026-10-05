@@ -1022,15 +1022,15 @@ func TestAnimeOnsenProbeReusesConfirmedEpisodesWithinARun(t *testing.T) {
 	}
 	second := len(f.requests()) - first
 	// Measured literals, written out rather than compared against each other
-	// or against the probe's own constants. A 12-episode series costs 14
-	// requests to enumerate cold and 7 to enumerate again, because the
+	// or against the probe's own constants. A 12-episode series costs 13
+	// requests to enumerate cold and 6 to enumerate again, because the
 	// episodes the first pass watched answer 200 are not asked a second time
 	// while every 404 still is.
-	if first != 14 {
-		t.Fatalf("first enumeration cost %d requests, want 14", first)
+	if first != 13 {
+		t.Fatalf("first enumeration cost %d requests, want 13", first)
 	}
-	if second != 7 {
-		t.Fatalf("second enumeration cost %d requests, want 7", second)
+	if second != 6 {
+		t.Fatalf("second enumeration cost %d requests, want 6", second)
 	}
 	// And a known-present episode costs nothing at all to re-check, which is
 	// the path resolver takes: GetEpisodes, then Watch on one of them.
@@ -1110,9 +1110,10 @@ func TestAnimeOnsenNarrowingProbesNoWiderThanItCanHaveInFlight(t *testing.T) {
 	}
 	sort.Ints(asked)
 	// The bracket (1,2,4,8,16,32,64,128), one narrowing wave of four points
-	// evenly spaced in the gap 9..15 (9,11,12,14), the single point that is
-	// left (13), and the solitary re-check of 13.
-	want := []int{1, 2, 4, 8, 9, 11, 12, 13, 13, 14, 16, 32, 64, 128}
+	// evenly spaced in the gap 9..15 (9,11,12,14), and the single point that
+	// is left (13) — which, being alone on the wire, is itself the boundary
+	// measurement and needs no re-check after it.
+	want := []int{1, 2, 4, 8, 9, 11, 12, 13, 14, 16, 32, 64, 128}
 	if fmt.Sprint(asked) != fmt.Sprint(want) {
 		t.Fatalf("the probe asked about %v, want %v", asked, want)
 	}
@@ -1123,6 +1124,118 @@ func TestAnimeOnsenNarrowingProbesNoWiderThanItCanHaveInFlight(t *testing.T) {
 		if slices.Contains(asked, never) {
 			t.Fatalf("episode %d was probed; nothing below the lowest absent episode can move the boundary, so the gap is not there to be enumerated", never)
 		}
+	}
+}
+
+// animeOnsenProbesOf counts how many times the probe asked about one episode.
+func animeOnsenProbesOf(f *animeOnsenFake, n int) int {
+	asked := 0
+	for _, r := range f.requests() {
+		if strings.HasSuffix(r.path, fmt.Sprintf("/%d/manifest.mpd", n)) {
+			asked++
+		}
+	}
+	return asked
+}
+
+// The boundary re-check is the last request of the enumeration and always an
+// origin cache miss — nobody has ever fetched the manifest after the end of a
+// series, so nothing has put it at the edge. On the live CDN that is the ~1s
+// round trip, against a 4500ms budget, and spending it is what left healthy
+// runs reporting an unconfirmed end on a correct list.
+//
+// It is only worth spending when the absence it re-checks was observed inside a
+// concurrent wave, because that is the observation a shedding origin falsifies.
+// When the search closed its last gap with a single request, the absence was
+// already measured alone — the same oracle, under the same conditions — and
+// asking again learns nothing.
+func TestAnimeOnsenABoundaryMeasuredAloneIsNotAskedASecondTime(t *testing.T) {
+	// 12 episodes: the bracket leaves the gap 9..15, one narrowing wave of four
+	// points settles lo=12/hi=14, and the single remaining point (13) goes out
+	// on its own.
+	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": 12}})
+	n, err := f.provider().episodeCount("x")
+	if err != nil || n != 12 {
+		t.Fatalf("episodeCount = %d, %v; want 12 and no error", n, err)
+	}
+	if got := animeOnsenProbesOf(f, 13); got != 1 {
+		t.Fatalf("episode 13 was probed %d times, want 1: its absence was already measured by a request that was alone on the wire, which is exactly what a second one would establish", got)
+	}
+}
+
+// And the negative control, which is the half that must not regress: an absence
+// measured inside a wave is still re-checked. This is the observation that cost
+// two episodes of a twelve-episode series — a burst of eight concurrent HEADs
+// answered 404 for a manifest the CDN then served.
+func TestAnimeOnsenABoundaryMeasuredInAWaveIsStillAskedAgain(t *testing.T) {
+	// One episode, so the bracket itself lands on the boundary: episode 2
+	// answers 404 as one of eight requests in flight, and the narrowing never
+	// runs.
+	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": 1}})
+	n, err := f.provider().episodeCount("x")
+	if err != nil || n != 1 {
+		t.Fatalf("episodeCount = %d, %v; want 1 and no error", n, err)
+	}
+	if got := animeOnsenProbesOf(f, 2); got != 2 {
+		t.Fatalf("episode 2 was probed %d times, want 2 (the bracket's wave, then the solitary re-check); a 404 seen inside a burst is the observation this provider cannot trust", got)
+	}
+}
+
+// A probe the wave shed and the serial pass re-asked was also sent on its own,
+// so it counts as a measurement made alone. The re-ask pass is the one place
+// solitariness comes from something other than the wave's size, and without it
+// a shed boundary would be re-checked by a third request that asks what the
+// second already answered.
+func TestAnimeOnsenABoundaryTheReAskPassMeasuredCountsAsMeasuredAlone(t *testing.T) {
+	animeOnsenNoSleep(t)
+	// The narrowing's final single-point wave (13) is shed once, so the wave
+	// learns nothing and the serial re-ask pass asks again — alone, which is
+	// the condition that made that pass the fix in the first place.
+	f := newAnimeOnsenFake(t, &animeOnsenFake{
+		episodes: map[string]int{"x": 12},
+		throttle: map[int]int{13: 1},
+	})
+	n, err := f.provider().episodeCount("x")
+	if err != nil || n != 12 {
+		t.Fatalf("episodeCount = %d, %v; want 12 and no error", n, err)
+	}
+	if got := animeOnsenProbesOf(f, 13); got != 2 {
+		t.Fatalf("episode 13 was probed %d times, want 2 (the shed wave, then the solitary re-ask); a third is the re-check of an absence the re-ask already measured alone", got)
+	}
+}
+
+// The budget case, and the one the split in episode_list_unconfirmed was
+// reported on: the search hands back a boundary with nothing left to re-check
+// it in. When that boundary was measured alone there is nothing to re-check,
+// so the answer is complete and silent rather than flagged.
+//
+// It is the mirror of TestAnimeOnsenABoundaryHandedBackWithNoBudgetLeftIs
+// Unconfirmed, which keeps the flag because its boundary came out of a wave.
+func TestAnimeOnsenASolitaryBoundaryIsCompleteEvenWithNoBudgetLeft(t *testing.T) {
+	animeOnsenNoSleep(t)
+	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": 12}})
+	p := f.provider()
+	// A clock that stays put until the search has made all thirteen of its
+	// requests — the bracket's eight, the narrowing's four, and the single
+	// point left over — and then jumps past the deadline. It cannot jump
+	// earlier: headManifest sizes each request's context from the remaining
+	// budget, so a spent clock would cancel the requests the search needs.
+	base := time.Now()
+	p.now = func() time.Time {
+		if len(f.requests()) >= 13 {
+			return base.Add(2 * animeOnsenProbeBudget)
+		}
+		return base
+	}
+	n, err := p.episodeCount("x")
+	if n != 12 {
+		t.Fatalf("episodeCount = %d, want 12", n)
+	}
+	if err != nil {
+		t.Fatalf("episodeCount err = %v; episode 13 was already measured absent on its own, so a spent budget costs this answer nothing and there is nothing to flag", err)
+	}
+	if got := len(f.requests()); got != 13 {
+		t.Fatalf("the probe made %d requests, want 13 and no re-check; this test is not reaching the arm between the search and the probe", got)
 	}
 }
 
