@@ -13,7 +13,9 @@ import (
 	"lobster/internal/media"
 )
 
-const openSubtitlesAPI = "https://api.opensubtitles.com/api/v1"
+// openSubtitlesAPI is a var, not a const, for the same reason as subdlAPI: a
+// test needs a seam that does not reach the real service.
+var openSubtitlesAPI = "https://api.opensubtitles.com/api/v1"
 
 // OpenSubtitlesClient searches and downloads subtitles from OpenSubtitles.com.
 type OpenSubtitlesClient struct {
@@ -39,10 +41,17 @@ type osSearchEntry struct {
 }
 
 type osAttributes struct {
-	Language        string   `json:"language"`
-	DownloadCount   int      `json:"download_count"`
-	HearingImpaired bool     `json:"hearing_impaired"`
-	Files           []osFile `json:"files"`
+	Language        string    `json:"language"`
+	DownloadCount   int       `json:"download_count"`
+	HearingImpaired bool      `json:"hearing_impaired"`
+	FeatureDetails  osFeature `json:"feature_details"`
+	Files           []osFile  `json:"files"`
+}
+
+// osFeature is the work a subtitle belongs to. Only the kind is read:
+// "Movie" or "Episode".
+type osFeature struct {
+	FeatureType string `json:"feature_type"`
 }
 
 type osFile struct {
@@ -80,10 +89,36 @@ func (o *OpenSubtitlesClient) Search(title, language string, season, episode int
 		return nil, fmt.Errorf("parsing search response: %w", err)
 	}
 
+	// Keep only entries belonging to the kind of work that was asked for.
+	//
+	// `query` is a fuzzy title search and nothing here constrains what comes
+	// back: a film request sends no season or episode either, so episodes of a
+	// same-named series are returned and were being handed to the player --
+	// the same hazard that subtitled the 1996 film Fargo with the 2014
+	// series' episode 1 through SubDL.
+	//
+	// This is enforced locally rather than by adding a `type` request
+	// parameter: no OpenSubtitles key was available to verify the parameter's
+	// accepted values against the live service, and an unverified filter on
+	// the request risks turning working searches into empty ones. An entry
+	// whose feature_type is absent or unrecognised is kept, so the check
+	// rejects a stated mismatch and never a missing statement.
+	wantEpisode := season > 0 || episode > 0
+
 	var subtitles []media.Subtitle
 	for _, entry := range resp.Data {
 		if len(entry.Attributes.Files) == 0 {
 			continue
+		}
+		switch strings.ToLower(entry.Attributes.FeatureDetails.FeatureType) {
+		case "movie":
+			if wantEpisode {
+				continue
+			}
+		case "episode":
+			if !wantEpisode {
+				continue
+			}
 		}
 		label := entry.Attributes.Language
 		if entry.Attributes.HearingImpaired {

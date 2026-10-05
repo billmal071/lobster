@@ -16,7 +16,9 @@ import (
 	"lobster/internal/media"
 )
 
-const subdlAPI = "https://api.subdl.com/api/v1/subtitles"
+// subdlAPI is a var, not a const, so a test can point the two-step protocol at
+// an httptest server. Nothing in the package reassigns it.
+var subdlAPI = "https://api.subdl.com/api/v1/subtitles"
 
 // SubDLClient searches and downloads subtitles from subdl.com.
 type SubDLClient struct {
@@ -62,10 +64,31 @@ type subdlSubtitle struct {
 // SubDL requires two steps: first search by film_name to get sd_id,
 // then fetch subtitles by sd_id.
 func (s *SubDLClient) Search(title, language string, season, episode int) ([]media.Subtitle, error) {
+	// Which kind of work this is. The caller asking for a season or an episode
+	// is the only signal there is, and it is a reliable one: a film request
+	// carries neither.
+	wantType := "movie"
+	if season > 0 || episode > 0 {
+		wantType = "tv"
+	}
+
 	// Step 1: Search for the film to get sd_id.
+	//
+	// `type` matters more than it looks. SubDL indexes films and series
+	// separately and answers a bare `film_name` with exactly one result -- its
+	// choice of work, not the caller's -- so the kind has to be asked for.
+	// Measured 2026-10-05: `Fargo` alone is the 2014 series (sd_id 1300401),
+	// `Fargo` with type=movie is the 1996 film (213795); `Avatar` alone is the
+	// 2009 film, with type=tv it is Avatar: The Last Airbender; `Bleach` alone
+	// is a 2026 film, with type=tv it is the 2004 series.
+	//
+	// It narrows the kind without narrowing the title matching: every alias
+	// from the AnimeOnsen work still resolves with it, including both
+	// spellings of "KAMUI: He's Behind You" / "Ushiro no Shoumen Kamui-san".
 	searchParams := url.Values{}
 	searchParams.Set("api_key", s.apiKey)
 	searchParams.Set("film_name", title)
+	searchParams.Set("type", wantType)
 	searchParams.Set("subs_per_page", "10")
 
 	searchResp, err := s.fetchAPI(searchParams)
@@ -77,17 +100,37 @@ func (s *SubDLClient) Search(title, language string, season, episode int) ([]med
 		return nil, fmt.Errorf("no results for %q", title)
 	}
 
-	// Pick the best matching result (prefer exact type match).
-	sdID := searchResp.Results[0].SDId
-	wantType := "movie"
-	if season > 0 || episode > 0 {
-		wantType = "tv"
-	}
+	// Take only a result SubDL itself labels the kind that was asked for.
+	//
+	// Falling back to Results[0] regardless of type is what subtitled a film
+	// with a series. A film request has season == 0 and episode == 0, so no
+	// season or episode parameter is sent, and *every* client-side filter
+	// below is gated on one of those being non-zero -- the episode check, the
+	// season check, the full-season skip and isWrongEpisode are all inert.
+	// A series sd_id answers that unfiltered query with whatever it has, so
+	// `play` on the 1996 film Fargo took "Fargo - 1x01 - The Crocodile's
+	// Dilemma" (measured against sd_id 1300401 on 2026-10-05).
+	//
+	// The name is deliberately not compared. It would not help -- every wrong
+	// match found carried the *same* name as the query (Fargo, Avatar, Dark,
+	// Monster) -- and it would hurt, because SubDL resolves aliases: both
+	// "KAMUI: He's Behind You" and "Ushiro no Shoumen Kamui-san" return the
+	// one correct sd_id under a name neither query spelled. Likewise the year,
+	// which this endpoint ignores outright (film_name=Avatar&year=2005 still
+	// answers with the 2009 film).
+	//
+	// A result carrying no type is accepted: the check rejects a stated
+	// mismatch, never a missing statement.
+	sdID := 0
+	found := false
 	for _, r := range searchResp.Results {
-		if r.Type == wantType {
-			sdID = r.SDId
+		if r.Type == "" || r.Type == wantType {
+			sdID, found = r.SDId, true
 			break
 		}
+	}
+	if !found {
+		return nil, fmt.Errorf("no %s results for %q", wantType, title)
 	}
 
 	// Step 2: Fetch subtitles by sd_id.
