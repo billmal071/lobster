@@ -316,10 +316,10 @@ func TestAnimeOnsenSendsTheExactRefererAndANonFFmpegUserAgentOnEveryRequest(t *t
 // The stream handed to the player and to ffmpeg carries both headers.
 //
 // Stream.UserAgent is load-bearing here and not cosmetic: internal/player
-// folds it into --user-agent and --demuxer-lavf-o=headers=, and
-// internal/download folds it into ffmpeg's -headers. Left empty, every one of
-// those hops sends "Lavf/<version>", which this CDN denies with 403 — so the
-// failure would look like a dead host rather than a missing header.
+// folds it into mpv's --user-agent and internal/download folds it into ffmpeg's
+// -headers. Left empty, every one of those hops sends "Lavf/<version>", which
+// this CDN denies with 403 — so the failure would look like a dead host rather
+// than a missing header.
 func TestAnimeOnsenStreamCarriesTheHeadersTheCDNDemands(t *testing.T) {
 	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"abc": 5}})
 	s, err := f.provider().Watch("abc", "2", "", "1080")
