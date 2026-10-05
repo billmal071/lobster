@@ -101,12 +101,27 @@ const (
 // was `episodes` printing ten episodes of a twelve-episode series, sourced
 // from a provider that cannot stream any of them.
 //
-// Under 4.5 s the probe always gets to answer, and when it has to stop early
-// it answers with the prefix it measured and the ErrIncompleteEpisodeList
-// flag.
+// Under 4.5 s the probe gets to answer, and when it has to stop early it
+// answers with the prefix it measured and the ErrIncompleteEpisodeList flag.
 //
-// "Always" rests on the budget reaching the requests and not only the gaps
-// between them. It did not, at first: every probe was built with
+// "Gets to answer" used to read "always gets to answer", and the measurement
+// says otherwise: 20 live `episodes` runs on a 12-episode series returned the
+// right count 19 times, and 7 of the 20 came back flagged — every flagged run
+// at 4.51 s, i.e. at this ceiling, while every silent run finished between
+// 3.05 s and 4.36 s. So the budget is the binding constraint on the last thing
+// the enumeration does, and the honest statement is that 4.5 s covers the
+// common case rather than every case.
+//
+// It cannot be answered by reserving part of this budget for that last step.
+// The time available to it is deadline minus whenever the search finished, and
+// a reserve moves neither term — it can only stop the search early, which
+// turns a correct count with a weak flag into a short count with a strong one.
+// What the budget buys is round trips, and the only levers that remove one are
+// the probe schedule (see animeOnsenNarrowWidth, and episodeCount's shortcut
+// for a boundary already measured alone) and the caller's cap, which is fixed.
+//
+// "Gets to answer" also rests on the budget reaching the requests and not only
+// the gaps between them. It did not, at first: every probe was built with
 // http.NewRequest, so the budget was consulted between waves while a single
 // stalled round trip ran against the HTTP client's 30 s timeout — six times
 // the caller's cap, i.e. the same silent downgrade by another route, with the
@@ -119,10 +134,17 @@ const (
 // is visible in the JSON rather than silent.
 //
 // The 500 ms margin is for the probe to notice and return, not for more
-// requests. Worst case inside it, measured round trips against the live CDN
-// (~1 s for a cache miss, ~0.2 s for a hit): two bracket waves at
-// animeOnsenProbeInFlight 4, a serial re-ask of what the waves shed at
-// animeOnsenRetryBase 150 ms, one narrow wave, one confirmation probe.
+// requests.
+//
+// What fits inside it, in measured round trips against the live CDN (~1 s for a
+// cache miss, ~0.2 s for an edge hit): the cost is one tranche of
+// animeOnsenProbeInFlight requests at a time, and a tranche costs a miss if any
+// of its probes is above the end of the series. A 12-episode series spends five
+// — the bracket's low half (edge hits), its upper half (all misses), the
+// narrowing's wave, the single point left over, and, unless that point was
+// alone on the wire, the re-check of it. Three of those are misses, which is
+// the ~3.2-3.4 s the live runs show, and the spread above it is CDN jitter
+// rather than extra work.
 //
 // A var, not a const, so a test can shrink it and watch the probe give up
 // rather than having to serve thousands of manifests to reach the ceiling.
@@ -818,11 +840,18 @@ func (p *AnimeOnsen) short(contentID string, n int, reason string) (int, error) 
 //
 // It is the weak form of short, and the two are separated because collapsing
 // them made the warning unreadable. This one is the steady state of a probing
-// enumeration against this CDN — the confirmation probe is the last request
-// inside the budget and it is always a cache miss, since nobody watches the
-// episode after the last one — and it fired on five of nine live runs that
-// returned a complete and correct list. short's cases are the ones where
-// episodes really are absent from the list.
+// enumeration against this CDN — the re-check is the last request inside the
+// budget and it is always a cache miss, since nobody watches the episode after
+// the last one — and it fired on five of nine live runs that returned a
+// complete and correct list, then on six of twenty after the split, every one
+// of them at the budget ceiling. short's cases are the ones where episodes
+// really are absent from the list.
+//
+// The reachable cause is therefore the round trip itself, not the wording, and
+// episodeCount no longer spends it when the search already measured that
+// absence with nothing else in flight. What is left here is a boundary found
+// inside a concurrent wave with no budget left to re-ask it alone — which is
+// the one case where the doubt is real.
 //
 // Both wrap ErrIncompleteEpisodeList, so nothing that asks only "may this be
 // short?" changes behaviour; this one additionally wraps
