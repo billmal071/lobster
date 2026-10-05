@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -56,16 +57,24 @@ var errFlaggedShortList = fmt.Errorf("episodes: %w: animeonsen: the episode prob
 // pointer to the call count plus the titles it was asked about. No network.
 func countingExternalSubs(t *testing.T) (*int, *[]string) {
 	t.Helper()
+	return countingExternalSubsWithOutcomes(t, []subSourceOutcome{{Name: "SubDL"}})
+}
+
+// countingExternalSubsWithOutcomes is the same seam, with control over what the
+// sources are reported to have answered, so a run where a search errored can be
+// driven through both playback funnels without touching the network.
+func countingExternalSubsWithOutcomes(t *testing.T, asked []subSourceOutcome) (*int, *[]string) {
+	t.Helper()
 	var mu sync.Mutex
 	calls := 0
 	var titles []string
 	prev := externalSubs
-	externalSubs = func(title string, season, episode int) []media.Subtitle {
+	externalSubs = func(title string, season, episode int) ([]media.Subtitle, []subSourceOutcome) {
 		mu.Lock()
 		calls++
 		titles = append(titles, title)
 		mu.Unlock()
-		return nil
+		return nil, asked
 	}
 	t.Cleanup(func() { externalSubs = prev })
 	return &calls, &titles
@@ -251,9 +260,10 @@ func TestResolveAndPlayAsksForExternalSubtitlesExactlyOnce(t *testing.T) {
 // source that ships no subtitles produced exactly the same silence as an
 // unconfigured one.
 func TestReportNoSubtitlesSeparatesLookedFromNeverLooked(t *testing.T) {
+	boom := errors.New("subdl: 401 unauthorized")
 	for _, tc := range []struct {
 		name          string
-		subdl, os     string
+		asked         []subSourceOutcome
 		lang          string // "-" means leave subs_language empty
 		wantSubstring string
 		notSubstring  string
@@ -265,7 +275,7 @@ func TestReportNoSubtitlesSeparatesLookedFromNeverLooked(t *testing.T) {
 		},
 		{
 			name:          "subdl configured and asked",
-			subdl:         "k",
+			asked:         []subSourceOutcome{{Name: "SubDL"}},
 			wantSubstring: "SubDL had none for it",
 			notSubstring:  "is configured",
 		},
@@ -273,17 +283,38 @@ func TestReportNoSubtitlesSeparatesLookedFromNeverLooked(t *testing.T) {
 			// subs_language can be empty in a config file, and "no  subtitles"
 			// with a hole in it is how a reader learns to distrust the line.
 			name:          "no language configured",
-			subdl:         "k",
+			asked:         []subSourceOutcome{{Name: "SubDL"}},
 			lang:          "-",
 			wantSubstring: "no matching subtitles",
 			notSubstring:  "is configured",
 		},
 		{
 			name:          "both configured and asked",
-			subdl:         "k",
-			os:            "o",
+			asked:         []subSourceOutcome{{Name: "SubDL"}, {Name: "OpenSubtitles"}},
 			wantSubstring: "SubDL and OpenSubtitles had none for it",
 			notSubstring:  "is configured",
+		},
+		{
+			// The whole finding: an errored search established nothing, so it
+			// must not be reported as the source having none.
+			name:          "the only source failed",
+			asked:         []subSourceOutcome{{Name: "SubDL", Err: boom}},
+			wantSubstring: "the search of SubDL failed, so whether it has any is unknown",
+			notSubstring:  "had none",
+		},
+		{
+			name:          "every source failed",
+			asked:         []subSourceOutcome{{Name: "SubDL", Err: boom}, {Name: "OpenSubtitles", Err: boom}},
+			wantSubstring: "the search of SubDL and OpenSubtitles failed, so whether they have any is unknown",
+			notSubstring:  "had none",
+		},
+		{
+			// The sources are asked independently, so the common real case is
+			// one of each, and one line has to carry both answers.
+			name:          "one had none and one failed",
+			asked:         []subSourceOutcome{{Name: "SubDL"}, {Name: "OpenSubtitles", Err: boom}},
+			wantSubstring: "SubDL had none for it, and the search of OpenSubtitles failed, so whether it has any is unknown",
+			notSubstring:  "SubDL and OpenSubtitles had none",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -292,10 +323,9 @@ func TestReportNoSubtitlesSeparatesLookedFromNeverLooked(t *testing.T) {
 			if tc.lang == "-" {
 				cfg.SubsLanguage = ""
 			}
-			cfg.SubDLAPIKey, cfg.OSAPIKey = tc.subdl, tc.os
 			warnings := captureWarnings(t)
 
-			reportNoSubtitles("KAMUI: He's Behind You")
+			reportNoSubtitles("KAMUI: He's Behind You", tc.asked)
 
 			if len(*warnings) != 1 {
 				t.Fatalf("warnings = %v, want exactly one line", *warnings)
@@ -417,5 +447,153 @@ func TestPlayStreamWithSubtitlesSaysNothing(t *testing.T) {
 	}
 	if containsSubstring(*warnings, "no english subtitles") {
 		t.Fatalf("warnings = %v; this playback had a subtitle", *warnings)
+	}
+}
+
+// Both playback funnels have to carry the per-source outcome all the way to the
+// report, and each has its own copy of the merge block. A funnel that drops it
+// falls back to the zero value — no error — which is exactly the unearned
+// "had none for it" the report exists to retire, so the loss is silent.
+func TestPlaybackReportsAFailedSubtitleSearchAsFailed(t *testing.T) {
+	failed := []subSourceOutcome{{Name: "SubDL", Err: errors.New("subdl: 401 unauthorized")}}
+
+	t.Run("playStream", func(t *testing.T) {
+		playStreamHarness(t, &stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}})
+		cfg.SubsLanguage = "english"
+		cfg.SubDLAPIKey = "test-key"
+		flagNoSubs = false
+
+		countingExternalSubsWithOutcomes(t, failed)
+		warnings := captureWarnings(t)
+
+		stream := &media.Stream{URL: "https://cdn.invalid/x/1/manifest.mpd"}
+		sel := media.SearchResult{ID: "movie/x", Title: "KAMUI: He's Behind You", Type: media.Movie}
+
+		if err := playStream(stream, "KAMUI: He's Behind You", sel, 0, 0); err != nil {
+			t.Fatalf("playStream = %v", err)
+		}
+		assertFailedSearchReported(t, *warnings)
+	})
+
+	t.Run("resolveAndPlay", func(t *testing.T) {
+		hostileEnv(t)
+		playStreamHarness(t, &stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}})
+		cfg.SubsLanguage = "english"
+		cfg.SubDLAPIKey = "test-key"
+		flagNoSubs = false
+
+		withFallbackChain(t)
+		countingExternalSubsWithOutcomes(t, failed)
+		warnings := captureWarnings(t)
+
+		primary := &shortListStreamProvider{stubProvider: &stubProvider{
+			seasons:  []media.Season{{ID: "s1", Number: 1}},
+			episodes: flaggedEpisodes(1),
+		}}
+		sel := media.SearchResult{ID: "s1", Title: "KAMUI: He's Behind You", Type: media.TV}
+
+		if err := resolveAndPlay(primary, sel, 1, 1); err != nil {
+			t.Fatalf("resolveAndPlay = %v", err)
+		}
+		assertFailedSearchReported(t, *warnings)
+	})
+}
+
+func assertFailedSearchReported(t *testing.T, warnings []string) {
+	t.Helper()
+	if !containsSubstring(warnings, "the search of SubDL failed") {
+		t.Fatalf("warnings = %v; a search that errored must be reported as a failure, not as absence", warnings)
+	}
+	if containsSubstring(warnings, "had none for it") {
+		t.Fatalf("warnings = %v; SubDL never answered, so it did not establish that it has none", warnings)
+	}
+}
+
+// searchExternalSubs is what decides who was asked and what each one answered,
+// and the error status it records is the only input the report has. Driven for
+// real through the two search seams, so no network is involved.
+func TestSearchExternalSubsRecordsEachSourcesErrorStatus(t *testing.T) {
+	boom := errors.New("subdl: 401 unauthorized")
+	one := []media.Subtitle{{URL: "https://cdn.invalid/a.srt", Label: "English", Language: "english"}}
+
+	for _, tc := range []struct {
+		name         string
+		subdl, os    string
+		subdlSubs    []media.Subtitle
+		subdlErr     error
+		osSubs       []media.Subtitle
+		osErr        error
+		wantSubs     int
+		wantOutcomes []string // "name" or "name!" when the search must be recorded as failed
+	}{
+		{
+			name:         "nothing configured asks nobody",
+			wantOutcomes: nil,
+		},
+		{
+			name:         "a source that answers empty is recorded as a completed search",
+			subdl:        "k",
+			wantOutcomes: []string{"SubDL"},
+		},
+		{
+			name:         "a source that errors is recorded as failed",
+			subdl:        "k",
+			subdlErr:     boom,
+			wantOutcomes: []string{"SubDL!"},
+		},
+		{
+			name:         "the sources are independent",
+			subdl:        "k",
+			os:           "o",
+			subdlErr:     boom,
+			osSubs:       one,
+			wantSubs:     1,
+			wantOutcomes: []string{"SubDL!", "OpenSubtitles"},
+		},
+		{
+			// An unconfigured source was never asked, so it must not appear at
+			// all — otherwise the report would claim it had none.
+			name:         "only configured sources are reported",
+			os:           "o",
+			osErr:        boom,
+			wantOutcomes: []string{"OpenSubtitles!"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			playStreamHarness(t, &stubPlayerImpl{})
+			cfg.SubsLanguage = "english"
+			cfg.SubDLAPIKey, cfg.OSAPIKey = tc.subdl, tc.os
+
+			prevSubdl, prevOS := subdlSearch, osSearch
+			t.Cleanup(func() { subdlSearch, osSearch = prevSubdl, prevOS })
+			subdlSearch = func(key, title, lang string, season, episode int) ([]media.Subtitle, error) {
+				if key != tc.subdl {
+					t.Errorf("SubDL asked with key %q, want %q", key, tc.subdl)
+				}
+				return tc.subdlSubs, tc.subdlErr
+			}
+			osSearch = func(key, title, lang string, season, episode int) ([]media.Subtitle, error) {
+				if key != tc.os {
+					t.Errorf("OpenSubtitles asked with key %q, want %q", key, tc.os)
+				}
+				return tc.osSubs, tc.osErr
+			}
+
+			subs, asked := searchExternalSubs("KAMUI: He's Behind You", 1, 1)
+			if len(subs) != tc.wantSubs {
+				t.Fatalf("subtitles = %d, want %d", len(subs), tc.wantSubs)
+			}
+			var got []string
+			for _, o := range asked {
+				if o.Err != nil {
+					got = append(got, o.Name+"!")
+					continue
+				}
+				got = append(got, o.Name)
+			}
+			if strings.Join(got, ",") != strings.Join(tc.wantOutcomes, ",") {
+				t.Fatalf("outcomes = %v, want %v", got, tc.wantOutcomes)
+			}
+		})
 	}
 }

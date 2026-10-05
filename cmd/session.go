@@ -322,15 +322,16 @@ func resolveSubtitles(stream *media.Stream, title string, season, episode int) (
 		return nil, noCleanup
 	}
 
+	external, asked := externalSubs(title, season, episode)
 	subs := subtitle.FilterByEpisode(
 		mergeSubtitles(
 			subtitle.Filter(stream.Subtitles, cfg.SubsLanguage),
-			externalSubs(title, season, episode),
+			external,
 		),
 		season, episode,
 	)
 	if len(subs) == 0 {
-		reportNoSubtitles(title)
+		reportNoSubtitles(title, asked)
 		return nil, noCleanup
 	}
 	// Limit to 3 subtitle downloads to avoid stream URL expiry.

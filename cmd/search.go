@@ -806,10 +806,11 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	// Download multiple tracks so the user can cycle with 'j' in mpv.
 	var subFiles []string
 	if !flagNoSubs {
+		external, asked := externalSubs(selected.Title, season, episode)
 		subs := subtitle.FilterByEpisode(
 			mergeSubtitles(
 				subtitle.Filter(stream.Subtitles, cfg.SubsLanguage),
-				externalSubs(selected.Title, season, episode),
+				external,
 			),
 			season, episode,
 		)
@@ -818,7 +819,7 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 			subs = subs[:3]
 		}
 		if len(subs) == 0 {
-			reportNoSubtitles(title)
+			reportNoSubtitles(title, asked)
 		}
 		if len(subs) > 0 {
 			tmpDir, err := subtitle.NewTempDir()
@@ -979,6 +980,17 @@ func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle, season,
 	return tmpDir.Download(sub)
 }
 
+// subSourceOutcome is what one configured external subtitle source answered.
+//
+// Err == nil means the search completed, so an empty answer really does
+// establish that the source has nothing for this title. Err != nil means the
+// question was never answered — a third state, neither "has none" nor "was
+// never asked" — and reporting it as absence is a claim the run did not earn.
+type subSourceOutcome struct {
+	Name string
+	Err  error
+}
+
 // reportNoSubtitles says, out loud and exactly once, that this playback has no
 // subtitles at all — and which kind of absence it is.
 //
@@ -989,7 +1001,18 @@ func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle, season,
 // "subtitles are missing" unreadable as either "nothing has any" or "lobster
 // did not try". Only one of the two is actionable by the user, and naming the
 // sources that were asked is what makes it so.
-func reportNoSubtitles(title string) {
+//
+// A source whose search errored is the third case. It was asked and it did not
+// answer, so "had none for it" would be exactly the kind of unearned claim this
+// report exists to retire; it is reported as a failure instead, and the two
+// kinds can both appear in one run because the sources are asked independently.
+//
+// Human-only, deliberately: this is the tail of an interactive playback.
+// `play --json` returns its envelope before any subtitle work happens
+// (playStream's flagJSON branch), so no agent-facing output can reach here,
+// and a warnings array nothing machine-readable can observe would be dead
+// weight. The per-source causes stay on debugf, which --debug prints.
+func reportNoSubtitles(title string, asked []subSourceOutcome) {
 	if cfg == nil {
 		return
 	}
@@ -997,28 +1020,61 @@ func reportNoSubtitles(title string) {
 	if lang == "" {
 		lang = "matching"
 	}
-	asked := configuredSubSources()
-	if len(asked) == 0 {
+	var empty, failed []string
+	for _, o := range asked {
+		if o.Err != nil {
+			failed = append(failed, o.Name)
+		} else {
+			empty = append(empty, o.Name)
+		}
+	}
+	switch {
+	case len(asked) == 0:
 		warnf("no %s subtitles for %s: this source ships none, and no external subtitle source is configured (set subdl_api_key or os_api_key)",
 			lang, title)
-		return
+	case len(failed) == 0:
+		warnf("no %s subtitles for %s: this source ships none, and %s had none for it",
+			lang, title, joinSubSources(empty))
+	case len(empty) == 0:
+		warnf("no %s subtitles for %s: this source ships none, and the search of %s failed, so whether %s unknown (--debug shows why)",
+			lang, title, joinSubSources(failed), hasAny(failed))
+	default:
+		warnf("no %s subtitles for %s: this source ships none, %s had none for it, and the search of %s failed, so whether %s unknown (--debug shows why)",
+			lang, title, joinSubSources(empty), joinSubSources(failed), hasAny(failed))
 	}
-	warnf("no %s subtitles for %s: this source ships none, and %s had none for it",
-		lang, title, strings.Join(asked, " and "))
 }
 
-// configuredSubSources names the external subtitle sources this run can
-// actually ask, in the order searchExternalSubs asks them. Empty means none is
-// configured, which is a different answer from "asked and found nothing".
-func configuredSubSources() []string {
-	var names []string
-	if cfg.SubDLAPIKey != "" {
-		names = append(names, "SubDL")
+// joinSubSources lists source names in the order searchExternalSubs asks them.
+func joinSubSources(names []string) string {
+	if len(names) <= 2 {
+		return strings.Join(names, " and ")
 	}
-	if cfg.OSAPIKey != "" {
-		names = append(names, "OpenSubtitles")
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
+// hasAny completes "...so whether <this> unknown", agreeing in number with the
+// sources it is talking about.
+func hasAny(names []string) string {
+	if len(names) == 1 {
+		return "it has any is"
 	}
-	return names
+	return "they have any is"
+}
+
+// subdlSearch and osSearch are the two external searches as package vars.
+//
+// searchExternalSubs has to be exercised for real to pin that an errored search
+// is recorded as an error rather than folded into "found nothing", and the
+// alternative is a live request to SubDL or OpenSubtitles from a test. These
+// are the narrowest seams that make it hermetic: everything searchExternalSubs
+// decides — which sources to ask, in what order, what each one answered — stays
+// in searchExternalSubs.
+var subdlSearch = func(key, title, lang string, season, episode int) ([]media.Subtitle, error) {
+	return subtitle.NewSubDL(key).Search(title, lang, season, episode)
+}
+
+var osSearch = func(key, title, lang string, season, episode int) ([]media.Subtitle, error) {
+	return subtitle.NewOpenSubtitles(key).Search(title, lang, season, episode)
 }
 
 // externalSubs is searchExternalSubs as a package var, seamed like
@@ -1028,31 +1084,35 @@ func configuredSubSources() []string {
 var externalSubs = searchExternalSubs
 
 // searchExternalSubs tries SubDL first, then OpenSubtitles as fallback.
-func searchExternalSubs(title string, season, episode int) []media.Subtitle {
+//
+// It returns one outcome per source it actually asked, so a caller with no
+// subtitles can tell "asked and there are none" from "asked and never found
+// out". The errors stay on debugf for the detail; the outcome is what the
+// user-facing report is allowed to assert.
+func searchExternalSubs(title string, season, episode int) ([]media.Subtitle, []subSourceOutcome) {
 	var all []media.Subtitle
+	var asked []subSourceOutcome
 	if cfg.SubDLAPIKey != "" {
 		debugf("trying SubDL subtitles...")
-		subs, err := subtitle.NewSubDL(cfg.SubDLAPIKey).Search(
-			title, cfg.SubsLanguage, season, episode,
-		)
+		subs, err := subdlSearch(cfg.SubDLAPIKey, title, cfg.SubsLanguage, season, episode)
 		if err != nil {
 			debugf("SubDL search failed: %v", err)
 		} else if len(subs) > 0 {
 			all = append(all, subs...)
 		}
+		asked = append(asked, subSourceOutcome{Name: "SubDL", Err: err})
 	}
 	if cfg.OSAPIKey != "" {
 		debugf("trying OpenSubtitles fallback...")
-		subs, err := subtitle.NewOpenSubtitles(cfg.OSAPIKey).Search(
-			title, cfg.SubsLanguage, season, episode,
-		)
+		subs, err := osSearch(cfg.OSAPIKey, title, cfg.SubsLanguage, season, episode)
 		if err != nil {
 			debugf("OpenSubtitles search failed: %v", err)
 		} else if len(subs) > 0 {
 			all = append(all, subs...)
 		}
+		asked = append(asked, subSourceOutcome{Name: "OpenSubtitles", Err: err})
 	}
-	return all
+	return all, asked
 }
 
 func mergeSubtitles(groups ...[]media.Subtitle) []media.Subtitle {
