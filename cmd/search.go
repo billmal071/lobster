@@ -850,7 +850,17 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		if err != nil {
 			return fmt.Errorf("resolving torrent_dir: %w", err)
 		}
-		ts, err := newTorrentServer(torrentDir)
+		// WholeFile is what separates the two callers for the free-space check:
+		// this function stands the server up before its --download branch
+		// below, so a magnet does reach the download path, and a download that
+		// cannot fit should be refused rather than warned about — it has no
+		// useful partial outcome. Plain playback writes only what is watched,
+		// so it is warned and allowed to start.
+		ts, err := newTorrentServer(torrentstream.Options{
+			DataDir:   torrentDir,
+			Warnf:     warnf,
+			WholeFile: flagDownload != "",
+		})
 		if err != nil {
 			return fmt.Errorf("starting torrent stream: %w", err)
 		}

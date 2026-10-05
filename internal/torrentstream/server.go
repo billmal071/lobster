@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -38,6 +39,14 @@ type Server struct {
 	// data holds this run's pieces and is removed on Close.
 	data runDir
 
+	// warnf reports something the user should know that does not stop playback.
+	// Never nil: New substitutes a no-op.
+	warnf func(string, ...any)
+	// wholeFile says the caller needs the entire chosen file on disk rather
+	// than only the part that plays. It turns the free-space shortfall from a
+	// warning into a refusal — see spaceAdvice.
+	wholeFile bool
+
 	// entries is read by HTTP handler goroutines while Serve writes it, so it
 	// needs the mutex even though writes only happen at stream setup.
 	mu      sync.RWMutex
@@ -53,12 +62,27 @@ type serveEntry struct {
 // multi-gigabyte film.
 const is32Bit = ^uint(0)>>32 == 0
 
+// Options configures a Server.
+type Options struct {
+	// DataDir is the user's configured torrent directory, empty for the
+	// default. Either way the pieces land in a fresh subdirectory of it, which
+	// Close removes — see newDataDir for where the default points and why.
+	DataDir string
+
+	// Warnf reports something the user should know but that does not stop
+	// playback. Optional; nil discards the messages, which is only ever right
+	// for a caller that has nowhere to put them.
+	Warnf func(string, ...any)
+
+	// WholeFile says the caller needs the entire chosen file on disk — the
+	// download path — rather than only the part that plays. It is what makes a
+	// free-space shortfall fatal instead of advisory.
+	WholeFile bool
+}
+
 // New starts a torrent client and a loopback HTTP server.
-//
-// dataDir is the user's configured torrent directory, empty for the default.
-// Either way the pieces land in a fresh subdirectory of it, which Close
-// removes — see newDataDir for where the default points and why.
-func New(dataDir string) (*Server, error) {
+func New(opts Options) (*Server, error) {
+	dataDir := opts.DataDir
 	// A 32-bit build cannot map a 2 GB file, and the failure surfaces deep in
 	// the library as "mapping file: invalid argument" after the download has
 	// apparently started — worth catching up front with the two things that
@@ -95,12 +119,18 @@ func New(dataDir string) (*Server, error) {
 		return nil, err
 	}
 
+	warnf := opts.Warnf
+	if warnf == nil {
+		warnf = func(string, ...any) {}
+	}
 	s := &Server{
-		client:  client,
-		ln:      ln,
-		base:    fmt.Sprintf("http://%s", ln.Addr().String()),
-		data:    data,
-		entries: make(map[string]*serveEntry),
+		client:    client,
+		ln:        ln,
+		base:      fmt.Sprintf("http://%s", ln.Addr().String()),
+		data:      data,
+		warnf:     warnf,
+		wholeFile: opts.WholeFile,
+		entries:   make(map[string]*serveEntry),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/stream/", s.handle)
@@ -128,9 +158,19 @@ func (s *Server) Serve(magnet string) (string, error) {
 	for i, f := range tfiles {
 		infos[i] = fileInfo{path: f.DisplayPath(), length: f.Length()}
 	}
-	idx, err := pickVideo(infos)
+	// The size is only knowable here: New has nothing but a directory name, and
+	// the file list does not exist until GotInfo above. The space verdict is
+	// acted on before the priorities below, so a refusal happens before a
+	// single piece is wanted.
+	idx, verdict, err := s.planServe(infos)
 	if err != nil {
 		return "", err
+	}
+	if verdict.refuse {
+		return "", fmt.Errorf("%s", verdict.msg)
+	}
+	if verdict.msg != "" {
+		s.warnf("%s", verdict.msg)
 	}
 	file := tfiles[idx]
 
@@ -146,6 +186,38 @@ func (s *Server) Serve(magnet string) (string, error) {
 	s.entries[key] = &serveEntry{file: file, name: filepath.Base(file.DisplayPath())}
 	s.mu.Unlock()
 	return fmt.Sprintf("%s/stream/%s", s.base, key), nil
+}
+
+// planServe chooses the file to serve and decides what to say about free space.
+//
+// It is split out of Serve because Serve needs a live swarm and this does not,
+// and the two guarantees worth testing are both decided here.
+//
+// The first is which length is measured. It is the chosen file's, never the
+// torrent's: Serve sets every other file to PiecePriorityNone, so the extras in
+// a season pack are never fetched and must not be allowed to refuse an episode
+// that fits on its own.
+//
+// The second is which filesystem is measured. It stats s.data.path rather than
+// $HOME because those are not the same volume in two of the three cases
+// newDataDir resolves: a configured torrent_dir may be anywhere, and the
+// os.MkdirTemp fallback lands wherever os.TempDir() points. The run directory
+// also already exists by now, so a failure here is a real statfs failure rather
+// than a missing path.
+//
+// A failed stat says nothing at all. Guessing in either direction is worse than
+// silence: a wrong refusal blocks a torrent that would have played, and a wrong
+// reassurance is the mid-playback surprise this check exists to replace.
+func (s *Server) planServe(infos []fileInfo) (int, spaceVerdict, error) {
+	idx, err := pickVideo(infos)
+	if err != nil {
+		return 0, spaceVerdict{}, err
+	}
+	avail, err := diskFree(s.data.path)
+	if err != nil {
+		return idx, spaceVerdict{}, nil
+	}
+	return idx, spaceAdvice(path.Base(infos[idx].path), infos[idx].length, avail, s.wholeFile), nil
 }
 
 // lookup resolves a stream key under the read lock.
