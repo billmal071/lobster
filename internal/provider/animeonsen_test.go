@@ -1186,21 +1186,41 @@ func TestAnimeOnsenABoundaryMeasuredInAWaveIsStillAskedAgain(t *testing.T) {
 // solitariness comes from something other than the wave's size, and without it
 // a shed boundary would be re-checked by a third request that asks what the
 // second already answered.
+//
+// The fixture has to be a series whose boundary comes out of a *multi-point*
+// wave, or the re-ask pass is not what makes the measurement solitary and the
+// line under test is never the reason the test passes. An 8-episode series is
+// that shape: the bracket leaves the gap 9..15, and the narrowing's only wave
+// (9,11,12,14) is where episode 9 answers absent. Shedding 9 once pushes it
+// into the serial pass.
 func TestAnimeOnsenABoundaryTheReAskPassMeasuredCountsAsMeasuredAlone(t *testing.T) {
 	animeOnsenNoSleep(t)
-	// The narrowing's final single-point wave (13) is shed once, so the wave
-	// learns nothing and the serial re-ask pass asks again — alone, which is
-	// the condition that made that pass the fix in the first place.
 	f := newAnimeOnsenFake(t, &animeOnsenFake{
-		episodes: map[string]int{"x": 12},
-		throttle: map[int]int{13: 1},
+		episodes: map[string]int{"x": 8},
+		throttle: map[int]int{9: 1},
 	})
 	n, err := f.provider().episodeCount("x")
-	if err != nil || n != 12 {
-		t.Fatalf("episodeCount = %d, %v; want 12 and no error", n, err)
+	if err != nil || n != 8 {
+		t.Fatalf("episodeCount = %d, %v; want 8 and no error", n, err)
 	}
-	if got := animeOnsenProbesOf(f, 13); got != 2 {
-		t.Fatalf("episode 13 was probed %d times, want 2 (the shed wave, then the solitary re-ask); a third is the re-check of an absence the re-ask already measured alone", got)
+	if got := animeOnsenProbesOf(f, 9); got != 2 {
+		t.Fatalf("episode 9 was probed %d times, want 2 (the shed wave, then the solitary re-ask); a third is the re-check of an absence the re-ask already measured alone", got)
+	}
+}
+
+// Two requests in flight is not one. The narrowing's final wave is a single
+// point often enough to matter but not always — a 16-episode series ends on a
+// wave of two (17 and 18), and origin sheds concurrent misses in pairs as
+// readily as in eights: measured, two-at-a-time still lost one probe in eight.
+// So a boundary found by a wave of two is still re-checked.
+func TestAnimeOnsenABoundaryFoundByAWaveOfTwoIsStillAskedAgain(t *testing.T) {
+	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": 16}})
+	n, err := f.provider().episodeCount("x")
+	if err != nil || n != 16 {
+		t.Fatalf("episodeCount = %d, %v; want 16 and no error", n, err)
+	}
+	if got := animeOnsenProbesOf(f, 17); got != 2 {
+		t.Fatalf("episode 17 was probed %d times, want 2 (the narrowing's wave of two, then the solitary re-check); a wave of two is still concurrent", got)
 	}
 }
 
