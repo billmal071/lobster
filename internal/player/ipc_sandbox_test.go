@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"lobster/internal/userdir"
 )
 
 // shortHome points os.UserHomeDir at a throwaway home whose path is short
@@ -243,5 +246,102 @@ func TestIPCSandboxHintNamesTheLengthProblem(t *testing.T) {
 	}
 	if strings.Contains(hint, "snap") {
 		t.Errorf("the hint blames confinement for what is a path-length failure: %q", hint)
+	}
+}
+
+// backdateIPCDir makes dir look like a playback that was abandoned more than
+// ipcStaleAfter ago. Liveness is carried by the ownership marker — a live run
+// refreshes it, and the directory's own mtime does not move once mpv has bound
+// the socket — so both have to be aged for the directory to read as dead.
+func backdateIPCDir(t *testing.T, dir string) {
+	t.Helper()
+	old := time.Now().Add(-ipcStaleAfter - time.Hour)
+	for _, p := range []string{filepath.Join(dir, userdir.Marker), dir} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatalf("backdating %q: %v", p, err)
+		}
+	}
+}
+
+// The socket directory lives for as long as mpv does. A film paused overnight
+// outlasts ipcStaleAfter, at which point a second lobster starting up swept the
+// first one's socket directory away under the running player: the directory's
+// own mtime froze when the socket was bound, so it was no evidence the playback
+// was over.
+func TestIPCDirSurvivesAPlaybackLongerThanTheStaleWindow(t *testing.T) {
+	restore := ipcTouchEvery
+	ipcTouchEvery = 5 * time.Millisecond
+	t.Cleanup(func() { ipcTouchEvery = restore })
+	shortHome(t)
+
+	ipc, err := newIPCSocket()
+	if err != nil {
+		t.Fatalf("newIPCSocket: %v", err)
+	}
+	t.Cleanup(ipc.cleanup)
+	dir := filepath.Dir(ipc.path)
+	if !ipc.sandboxVisible {
+		t.Fatalf("socket landed outside $HOME (%q), so this test would not exercise the sweep it is about", dir)
+	}
+	// 25 hours in: the directory and everything about it looks abandoned.
+	backdateIPCDir(t, dir)
+
+	marker := filepath.Join(dir, userdir.Marker)
+	cutoff := time.Now().Add(-ipcStaleAfter)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		fi, err := os.Stat(marker)
+		if err != nil {
+			t.Fatalf("stat marker: %v", err)
+		}
+		if fi.ModTime().After(cutoff) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the playback's IPC marker was still at %v after 2s; nothing refreshes it, so a second lobster will sweep this live socket directory", fi.ModTime())
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// A second lobster starts and sweeps on the way in.
+	second, err := newIPCSocket()
+	if err != nil {
+		t.Fatalf("second newIPCSocket: %v", err)
+	}
+	t.Cleanup(second.cleanup)
+
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("a second run deleted the live playback's socket directory %q: %v", dir, err)
+	}
+}
+
+// cleanup ends the playback, so the refresh has to end with it. A goroutine that
+// outlives the directory writes the marker back — userdir.Touch recreates a
+// missing one — into a path this run no longer owns, handing a later run's
+// directory an ownership claim it never made.
+func TestIPCCleanupStopsTheLivenessRefresh(t *testing.T) {
+	restore := ipcTouchEvery
+	ipcTouchEvery = 5 * time.Millisecond
+	t.Cleanup(func() { ipcTouchEvery = restore })
+	shortHome(t)
+
+	ipc, err := newIPCSocket()
+	if err != nil {
+		t.Fatalf("newIPCSocket: %v", err)
+	}
+	dir := filepath.Dir(ipc.path)
+	ipc.cleanup()
+	// Play defers cleanup and tests install it with t.Cleanup as well, so a
+	// second call has to be tolerated rather than panic on a closed channel.
+	ipc.cleanup()
+
+	// Whatever ends up at that path next is not this playback's.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("recreating %q: %v", dir, err)
+	}
+	time.Sleep(20 * ipcTouchEvery)
+
+	if _, err := os.Stat(filepath.Join(dir, userdir.Marker)); err == nil {
+		t.Errorf("a finished playback is still marking %q as its own; its refresh goroutine outlived it", dir)
 	}
 }

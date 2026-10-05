@@ -32,12 +32,34 @@ const shortTempRoot = "/tmp"
 // Linux and avoids a platform table that would go stale.
 const maxSocketPath = 104 - 1
 
-// ipcStaleAfter is how long an abandoned IPC directory is kept before a later
-// run sweeps it. Deleting one under a running mpv is not observable: lobster
-// dials once at startup and an established Unix connection survives the
-// socket file being unlinked, so only a dial that has not happened yet could
-// fail — and by then mpv has been playing for over a day.
+// ipcStaleAfter is how long an IPC directory may go without a sign of life
+// before a later run sweeps it.
+//
+// The sign of life is the ownership marker, refreshed every ipcTouchEvery while
+// mpv is running — not the directory's own mtime, which is set when mpv binds
+// the socket and does not move again. Without the refresh a playback outlasting
+// ipcStaleAfter read as abandoned to a second lobster starting in the meantime,
+// which deleted the socket directory under the running player; mpv left paused
+// overnight and resumed the next evening is long enough.
+//
+// Unlinking the socket is in fact survivable — an established Unix connection is
+// unaffected, and dialWithRetry has long since given up or succeeded — but that
+// argument only covers the one thing lobster happens to do with the path today.
+// Keeping the directory alive for as long as it is in use costs one timestamp
+// update every six hours and does not have to be re-argued when something else
+// needs the path.
 const ipcStaleAfter = 24 * time.Hour
+
+// ipcTouchEvery is how often a run refreshes its IPC directory's marker. A
+// quarter of the stale window leaves three missed refreshes of slack before a
+// second lobster could consider this run abandoned.
+//
+// It is the same ratio the torrent data directory and subtitle staging use, and
+// the constant still belongs to this package: the interval has to outpace
+// ipcStaleAfter, which this package chooses, and a shared constant would stop
+// leaving that slack the moment one package shortened its own window. A var so a
+// test can drive the loop rather than wait out a real interval.
+var ipcTouchEvery = ipcStaleAfter / 4
 
 // ipcSocket holds the IPC socket path and cleanup function.
 type ipcSocket struct {
@@ -59,7 +81,7 @@ type ipcSocket struct {
 // are, puts it somewhere both processes name the same file.
 func newIPCSocket() (*ipcSocket, error) {
 	if dir, visible, err := userdir.Make(ipcPrefix, ipcStaleAfter, socketPathFits); err == nil {
-		return socketIn(dir, visible), nil
+		return socketIn(dir, visible, userdir.Keepalive(dir, ipcTouchEvery)), nil
 	} else if !errors.Is(err, userdir.ErrUnusable) {
 		return nil, fmt.Errorf("creating directory for mpv socket: %w", err)
 	}
@@ -70,7 +92,7 @@ func newIPCSocket() (*ipcSocket, error) {
 	// have and that is short by construction.
 	if dir, err := os.MkdirTemp(shortTempRoot, "lobster-"+ipcPrefix+"-*"); err == nil {
 		if socketPathFits(dir) {
-			return socketIn(dir, false), nil
+			return socketIn(dir, false, nil), nil
 		}
 		_ = os.RemoveAll(dir)
 	}
@@ -83,14 +105,24 @@ func newIPCSocket() (*ipcSocket, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating directory for mpv socket: %w", err)
 	}
-	return socketIn(dir, false), nil
+	return socketIn(dir, false, nil), nil
 }
 
 // socketIn describes the socket lobster will ask mpv to create in dir.
-func socketIn(dir string, visible bool) *ipcSocket {
+//
+// stopAlive ends the liveness refresh and is nil for the two last-resort
+// directories above, which are created directly in the system temp dir: nothing
+// lobster runs sweeps those, and the system reclaims them on its own, so there
+// is no sweep to stay ahead of.
+func socketIn(dir string, visible bool, stopAlive func()) *ipcSocket {
 	return &ipcSocket{
-		path:           filepath.Join(dir, socketName),
-		cleanup:        func() { userdir.Remove(dir) },
+		path: filepath.Join(dir, socketName),
+		cleanup: func() {
+			if stopAlive != nil {
+				stopAlive()
+			}
+			userdir.Remove(dir)
+		},
 		sandboxVisible: visible,
 	}
 }

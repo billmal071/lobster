@@ -163,10 +163,20 @@ func TestPruneStaleSweepsOnlyItsOwnStalePrefix(t *testing.T) {
 		if err := os.Mkdir(d, 0o700); err != nil {
 			t.Fatalf("creating %s: %v", d, err)
 		}
+		// All three are lobster's, so what the sweep does here turns on the
+		// prefix and the age, which is what this test is about.
+		if err := MarkOwned(d); err != nil {
+			t.Fatalf("marking %s: %v", d, err)
+		}
 	}
 	for _, d := range []string{mine, theirs} {
-		if err := os.Chtimes(d, stale, stale); err != nil {
-			t.Fatalf("ageing %s: %v", d, err)
+		// Staleness is read off the marker, which is what a live run refreshes;
+		// the directory is aged alongside it only so nothing here looks fresh
+		// for the wrong reason.
+		for _, p := range []string{filepath.Join(d, Marker), d} {
+			if err := os.Chtimes(p, stale, stale); err != nil {
+				t.Fatalf("ageing %s: %v", p, err)
+			}
 		}
 	}
 
@@ -407,5 +417,214 @@ func TestMakeNeverCreatesOutsideHomeWhenTheBaseIsSwappedAfterValidation(t *testi
 	}
 	if !visible {
 		t.Errorf("Make fell back to the temp dir; another base under $HOME was still usable")
+	}
+}
+
+// The sweep's parent is a directory the user chose, so a stale directory that
+// happens to match the prefix may be theirs. Deleting it is recursive and
+// unrecoverable, so the marker — not the name — is what authorises removal.
+func TestPruneStaleSparesUnmarkedDirectories(t *testing.T) {
+	parent := t.TempDir()
+	theirs := filepath.Join(parent, "probe-backups")
+	theirFile := filepath.Join(theirs, "keepme.txt")
+	if err := os.Mkdir(theirs, 0o700); err != nil {
+		t.Fatalf("creating %s: %v", theirs, err)
+	}
+	if err := os.WriteFile(theirFile, []byte("not lobster's"), 0o600); err != nil {
+		t.Fatalf("seeding %s: %v", theirFile, err)
+	}
+	stale := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(theirs, stale, stale); err != nil {
+		t.Fatalf("ageing %s: %v", theirs, err)
+	}
+
+	PruneStale(parent, "probe", 24*time.Hour)
+
+	if _, err := os.Stat(theirFile); err != nil {
+		t.Errorf("the sweep deleted %q, which lobster never created and did not mark: %v", theirFile, err)
+	}
+	if _, err := os.Stat(theirs); err != nil {
+		t.Errorf("the sweep deleted the unmarked directory %q: %v", theirs, err)
+	}
+}
+
+// Make is where the marker comes from for every caller that does not create its
+// own directory, so a directory it made must be sweepable by a later run.
+func TestMakeMarksTheDirectoryItCreates(t *testing.T) {
+	fakeHome(t)
+
+	dir, _, err := Make("probe", time.Hour, nil)
+	if err != nil {
+		t.Fatalf("Make: %v", err)
+	}
+	t.Cleanup(func() { Remove(dir) })
+
+	if _, err := os.Stat(filepath.Join(dir, Marker)); err != nil {
+		t.Errorf("Make left %q unmarked, so no later run may sweep it: %v", dir, err)
+	}
+}
+
+// A directory's modification time moves when entries are created or removed, not
+// when their contents change — so a torrent client writing gigabytes into files
+// it allocated at the start of the run leaves the directory's mtime frozen at
+// the moment the run began. A session outlasting staleAfter would then look
+// abandoned to a second lobster starting up, which would delete the payload out
+// from under the player. The marker's timestamp, refreshed while the run is
+// live, is the liveness record; the directory's own is not evidence of anything.
+func TestPruneStaleSparesARunWhoseMarkerIsFresh(t *testing.T) {
+	parent := t.TempDir()
+	live := filepath.Join(parent, "probe-live")
+	payload := filepath.Join(live, "movie.mkv")
+	if err := os.Mkdir(live, 0o700); err != nil {
+		t.Fatalf("creating %s: %v", live, err)
+	}
+	if err := os.WriteFile(payload, make([]byte, 64), 0o600); err != nil {
+		t.Fatalf("allocating %s: %v", payload, err)
+	}
+	if err := MarkOwned(live); err != nil {
+		t.Fatalf("marking %s: %v", live, err)
+	}
+	// The run started two days ago and allocated its files then; nothing has
+	// been added to or removed from the directory since.
+	stale := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(live, stale, stale); err != nil {
+		t.Fatalf("ageing %s: %v", live, err)
+	}
+	// It is still running, and says so the only way it can.
+	now := time.Now()
+	if err := os.Chtimes(filepath.Join(live, Marker), now, now); err != nil {
+		t.Fatalf("refreshing the marker in %s: %v", live, err)
+	}
+
+	PruneStale(parent, "probe", 24*time.Hour)
+
+	if _, err := os.Stat(payload); err != nil {
+		t.Errorf("the sweep deleted %q out from under a run that is still refreshing its marker: %v", payload, err)
+	}
+	if _, err := os.Stat(live); err != nil {
+		t.Errorf("the sweep deleted the live run's directory %q: %v", live, err)
+	}
+}
+
+// The other half of the same rule: once the marker stops being refreshed the
+// directory must still be swept, however recently its contents were touched.
+// Nothing under $HOME is reclaimed by the system, so a run killed without
+// cleaning up would otherwise leave tens of gigabytes behind forever.
+func TestPruneStaleSweepsARunWhoseMarkerWentStale(t *testing.T) {
+	parent := t.TempDir()
+	dead := filepath.Join(parent, "probe-dead")
+	payload := filepath.Join(dead, "movie.mkv")
+	if err := os.Mkdir(dead, 0o700); err != nil {
+		t.Fatalf("creating %s: %v", dead, err)
+	}
+	if err := os.WriteFile(payload, make([]byte, 64), 0o600); err != nil {
+		t.Fatalf("allocating %s: %v", payload, err)
+	}
+	if err := MarkOwned(dead); err != nil {
+		t.Fatalf("marking %s: %v", dead, err)
+	}
+	stale := time.Now().Add(-48 * time.Hour)
+	for _, p := range []string{dead, filepath.Join(dead, Marker)} {
+		if err := os.Chtimes(p, stale, stale); err != nil {
+			t.Fatalf("ageing %s: %v", p, err)
+		}
+	}
+	// The payload was written seconds before the process was killed, so the
+	// file's own timestamp is fresh. That must not save the directory.
+
+	PruneStale(parent, "probe", 24*time.Hour)
+
+	if _, err := os.Stat(dead); !os.IsNotExist(err) {
+		t.Errorf("a run that stopped refreshing its marker survived the sweep (stat err %v); payloads would accumulate unbounded", err)
+	}
+}
+
+// Touch is the only way a run can say it is still alive, so it has to work on a
+// marker that has gone stale and on one that is no longer there at all.
+func TestTouchRefreshesTheMarkerAndWritesItBackIfGone(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, Marker)
+	if err := MarkOwned(dir); err != nil {
+		t.Fatalf("marking %s: %v", dir, err)
+	}
+	stale := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(marker, stale, stale); err != nil {
+		t.Fatalf("ageing the marker: %v", err)
+	}
+
+	if err := Touch(dir); err != nil {
+		t.Fatalf("Touch: %v", err)
+	}
+	fi, err := os.Stat(marker)
+	if err != nil {
+		t.Fatalf("stat marker: %v", err)
+	}
+	if !fi.ModTime().After(stale) {
+		t.Errorf("Touch left the marker at %v; a run that cannot say it is alive gets its payload swept", fi.ModTime())
+	}
+
+	if err := os.Remove(marker); err != nil {
+		t.Fatalf("removing the marker: %v", err)
+	}
+	if err := Touch(dir); err != nil {
+		t.Fatalf("Touch on a missing marker: %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("Touch did not write the marker back, so the directory is now neither sweepable nor protected: %v", err)
+	}
+}
+
+// Keepalive must refresh straight away — a run whose first refresh is an interval
+// away is unprotected for that interval — and must keep refreshing until it is
+// stopped, which is what carries a session past staleAfter.
+func TestKeepaliveRefreshesTheMarkerUntilStopped(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, Marker)
+	if err := MarkOwned(dir); err != nil {
+		t.Fatalf("marking %s: %v", dir, err)
+	}
+	age := func() {
+		stale := time.Now().Add(-48 * time.Hour)
+		if err := os.Chtimes(marker, stale, stale); err != nil {
+			t.Fatalf("ageing the marker: %v", err)
+		}
+	}
+	mtime := func() time.Time {
+		fi, err := os.Stat(marker)
+		if err != nil {
+			t.Fatalf("stat marker: %v", err)
+		}
+		return fi.ModTime()
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+
+	age()
+	// The interval is injected so this test drives the loop instead of waiting
+	// out a real one.
+	stop := Keepalive(dir, 5*time.Millisecond)
+	t.Cleanup(stop)
+	if !mtime().After(cutoff) {
+		t.Fatalf("Keepalive did not refresh the marker before returning (mtime %v); the run is unprotected until the first tick", mtime())
+	}
+
+	// Now prove the loop ticks rather than only refreshing once.
+	age()
+	deadline := time.Now().Add(2 * time.Second)
+	for !mtime().After(cutoff) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the marker was still at %v after 2s; Keepalive refreshed once and stopped, so a run outlasting staleAfter is still swept", mtime())
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	stop()
+	stop() // idempotent: Close may run twice.
+	// A refresh already in flight when stop returned lands inside the first
+	// window, so the second window is what shows the loop is really over.
+	time.Sleep(50 * time.Millisecond)
+	settled := mtime()
+	time.Sleep(50 * time.Millisecond)
+	if got := mtime(); !got.Equal(settled) {
+		t.Errorf("the marker moved from %v to %v after stop; the goroutine outlived the run and would keep a deleted directory looking alive", settled, got)
 	}
 }

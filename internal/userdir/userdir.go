@@ -25,6 +25,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,6 +34,17 @@ import (
 // snapd's home interface only hides paths whose first component below $HOME is
 // dot-prefixed, not nested ones.
 const Parent = ".lobster"
+
+// Marker is the file lobster writes inside every directory it creates here. It
+// is proof of ownership, and PruneStale deletes nothing without it.
+//
+// A prefix match is not proof. PruneStale's parent is a directory the user
+// chose, so it may already hold directories of their own, and "starts with
+// torrent-" is a name a user is entitled to use — a ~/Downloads/torrent-backups
+// older than the stale window would be removed recursively by a sweep that
+// trusted the name alone. The marker distinguishes "lobster made this and lost
+// track of it" from "this was already here".
+const Marker = ".lobster-dir"
 
 // baseNames are the candidate base directories, relative to $HOME and most
 // preferred first.
@@ -101,9 +113,13 @@ func Make(prefix string, staleAfter time.Duration, usable func(dir string) bool)
 			if err := root.MkdirAll(parent, 0o700); err != nil {
 				continue
 			}
-			pruneStaleIn(root, parent, prefix, staleAfter)
+			pruneStaleIn(root, parent, prefix, staleAfter, false)
 			name, err := mkdirRandomIn(root, parent, prefix)
 			if err != nil {
+				continue
+			}
+			if err := markOwnedIn(root, name); err != nil {
+				_ = root.RemoveAll(name)
 				continue
 			}
 			candidate := filepath.Join(root.Name(), filepath.FromSlash(name))
@@ -117,6 +133,10 @@ func Make(prefix string, staleAfter time.Duration, usable func(dir string) bool)
 
 	candidate, err := os.MkdirTemp("", "lobster-"+prefix+"-*")
 	if err != nil {
+		return "", false, err
+	}
+	if err := MarkOwned(candidate); err != nil {
+		Remove(candidate)
 		return "", false, err
 	}
 	if usable != nil && !usable(candidate) {
@@ -199,27 +219,112 @@ func randomSuffix() string {
 	return hex.EncodeToString(b[:])
 }
 
-// PruneStale removes "<prefix>-*" directories directly inside parent that have
-// not been written to for staleAfter, i.e. those left behind by runs that were
-// killed before they could clean up. Unlike /tmp, a directory under $HOME is
+// MarkOwned writes the ownership marker into a directory lobster created, so a
+// later PruneStale is allowed to sweep it. Callers that create their own
+// directory inside a user-chosen parent — rather than going through Make — must
+// call this, or their abandoned directories accumulate forever.
+func MarkOwned(dir string) error {
+	return os.WriteFile(filepath.Join(dir, Marker), nil, 0o600)
+}
+
+// Touch records that the run using dir is still alive, by refreshing the
+// ownership marker's timestamp.
+//
+// The directory's own modification time cannot carry that: a directory's mtime
+// moves when entries are created or removed, not when their contents change. A
+// torrent client writes gigabytes into files it allocated when the run started,
+// so the directory's mtime freezes at that moment — and a run outlasting
+// staleAfter then looks abandoned to a second lobster starting up, which deletes
+// the payload out from under the player. Verified rather than assumed: writing
+// into a file inside a marked directory leaves the directory's mtime untouched
+// and a sweep then removes it.
+//
+// The marker is a file nothing else writes, so its timestamp is an explicit
+// record of when the run was last seen alive rather than an inference from the
+// payload's activity — which is just as unreliable in the other direction, since
+// a run killed a second after its last write leaves a fresh-looking payload
+// behind forever.
+func Touch(dir string) error {
+	now := time.Now()
+	if err := os.Chtimes(filepath.Join(dir, Marker), now, now); err == nil {
+		return nil
+	}
+	// The marker is missing — tidied away by hand, or never written by an older
+	// version. Writing it back is both the liveness record and the ownership
+	// claim, so the directory can be swept once this run ends.
+	return MarkOwned(dir)
+}
+
+// Keepalive refreshes dir's marker immediately and every interval after that,
+// until the returned stop is called. stop is safe to call more than once.
+//
+// Liveness deliberately rests on the process continuing to run rather than on
+// anything it wrote down. A run killed without stopping — SIGKILL, a panic, a
+// pulled plug — simply stops refreshing, so its directory goes stale on schedule
+// and the next run sweeps it. A lockfile or pidfile would survive the crash it
+// is meant to describe, and a stale one is exactly how an abandoned payload
+// becomes immortal and growth becomes unbounded again.
+//
+// interval must be comfortably shorter than the staleAfter passed to Make or
+// PruneStale, or a live run can still be swept between two refreshes.
+func Keepalive(dir string, interval time.Duration) (stop func()) {
+	_ = Touch(dir)
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				_ = Touch(dir)
+			}
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { close(done) }) }
+}
+
+// markOwnedIn is MarkOwned performed root-relative, so it cannot be redirected
+// outside the home directory by a component swapped for a symlink.
+func markOwnedIn(root *os.Root, dir string) error {
+	f, err := root.Create(path.Join(dir, Marker))
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// PruneStale removes "<prefix>-*" directories directly inside parent that carry
+// the ownership Marker and have not been written to for staleAfter, i.e. those
+// left behind by runs that were killed before they could clean up. A directory
+// without the marker is never touched, however old it is and whatever it is
+// called: parent here is a directory the user chose, and anything in it that
+// lobster did not create is theirs. Unlike /tmp, a directory under $HOME is
 // never reclaimed by the system, so somebody has to.
 //
-// A directory's mtime is set when its files are written and does not advance
-// while a helper reads from them, so a session running longer than staleAfter
-// can have its own live directory swept by a second lobster process starting
-// in the meantime. Whether that matters is the caller's to judge: pick a
-// staleAfter comfortably longer than any handoff whose disappearance the
-// helper would notice.
+// Staleness is measured on the marker, not on the directory, and a live run is
+// expected to keep its marker fresh — see Touch and Keepalive for why the
+// directory's own mtime cannot answer the question. A caller that does not
+// refresh the marker is back to relying on the directory's mtime holding still,
+// so it should pick a staleAfter comfortably longer than any handoff whose
+// disappearance the helper would notice.
 func PruneStale(parent, prefix string, staleAfter time.Duration) {
 	root, err := os.OpenRoot(parent)
 	if err != nil {
 		return
 	}
 	defer root.Close()
-	pruneStaleIn(root, ".", prefix, staleAfter)
+	pruneStaleIn(root, ".", prefix, staleAfter, true)
 }
 
-func pruneStaleIn(root *os.Root, parent, prefix string, staleAfter time.Duration) {
+// pruneStaleIn sweeps parent, relative to root. requireMarker is set for the
+// exported PruneStale, whose parent is user-chosen; it is not set for the sweep
+// Make does inside its own Parent directory, which lobster creates 0o700 and
+// nothing else writes to. Requiring the marker there would permanently orphan
+// the directories earlier versions left behind, with nothing left to sweep them.
+func pruneStaleIn(root *os.Root, parent, prefix string, staleAfter time.Duration, requireMarker bool) {
 	d, err := root.Open(parent)
 	if err != nil {
 		return
@@ -234,12 +339,39 @@ func pruneStaleIn(root *os.Root, parent, prefix string, staleAfter time.Duration
 		if !e.IsDir() || !strings.HasPrefix(e.Name(), prefix+"-") {
 			continue
 		}
-		info, err := e.Info()
-		if err != nil || info.ModTime().After(cutoff) {
+		name := path.Join(parent, e.Name())
+		alive, ok := lastAlive(root, name, e, requireMarker)
+		if !ok || alive.After(cutoff) {
 			continue
 		}
-		_ = root.RemoveAll(path.Join(parent, e.Name()))
+		_ = root.RemoveAll(name)
 	}
+}
+
+// lastAlive reports when the run that owns dir was last seen alive.
+//
+// That is the marker's timestamp whenever there is a marker, because a live run
+// refreshes it and the directory's own mtime does not move while files inside it
+// are written. ok is false when the marker is required and absent, which is the
+// ownership check.
+//
+// Without the requirement — Make's sweep inside lobster's own Parent — an
+// unmarked directory was left by a version that predates the marker, and the
+// directory's own mtime is the only thing there is to go on. Those runs are long
+// over, so it is good enough to retire them.
+func lastAlive(root *os.Root, dir string, e fs.DirEntry, requireMarker bool) (time.Time, bool) {
+	fi, err := root.Stat(path.Join(dir, Marker))
+	if err == nil {
+		return fi.ModTime(), true
+	}
+	if requireMarker {
+		return time.Time{}, false
+	}
+	info, err := e.Info()
+	if err != nil {
+		return time.Time{}, false
+	}
+	return info.ModTime(), true
 }
 
 // Remove deletes dir and, if that leaves the shared parent empty, the parent

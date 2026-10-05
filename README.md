@@ -387,7 +387,14 @@ download_dir = "~/Videos/lobster"
 # leave torrent_fallback false to never join a swarm. Otherwise use a VPN.
 # Needs a 64-bit build, or the classic storage backend, which lobster selects
 # for you on a run that may stream a torrent (GUIDE.md -> "Torrent storage
-# backend"). Pieces land in a temp directory and are removed when playback ends.
+# backend"). Pieces land in ~/Videos/.lobster/ and are removed when playback
+# ends; torrent_dir moves them (GUIDE.md -> "Where torrent data lands").
+
+# Where a streaming torrent's pieces are written. Unset means
+# ~/Videos/.lobster/torrent-<random>, on the same volume as your home
+# directory rather than on the small filesystem /tmp usually lives on — a 4K
+# remux can be tens of gigabytes. The directory is deleted when playback ends.
+# torrent_dir = "/mnt/scratch/lobster"
 
 # Lift AllAnime's adult filter on search. Off by default.
 #
