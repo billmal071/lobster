@@ -133,8 +133,12 @@ func probeDuration(path string) float64 {
 //
 // Both go into ONE -headers value. ffmpeg treats -headers as a single option,
 // so a second one replaces the first and drops a header rather than adding to
-// it — the same reason internal/player/headers.go folds them into one
-// --demuxer-lavf-o=headers= value for mpv.
+// it. That is an ffmpeg constraint only, and the opposite of what mpv wants:
+// -headers is a plain string that takes a CRLF-separated block verbatim,
+// whereas mpv's equivalent (--demuxer-lavf-o=headers=) is a list option split
+// on commas, which a browser User-Agent's ", like Gecko" makes unparseable. So
+// internal/player/headers.go deliberately does NOT pack them together — it
+// emits --referrer and --user-agent separately.
 //
 // The User-Agent is not optional where a source asks for one. ffmpeg defaults
 // to "Lavf/<version>", and at least one CDN lobster reaches

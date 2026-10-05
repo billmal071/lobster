@@ -226,9 +226,10 @@ func (p *AnimeOnsen) animeOnsenRetryWait(attempt int, h http.Header) time.Durati
 // (internal/hlsproxy) rewrites m3u8 playlists and would corrupt a manifest it
 // does not understand, and there is nothing to de-obfuscate in the first
 // place. Players reach it through the headers media.Stream already models
-// (internal/player/headers.go folds Referer and User-Agent into
-// --demuxer-lavf-o=headers=, which lavf's DASH demuxer honours for its segment
-// requests exactly as it does for HLS).
+// (internal/player/headers.go emits --referrer and --user-agent, which mpv
+// carries onto the demuxer's own fetches: measured against a logging server,
+// the DASH manifest, its init segment and every media segment arrive with both
+// headers, exactly as HLS segment requests do).
 //
 // # No subtitles come from this source
 //
