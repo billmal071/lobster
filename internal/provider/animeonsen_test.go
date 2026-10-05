@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -401,9 +403,15 @@ func TestAnimeOnsenEpisodesReportsABogusContentIDAsNoResults(t *testing.T) {
 // proves only that the arithmetic is self-consistent, and both would move
 // together under a mutation.
 func TestAnimeOnsenEpisodesReportsExactlyTheEpisodesThatAnswered(t *testing.T) {
+	// The powers of two and their neighbours are the bracket's boundaries; the
+	// rest are the narrowing's, including the counts where its evenly spaced
+	// points land on the answer and the ones where they straddle it. Every
+	// count from 1 to 300 was run against this fixture when the narrowing's
+	// width changed (0 mismatches); the table is the subset worth paying for
+	// on every run.
 	for _, want := range []int{
-		1, 2, 3, 7, 8, 9, 12, 13, 15, 16, 17, 24, 26, 31, 32, 33,
-		63, 64, 65, 100, 127, 128, 129, 1097,
+		1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20,
+		24, 25, 26, 31, 32, 33, 48, 50, 63, 64, 65, 100, 127, 128, 129, 1097,
 	} {
 		t.Run(strconv.Itoa(want), func(t *testing.T) {
 			f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": want}})
@@ -1013,19 +1021,16 @@ func TestAnimeOnsenProbeReusesConfirmedEpisodesWithinARun(t *testing.T) {
 		t.Fatalf("second episodeCount: %v", err)
 	}
 	second := len(f.requests()) - first
-	// Measured literals. The first enumeration of a 12-episode series costs
-	// 18 requests; the second costs 10, because the eleven episodes the first
-	// one watched answer 200 are not asked again while every 404 still is.
 	// Measured literals, written out rather than compared against each other
-	// or against the probe's own constants. A 12-episode series costs 16
-	// requests to enumerate cold and 8 to enumerate again, because the eight
+	// or against the probe's own constants. A 12-episode series costs 14
+	// requests to enumerate cold and 7 to enumerate again, because the
 	// episodes the first pass watched answer 200 are not asked a second time
 	// while every 404 still is.
-	if first != 16 {
-		t.Fatalf("first enumeration cost %d requests, want 16", first)
+	if first != 14 {
+		t.Fatalf("first enumeration cost %d requests, want 14", first)
 	}
-	if second != 8 {
-		t.Fatalf("second enumeration cost %d requests, want 8", second)
+	if second != 7 {
+		t.Fatalf("second enumeration cost %d requests, want 7", second)
 	}
 	// And a known-present episode costs nothing at all to re-check, which is
 	// the path resolver takes: GetEpisodes, then Watch on one of them.
@@ -1073,6 +1078,51 @@ func TestAnimeOnsenProbeCapsItsInFlightRequests(t *testing.T) {
 	// animeOnsenProbeWidth, so shrinking the constant cannot satisfy this.
 	if got := f.peakConcurrency(); got >= 8 {
 		t.Fatalf("peak concurrency %d; the whole wave is in flight at once, which is what origin sheds", got)
+	}
+}
+
+// TestAnimeOnsenNarrowingProbesNoWiderThanItCanHaveInFlight pins the
+// narrowing's wave width against the thing that makes a wide wave expensive.
+//
+// Round trips are the cost here, not requests: a wave of W points goes out
+// ceil(W/animeOnsenProbeInFlight) tranches at a time, and it only shrinks the
+// unknown gap by a factor of W+1. Widening past the in-flight cap therefore
+// buys less than the extra tranche costs — and every point the wave spends
+// above the real boundary is spent for nothing, because the boundary is fixed
+// by the *lowest* absent probe.
+//
+// Asserted as the exact multiset of episodes a 12-episode enumeration asks
+// about, measured and written out. A set is what pins the schedule; a count
+// alone would pass for a wave of four taken twice, and comparing against
+// animeOnsenNarrowWidth would pass for any width including the old one.
+func TestAnimeOnsenNarrowingProbesNoWiderThanItCanHaveInFlight(t *testing.T) {
+	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": 12}})
+	n, err := f.provider().episodeCount("x")
+	if err != nil || n != 12 {
+		t.Fatalf("episodeCount = %d, %v; want 12 and no error", n, err)
+	}
+	var asked []int
+	for _, r := range f.requests() {
+		if m := animeOnsenManifestPath.FindStringSubmatch(r.path); m != nil {
+			k, _ := strconv.Atoi(m[2])
+			asked = append(asked, k)
+		}
+	}
+	sort.Ints(asked)
+	// The bracket (1,2,4,8,16,32,64,128), one narrowing wave of four points
+	// evenly spaced in the gap 9..15 (9,11,12,14), the single point that is
+	// left (13), and the solitary re-check of 13.
+	want := []int{1, 2, 4, 8, 9, 11, 12, 13, 13, 14, 16, 32, 64, 128}
+	if fmt.Sprint(asked) != fmt.Sprint(want) {
+		t.Fatalf("the probe asked about %v, want %v", asked, want)
+	}
+	// Spelled out because it is the saving, not a restatement: a wave that
+	// probed the whole gap would have asked about these two, and the answers
+	// could not have changed the boundary.
+	for _, never := range []int{10, 15} {
+		if slices.Contains(asked, never) {
+			t.Fatalf("episode %d was probed; nothing below the lowest absent episode can move the boundary, so the gap is not there to be enumerated", never)
+		}
 	}
 }
 
