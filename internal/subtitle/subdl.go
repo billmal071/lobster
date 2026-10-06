@@ -119,15 +119,36 @@ func (s *SubDLClient) Search(title, language string, season, episode int) ([]med
 	// which this endpoint ignores outright (film_name=Avatar&year=2005 still
 	// answers with the 2009 film).
 	//
-	// A result carrying no type is accepted: the check rejects a stated
-	// mismatch, never a missing statement.
+	// A result carrying no type is accepted, but only as a fallback: the check
+	// rejects a stated mismatch, never a missing statement, and an explicit
+	// match is still the better answer. Taking the first result that is either
+	// untyped or matching would let the order SubDL happens to return things in
+	// decide which sd_id step 2 pivots on, and SubDL documents no ordering.
+	//
+	// Neither half of that has been observed. Across 57 live step-1 queries on
+	// 2026-10-06 every answer carried 0 or 1 results -- with and without
+	// `type`, and at subs_per_page=50 -- and every result stated its type, so
+	// there is no measured case of an untyped result at all, let alone one
+	// preceding a typed one. `type` is also server-validated (an empty, unknown
+	// or comma-joined value is rejected with HTTP 422), so the single result
+	// can only be the kind asked for. The preference below is ordering
+	// independence for a shape the catalogue may yet produce, not a fix for a
+	// reproduced wrong match.
 	sdID := 0
 	found := false
+	untypedID := 0
+	haveUntyped := false
 	for _, r := range searchResp.Results {
-		if r.Type == "" || r.Type == wantType {
+		if r.Type == wantType {
 			sdID, found = r.SDId, true
 			break
 		}
+		if r.Type == "" && !haveUntyped {
+			untypedID, haveUntyped = r.SDId, true
+		}
+	}
+	if !found && haveUntyped {
+		sdID, found = untypedID, true
 	}
 	if !found {
 		return nil, fmt.Errorf("no %s results for %q", wantType, title)

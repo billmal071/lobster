@@ -221,3 +221,69 @@ func TestOpenSubtitlesKeepsAnEntryWithNoFeatureType(t *testing.T) {
 		}
 	}
 }
+
+// TestSubDLPrefersAStatedMatchOverAnUnstatedOne pins the order independence of
+// the step-1 result scan. An untyped result is accepted, but only when no
+// result states the kind that was asked for -- otherwise the order SubDL
+// happens to return things in would decide which sd_id step 2 pivots on, and
+// SubDL offers no ordering guarantee.
+//
+// This shape has not been observed: across 57 live step-1 queries on
+// 2026-10-06 every answer carried 0 or 1 results and every result stated its
+// type, so no untyped result can precede a typed one today. The scan should not
+// depend on that holding.
+func TestSubDLPrefersAStatedMatchOverAnUnstatedOne(t *testing.T) {
+	stub := &subdlStub{
+		results: []subdlResult{
+			{SDId: 111, Type: "", Name: "Unclassified", Year: 2001},
+			{SDId: 222, Type: "tv", Name: "The Series", Year: 2002},
+		},
+		subtitles: []subdlSubtitle{
+			{ReleaseName: "The.Series.S01E01", Language: "English",
+				URL: "/subtitle/series-s01e01.zip", Season: 1, Episode: 1},
+		},
+	}
+	stub.serve(t)
+
+	if _, err := NewSubDL("stub-key").Search("The Series", "en", 1, 1); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(stub.subQueries) != 1 {
+		t.Fatalf("got %d step-2 requests, want 1", len(stub.subQueries))
+	}
+	if got := stub.subQueries[0].Get("sd_id"); got != "222" {
+		t.Errorf("step 2 pivoted on sd_id %q; want \"222\", the result SubDL labelled tv — an untyped result listed first must not win over a stated match", got)
+	}
+}
+
+// TestSubDLFallsBackToAnUntypedResult is the other half: when nothing states
+// the wanted kind, an untyped result is still usable, and it is the *first* one
+// that is used. The guard rejects a stated mismatch, never a missing statement.
+//
+// This passes before the preference change as well as after it, which is the
+// point of it: demoting an untyped result to a fallback must not turn it into a
+// rejection.
+func TestSubDLFallsBackToAnUntypedResult(t *testing.T) {
+	stub := &subdlStub{
+		results: []subdlResult{
+			{SDId: 333, Type: "movie", Name: "The Film", Year: 2001},
+			{SDId: 444, Type: "", Name: "Unclassified", Year: 2002},
+			{SDId: 555, Type: "", Name: "Also Unclassified", Year: 2003},
+		},
+		subtitles: []subdlSubtitle{
+			{ReleaseName: "Unclassified.S01E01", Language: "English",
+				URL: "/subtitle/unclassified-s01e01.zip", Season: 1, Episode: 1},
+		},
+	}
+	stub.serve(t)
+
+	if _, err := NewSubDL("stub-key").Search("Unclassified", "en", 1, 1); err != nil {
+		t.Fatalf("Search for a tv request whose only non-movie match is untyped failed: %v", err)
+	}
+	if len(stub.subQueries) != 1 {
+		t.Fatalf("got %d step-2 requests, want 1", len(stub.subQueries))
+	}
+	if got := stub.subQueries[0].Get("sd_id"); got != "444" {
+		t.Errorf("step 2 pivoted on sd_id %q; want \"444\", the first untyped result — a stated movie must not answer a tv request, and a later untyped result must not displace an earlier one", got)
+	}
+}
