@@ -1854,7 +1854,14 @@ func TestAnimeOnsenAnEnumerationThatCannotGetTheWireSaysWhy(t *testing.T) {
 		return base.Add(2 * animeOnsenProbeBudget)
 	}
 
+	start := time.Now()
 	n, err := p.episodeCount("x")
+	// The bound is on p.now, so a wait sized from anything else — the whole
+	// budget, say, instead of what is left of it — would spend real seconds
+	// here. Asserted as an upper bound rather than waited for.
+	if waited := time.Since(start); waited > animeOnsenProbeBudget/2 {
+		t.Fatalf("the refused probe waited %s, want well under the %s budget: the wait has to be sized from the budget that is left, not from the whole of it", waited, animeOnsenProbeBudget)
+	}
 	if n != 0 {
 		t.Fatalf("episodeCount = %d, want 0: nothing was measured", n)
 	}
