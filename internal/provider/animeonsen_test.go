@@ -1780,3 +1780,94 @@ func TestAnimeOnsenABoundaryHandedBackWithNoBudgetLeftIsUnconfirmed(t *testing.T
 		t.Fatalf("the probe made %d requests, want the bracket's 8 and no confirmation probe; this test is not reaching the arm between the search and the probe", got)
 	}
 }
+
+// Two GetEpisodes calls can reach one AnimeOnsen instance at the same time, and
+// when they do, "this 404 arrived with nothing else in flight" stops being
+// true. probeSet decides solitariness from the size of its own wave, which
+// knows nothing about another enumeration's wave of four sharing the wire — so
+// a wave of one is labelled solitary, the CDN sheds the concurrent miss, and
+// the short count is returned as a confirmed one with no
+// ErrIncompleteEpisodeList to say otherwise.
+//
+// The reachable callers are in cmd and tui, not here: the TUI's download dialog
+// closes on Escape without cancelling the tea.Cmd fetching its episode list, so
+// reopening it probes with the same provider the first fetch is still using,
+// and a multi-season batch caches its chain hits while episodesWithContext
+// abandons a provider call at the 5s cap and lets the goroutine behind it carry
+// on. So this is pinned where the invariant lives: whatever the callers do, one
+// instance puts one enumeration's worth of requests on the wire.
+func TestAnimeOnsenConcurrentEnumerationsShareNothingButTheInstance(t *testing.T) {
+	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": 12}})
+	p := f.provider()
+
+	const callers = 8
+	counts := make([]int, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := range callers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			counts[i], errs[i] = p.episodeCount("x")
+		}(i)
+	}
+	wg.Wait()
+
+	for i := range callers {
+		if counts[i] != 12 || errs[i] != nil {
+			t.Fatalf("caller %d: episodeCount = %d, %v; want 12 and no error", i, counts[i], errs[i])
+		}
+	}
+	if peak := f.peakConcurrency(); peak > animeOnsenProbeInFlight {
+		t.Fatalf("%d requests were in flight at once, want at most %d: the probe's 404s are only trustworthy while one enumeration owns this instance's wire, so two overlapping enumerations is the shape that makes a shed miss look like the end of the series", peak, animeOnsenProbeInFlight)
+	}
+}
+
+// The wait for the wire is bounded by the probe's own budget, and the refusal
+// says what it was waiting for.
+//
+// Both halves matter. Blocking indefinitely would break the one promise
+// episodeCount makes to `episodes` and `play` — that it answers inside
+// animeOnsenProbeBudget — and push a second caller past cmd/episodes.go's 5s
+// abandonment, trading a correct-but-late list for no list at all. And the
+// answer has to name the gate rather than the budget: "the episode probe
+// exceeded 4.5s" would send a reader looking at the CDN for a cost that was
+// entirely local.
+func TestAnimeOnsenAnEnumerationThatCannotGetTheWireSaysWhy(t *testing.T) {
+	f := newAnimeOnsenFake(t, &animeOnsenFake{episodes: map[string]int{"x": 12}})
+	p := f.provider()
+	if !p.acquireProbe(time.Now().Add(animeOnsenProbeBudget)) {
+		t.Fatal("could not take an uncontended probe gate")
+	}
+	t.Cleanup(p.releaseProbe)
+
+	// A clock that is inside the budget when episodeCount sizes its deadline
+	// and past it by the time the gate is waited on, so the bound is measured
+	// rather than waited out: no test here may spend 4.5s of wall clock.
+	base := time.Now()
+	var calls int
+	p.now = func() time.Time {
+		calls++
+		if calls == 1 {
+			return base
+		}
+		return base.Add(2 * animeOnsenProbeBudget)
+	}
+
+	n, err := p.episodeCount("x")
+	if n != 0 {
+		t.Fatalf("episodeCount = %d, want 0: nothing was measured", n)
+	}
+	if err == nil {
+		t.Fatal("episodeCount returned no error while another enumeration held the wire")
+	}
+	if errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("episodeCount err = %v, and it wraps ErrIncompleteEpisodeList; there is no measured prefix to flag, so this has to read as no answer and send the caller to the chain", err)
+	}
+	if !strings.Contains(err.Error(), "another episode probe for this provider was still running") {
+		t.Fatalf("episodeCount err = %v; want it to name the enumeration that held the wire, not the CDN", err)
+	}
+	if got := len(f.requests()); got != 0 {
+		t.Fatalf("the refused probe made %d requests, want 0", got)
+	}
+}

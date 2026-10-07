@@ -311,6 +311,79 @@ type AnimeOnsen struct {
 	// animeOnsenMaxEpisodes entries per content id.
 	confirmedMu sync.Mutex
 	confirmed   map[string]bool
+
+	// probeGate admits one episode enumeration at a time per instance, and it
+	// is what makes "this 404 arrived with nothing else in flight" true of the
+	// instance rather than only of the wave that sent it.
+	//
+	// probeSet decides solitariness by construction — a wave of one request is
+	// alone, and the serial re-ask pass is one at a time by definition — and
+	// that reasoning is sound for one enumeration and silently false for two.
+	// Two GetEpisodes calls can overlap on one instance: the TUI's download
+	// dialog closes on Escape without cancelling the tea.Cmd that is fetching
+	// its episode list (internal/tui/download_dialog.go: cancel() clears the
+	// flags, nothing cancels the command), so reopening it starts a second
+	// fetch against the same provider the first is still probing with. A
+	// multi-season batch reaches it too: seasonLister caches its chain hits and
+	// episodesWithContext abandons a provider call at the 5s cap while the
+	// goroutine behind it goes on probing (cmd/batch.go, cmd/episodes.go).
+	// Under either, a wave of one shares the wire with another enumeration's
+	// wave of four, the CDN sheds the concurrent miss, and the 404 that comes
+	// back is accepted as the end of the series — which is the exact
+	// observation this whole file exists to distrust.
+	//
+	// Serialising is the right answer rather than detecting the overlap and
+	// degrading to ErrUnconfirmedEpisodeList, because serialising still returns
+	// a confirmed count to both callers; detection would return a warning to
+	// the second one, and suppressing that warning on healthy runs is what §7
+	// of this work was spent on.
+	//
+	// It is a channel and not a sync.Mutex because the wait has to be bounded:
+	// episodeCount's contract is that it answers inside
+	// animeOnsenProbeBudget — that is what lets `episodes` and `play` call it
+	// without being left waiting — and a mutex would let a second caller block
+	// past its own deadline, past cmd/episodes.go's 5s abandonment, and lose
+	// its season's list to a timeout instead of to an answer.
+	probeGateOnce sync.Once
+	probeGate     chan struct{}
+}
+
+// gate returns the instance's probe gate, created on first use so a provider
+// built as a literal (tests outside the constructors) is not a nil gate.
+func (p *AnimeOnsen) gate() chan struct{} {
+	p.probeGateOnce.Do(func() { p.probeGate = make(chan struct{}, 1) })
+	return p.probeGate
+}
+
+// acquireProbe takes the instance's probe gate, waiting no longer than the
+// probe's own budget. It reports false when the budget ran out first, which the
+// caller must report rather than probe anyway: probing anyway is the bug.
+//
+// The wait is sized from the remaining budget rather than from the deadline for
+// the same reason headManifest sizes its request contexts that way — the
+// deadline is measured on p.now, the clock a test replaces, while a timer
+// counts real time.
+func (p *AnimeOnsen) acquireProbe(deadline time.Time) bool {
+	g := p.gate()
+	// The uncontended case, which is every single-caller run: no timer, and no
+	// dependence on which of two ready cases select happens to pick.
+	select {
+	case g <- struct{}{}:
+		return true
+	default:
+	}
+	t := time.NewTimer(deadline.Sub(p.now()))
+	defer t.Stop()
+	select {
+	case g <- struct{}{}:
+		return true
+	case <-t.C:
+		return false
+	}
+}
+
+func (p *AnimeOnsen) releaseProbe() {
+	<-p.gate()
 }
 
 // NewAnimeOnsen returns a provider against the live hosts.
@@ -734,6 +807,17 @@ func (p *AnimeOnsen) probeSet(contentID string, ns []int, deadline time.Time) (m
 // the safe direction: a missing episode is visible, an invented one is not.
 func (p *AnimeOnsen) episodeCount(contentID string) (int, error) {
 	deadline := p.now().Add(animeOnsenProbeBudget)
+	// One enumeration per instance at a time: every 404 below is trusted only
+	// because nothing else of this provider's was on the wire beside it, and
+	// that is a property of the instance, not of one wave. See probeGate.
+	if !p.acquireProbe(deadline) {
+		// Nothing was measured, so there is no prefix to flag — short's n < 1
+		// arm is the plain error, and the chain is then the right place to ask.
+		return p.short(contentID, 0, fmt.Sprintf(
+			"another episode probe for this provider was still running when the %s budget ran out",
+			animeOnsenProbeBudget))
+	}
+	defer p.releaseProbe()
 	expired := func() error {
 		if p.now().After(deadline) {
 			return errors.New(expiredBudgetReason())
