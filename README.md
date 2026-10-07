@@ -38,7 +38,7 @@ See [GUIDE.md](GUIDE.md) for detailed usage instructions.
 
 ## Requirements
 
-1. **Go 1.22+** — build only
+1. **Go 1.27+** — build only
 2. **fzf** — runtime (interactive menus)
 3. **mpv** — default playback
 4. **vlc** — alternative playback
