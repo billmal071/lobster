@@ -189,7 +189,16 @@ func (p *LiveTV) httpGet(ctx context.Context, c httpDoer, src string) ([]byte, e
 		// same reason the Do branch below unwraps one: it stringifies the
 		// URL it was given, so wrapping it with %w would reinstate the
 		// credentials redactURL has just removed from the same message.
-		return nil, fmt.Errorf("livetv: building request for %s failed: %w", redactURL(src), httputil.CauseWithoutURL(err))
+		safe := redactURL(src)
+		if safe == redactedURL {
+			// Redaction could not take the string apart, so the parse
+			// error cannot be shown either: net/url quotes the component
+			// it objected to, and in exactly these strings that component
+			// is the credential ("invalid port \":<password>\" after
+			// host").
+			return nil, fmt.Errorf("livetv: building request for %s failed: malformed URL", safe)
+		}
+		return nil, fmt.Errorf("livetv: building request for %s failed: %w", safe, httputil.CauseWithoutURL(err))
 	}
 	req.Header.Set("User-Agent", liveTVUA)
 	resp, err := c.Do(req)
@@ -212,8 +221,11 @@ func (p *LiveTV) httpGet(ctx context.Context, c httpDoer, src string) ([]byte, e
 	return data, nil
 }
 
-// redactURL strips the query string and userinfo so credentials (e.g. Xtream
-// username/password) never appear in error messages or logs.
+// redactedURL stands in for a source nothing safe could be salvaged from.
+const redactedURL = "<url>"
+
+// redactURL strips the fragment, query string and userinfo so credentials
+// (e.g. Xtream username/password) never appear in error messages or logs.
 func redactURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -226,8 +238,11 @@ func redactURL(raw string) string {
 	}
 	u.RawQuery = ""
 	u.User = nil
+	// A fragment is never needed to identify a source and the server never
+	// sees it, so drop it here too rather than only on the fallback path.
+	u.Fragment, u.RawFragment = "", ""
 	if u.Host == "" && u.Path == "" && u.Opaque == "" {
-		return "<url>"
+		return redactedURL
 	}
 	return u.String()
 }
@@ -236,28 +251,49 @@ func redactURL(raw string) string {
 // url.Parse rejected. It works on the raw text precisely because no parse is
 // available, so it is deliberately blunt: anything it is unsure about is
 // dropped rather than printed.
+//
+// The order of the three steps is the whole correctness argument:
+//
+//  1. The scheme comes off first. Its "//" holds the two slashes that would
+//     otherwise read as the end of the authority.
+//  2. Userinfo comes off next, at the LAST '@' — an earlier one would be
+//     inside the credential.
+//  3. Only then are the query and fragment cut. Cutting them first was the
+//     bug: in "http://user:pa?ss@host/x" the cut landed inside the password
+//     and took the '@' with it, so there was no userinfo left to strip and
+//     the password prefix was printed as the "redacted" source.
+//
+// Step 2 is only sound when the userinfo lies wholly before the first '/',
+// '?' or '#', as a well-formed URL requires. When a delimiter comes first the
+// string has two readings — the delimiter is unescaped text inside the
+// credential, or the '@' belongs to the path or query — and neither is safe to
+// print: one discloses a password prefix, the other names a host the user
+// never wrote. So that case is refused outright, the same way a genuinely
+// ambiguous IPv6 authority is refused rather than guessed at in
+// config.bracketIPv6Authority.
 func redactUnparsedURL(raw string) string {
 	s := raw
-	if i := strings.IndexAny(s, "?#"); i >= 0 {
-		s = s[:i]
-	}
 	scheme := ""
 	if i := strings.Index(s, "://"); i >= 0 {
 		scheme, s = s[:i+3], s[i+3:]
 	}
-	authority, rest := s, ""
-	if i := strings.IndexByte(s, '/'); i >= 0 {
-		authority, rest = s[:i], s[i:]
+	at := strings.LastIndexByte(s, '@')
+	delim := strings.IndexAny(s, "/?#")
+	switch {
+	case at < 0:
+		// No userinfo anywhere; nothing to strip.
+	case delim < 0 || at < delim:
+		s = s[at+1:]
+	default:
+		return redactedURL
 	}
-	// Userinfo may hold a password, and the last '@' is the delimiter: an
-	// earlier one would be inside the credential.
-	if i := strings.LastIndexByte(authority, '@'); i >= 0 {
-		authority = authority[i+1:]
+	if i := strings.IndexAny(s, "?#"); i >= 0 {
+		s = s[:i]
 	}
-	if authority == "" && rest == "" {
-		return "<url>"
+	if s == "" {
+		return redactedURL
 	}
-	return scheme + authority + rest
+	return scheme + s
 }
 
 // LiveLoadBudget bounds a whole playlist load for the agent-facing commands.
