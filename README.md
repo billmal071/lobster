@@ -214,7 +214,8 @@ playlists = [
 ]
 
 # Optional Xtream-codes subscription. When server is set, lobster builds the
-# get.php m3u_plus URL for you.
+# get.php m3u_plus URL for you. A bare IPv6 address with a port must be
+# bracketed: server = "[2001:db8::1]:8080".
 [live_tv.xtream]
 server = "example.com:8080"
 username = "your-username"

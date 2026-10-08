@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -98,7 +99,11 @@ type Config struct {
 
 // XtreamConfig holds optional Xtream-codes credentials for a paid IPTV sub.
 type XtreamConfig struct {
-	Server   string `toml:"server"` // host:port
+	// Server is host:port, optionally with a scheme. A bare IPv6 address
+	// must be bracketed when it is written with a port ("[::1]:8080"); see
+	// bracketIPv6Authority for the shapes Sources can bracket on the user's
+	// behalf and the one shape it refuses to guess at.
+	Server   string `toml:"server"`
 	Username string `toml:"username"`
 	Password string `toml:"password"`
 }
@@ -125,7 +130,10 @@ func (c LiveTVConfig) Sources() []string {
 	if c.Xtream.Server != "" {
 		server := c.Xtream.Server
 		if !strings.HasPrefix(server, "http://") && !strings.HasPrefix(server, "https://") {
-			server = "http://" + server
+			// The authority is ours to assemble into a URL here, so it is
+			// ours to get right. A scheme the user wrote themselves is
+			// their URL and is left alone.
+			server = "http://" + bracketIPv6Authority(server)
 		}
 		s = append(s, fmt.Sprintf(
 			"%s/get.php?username=%s&password=%s&type=m3u_plus&output=m3u8",
@@ -135,6 +143,78 @@ func (c LiveTVConfig) Sources() []string {
 		))
 	}
 	return s
+}
+
+// bracketIPv6Authority brackets a bare IPv6 address so "host:port" becomes a
+// legal URL authority.
+//
+// [live_tv.xtream].server is documented host:port and Sources prepends a
+// scheme to it, so "2001:db8::1" there becomes the URL "http://2001:db8::1/…".
+// Go 1.26 made url.Parse reject an unbracketed IPv6 authority (GODEBUG
+// urlstrictcolons), and the lenient parse it replaced was not quietly working:
+// it split on the *last* colon, so that URL came out as host "2001:db8:" with
+// port 1 and dialled nothing that exists. RFC 3986 requires the brackets;
+// adding them fixes the parse and the dial together.
+//
+// Four authority shapes have to be told apart, and net.SplitHostPort and
+// net.ParseIP do it — a colon count cannot:
+//
+//   - already bracketed ("[::1]", "[::1]:8080") — returned untouched, and no
+//     special case is needed for it: SplitHostPort accepts "[::1]:8080", and
+//     for "[::1]" neither the whole string nor the text before its last colon
+//     is an address ParseIP will accept, so it falls through. Bracketing twice
+//     would produce "[[::1]]", so the tests pin this.
+//   - host:port with a single colon ("tv.example.com:8080", "1.2.3.4:8080") —
+//     SplitHostPort accepts it and the host cannot be an IPv6 literal, which
+//     needs at least two colons. Untouched.
+//   - a bare IPv6 address, with or without a port, where only one reading is
+//     possible ("2001:db8::1", "2001:db8:1:2:3:4:5:6:8080") — bracketed.
+//   - genuinely ambiguous ("::1:8080", which is both a valid address on its
+//     own and a valid address plus port) — returned untouched so url.Parse
+//     rejects it. Either guess would dial a host the user did not write; a
+//     source that fails with the host named in the error is the honest
+//     outcome, and "[::1]:8080" is the one-character fix.
+//
+// Anything else (a hostname with a stray colon, say) is returned untouched and
+// fails at url.Parse exactly as it did before.
+func bracketIPv6Authority(authority string) string {
+	if _, _, err := net.SplitHostPort(authority); err == nil {
+		return authority
+	}
+	whole := net.ParseIP(authority) != nil
+	var host, port string
+	var hostPort bool
+	if i := strings.LastIndexByte(authority, ':'); i >= 0 {
+		host, port = authority[:i], authority[i+1:]
+		hostPort = net.ParseIP(host) != nil && validPort(port)
+	}
+	switch {
+	case whole && hostPort:
+		return authority // ambiguous — see above
+	case whole:
+		return "[" + authority + "]"
+	case hostPort:
+		return "[" + host + "]:" + port
+	default:
+		return authority
+	}
+}
+
+// validPort reports whether s is a decimal TCP port. url.Parse itself only
+// checks that the characters are digits, but accepting "99999" here would mean
+// bracketing an address on the strength of a port that cannot exist.
+func validPort(s string) bool {
+	if s == "" || len(s) > 5 {
+		return false
+	}
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+		n = n*10 + int(s[i]-'0')
+	}
+	return n <= 65535
 }
 
 // Default returns the default configuration.

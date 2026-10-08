@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -148,6 +149,9 @@ func TestRedactURL(t *testing.T) {
 		"http://h:8080/get.php?username=u&password=p&type=m3u_plus": "http://h:8080/get.php",
 		"https://user:pass@host/path?q=1":                           "https://host/path",
 		"https://iptv-org.github.io/iptv/index.category.m3u":        "https://iptv-org.github.io/iptv/index.category.m3u",
+		// A local playlist path parses with an empty Host; it must still
+		// come back whole, not as "<url>".
+		"/home/u/local.m3u": "/home/u/local.m3u",
 	}
 	for in, want := range cases {
 		if got := redactURL(in); got != want {
@@ -500,5 +504,39 @@ func TestAllChannelsAndLookupDeepCopyCategories(t *testing.T) {
 	again := lt.AllChannels()
 	if len(again) != 1 || again[0].Categories[0] == "TAMPERED2" {
 		t.Fatalf("mutating a Channel returned by Lookup leaked into provider state: %v", again)
+	}
+}
+
+// redactURL is the only thing standing between a failed Xtream source and a
+// credential in an error message, and httpGet reaches it precisely when
+// url.Parse has already refused the string — a malformed authority. Returning
+// "<url>" there hid the host, which is the one part of the URL the user needs
+// to see and the one part that is not a secret.
+func TestRedactURLKeepsTheHostWhenTheURLDoesNotParse(t *testing.T) {
+	cases := map[string]string{
+		// Unbracketed IPv6 authority: url.Parse rejects it, so the
+		// fallback has to do the redaction itself.
+		"http://::1:8080/get.php?username=u&password=p&type=m3u_plus": "http://::1:8080/get.php",
+		"http://2001:db8::1/get.php?username=u&password=p":            "http://2001:db8::1/get.php",
+		// Userinfo must go even on the fallback path.
+		"http://user:pass@::1:8080/get.php?username=u&password=p": "http://::1:8080/get.php",
+		// Fragments carry nothing useful and may carry anything.
+		"http://::1:8080/get.php#frag": "http://::1:8080/get.php",
+		// Nothing left to show: still no leak.
+		"http://?username=u&password=p": "<url>",
+	}
+	for in, want := range cases {
+		if _, err := url.Parse(in); err == nil && want != "<url>" {
+			t.Fatalf("%q parses; this test must cover the fallback path", in)
+		}
+		got := redactURL(in)
+		if got != want {
+			t.Errorf("redactURL(%q) = %q, want %q", in, got, want)
+		}
+		for _, secret := range []string{"password=p", "user:pass", "username=u"} {
+			if strings.Contains(got, secret) {
+				t.Errorf("redactURL(%q) = %q, leaks %q", in, got, secret)
+			}
+		}
 	}
 }

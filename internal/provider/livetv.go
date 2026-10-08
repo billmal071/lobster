@@ -217,11 +217,47 @@ func (p *LiveTV) httpGet(ctx context.Context, c httpDoer, src string) ([]byte, e
 func redactURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "<url>"
+		// httpGet reaches this branch for exactly the inputs url.Parse
+		// refuses — a malformed authority, most likely an unbracketed IPv6
+		// address. "<url>" hid the host, which is the one part of the
+		// string the user needs in order to fix their config and the one
+		// part that is not a secret, so redact by hand instead.
+		return redactUnparsedURL(raw)
 	}
 	u.RawQuery = ""
 	u.User = nil
+	if u.Host == "" && u.Path == "" && u.Opaque == "" {
+		return "<url>"
+	}
 	return u.String()
+}
+
+// redactUnparsedURL strips the fragment, query and userinfo from a string
+// url.Parse rejected. It works on the raw text precisely because no parse is
+// available, so it is deliberately blunt: anything it is unsure about is
+// dropped rather than printed.
+func redactUnparsedURL(raw string) string {
+	s := raw
+	if i := strings.IndexAny(s, "?#"); i >= 0 {
+		s = s[:i]
+	}
+	scheme := ""
+	if i := strings.Index(s, "://"); i >= 0 {
+		scheme, s = s[:i+3], s[i+3:]
+	}
+	authority, rest := s, ""
+	if i := strings.IndexByte(s, '/'); i >= 0 {
+		authority, rest = s[:i], s[i:]
+	}
+	// Userinfo may hold a password, and the last '@' is the delimiter: an
+	// earlier one would be inside the credential.
+	if i := strings.LastIndexByte(authority, '@'); i >= 0 {
+		authority = authority[i+1:]
+	}
+	if authority == "" && rest == "" {
+		return "<url>"
+	}
+	return scheme + authority + rest
 }
 
 // LiveLoadBudget bounds a whole playlist load for the agent-facing commands.
