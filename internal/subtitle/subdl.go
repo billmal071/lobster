@@ -217,16 +217,20 @@ func (s *SubDLClient) Search(title, language string, season, episode int) ([]med
 func (s *SubDLClient) fetchAPI(params url.Values) (*subdlResponse, error) {
 	reqURL := fmt.Sprintf("%s?%s", subdlAPI, params.Encode())
 
+	// The api_key is a query parameter, so every *url.Error on this path
+	// stringifies it. fetchAPI's error reaches debugf, which --debug prints
+	// and users paste into bug reports, so the URL error is unwrapped to its
+	// cause on both the construction and the transport branch.
 	req, err := http.NewRequest("GET", reqURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("SubDL request: %w", httputil.CauseWithoutURL(err))
 	}
 	req.Header.Set("User-Agent", "lobster/0.6")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("SubDL request: %w", err)
+		return nil, fmt.Errorf("SubDL request: %w", httputil.CauseWithoutURL(err))
 	}
 	defer resp.Body.Close()
 

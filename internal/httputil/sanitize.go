@@ -20,7 +20,11 @@ var (
 func ValidateURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return fmt.Errorf("malformed URL: %w", err)
+		// Never %w the *url.Error itself: rawURL may carry credentials
+		// (an Xtream playlist URL, a tokenised download link) and
+		// url.Error.Error prints the URL it was handed in full. This is a
+		// library function, so it cannot know whether its input is a secret.
+		return fmt.Errorf("malformed URL: %w", CauseWithoutURL(err))
 	}
 	if u.Scheme != "https" {
 		return fmt.Errorf("only HTTPS URLs are allowed, got %q", u.Scheme)

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -538,5 +539,89 @@ func TestRedactURLKeepsTheHostWhenTheURLDoesNotParse(t *testing.T) {
 				t.Errorf("redactURL(%q) = %q, leaks %q", in, got, secret)
 			}
 		}
+	}
+}
+
+// errDoer fails every request the way http.Client does: with a *url.Error
+// carrying the full request URL. Nothing is dialled.
+type errDoer struct{ cause error }
+
+func (d errDoer) Do(r *http.Request) (*http.Response, error) {
+	return nil, &url.Error{Op: "Get", URL: r.URL.String(), Err: d.cause}
+}
+
+// refuseDoer fails the test if it is asked for anything: the request-building
+// branch must return before any transport is touched.
+type refuseDoer struct{ t *testing.T }
+
+func (d refuseDoer) Do(r *http.Request) (*http.Response, error) {
+	d.t.Fatalf("Do called for %s; request construction should have failed first", r.URL)
+	return nil, nil
+}
+
+// The credential must be absent from the WHOLE error httpGet returns, not only
+// from the part redactURL produced.
+//
+// url.Parse, http.NewRequest and http.Client.Do all return a *url.Error, and
+// its Error method prints the URL it was handed — userinfo, query string and
+// all. Wrapping one with %w therefore puts the unredacted source straight back
+// into the message the redaction had just cleaned. doLoadContext folds the last
+// source error into LiveTV.loadErr, which the agent commands print verbatim as
+// JSON, so "redactURL returns the right string" is not the guarantee that
+// matters here.
+//
+// Asserting on the chain as well as on the text is deliberate: as long as a
+// *url.Error is still reachable by errors.As, any later code that formats the
+// cause can re-expose the URL even if today's message happens not to.
+func TestHTTPGetErrorNeverCarriesCredentials(t *testing.T) {
+	const (
+		fakeUser = "notarealuser"
+		fakePass = "notarealpassword"
+	)
+	secrets := []string{fakePass, fakeUser + ":" + fakePass, "password=" + fakePass, "username=" + fakeUser}
+
+	cases := []struct {
+		name string
+		src  string
+		doer func(*testing.T) httpDoer
+	}{
+		{
+			// Ambiguous unbracketed IPv6 authority: config.Sources leaves it
+			// alone on purpose, so url.Parse refuses it and
+			// http.NewRequestWithContext hands back the *url.Error.
+			name: "request construction fails",
+			src:  "http://" + fakeUser + ":" + fakePass + "@::1:8080/get.php?username=" + fakeUser + "&password=" + fakePass + "&type=m3u_plus",
+			doer: func(t *testing.T) httpDoer { return refuseDoer{t: t} },
+		},
+		{
+			name: "transport fails",
+			src:  "http://" + fakeUser + ":" + fakePass + "@[::1]:8080/get.php?username=" + fakeUser + "&password=" + fakePass,
+			doer: func(*testing.T) httpDoer {
+				return errDoer{cause: fmt.Errorf("dial tcp [::1]:8080: connect: connection refused")}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewLiveTV([]string{tc.src})
+			_, err := p.httpGet(context.Background(), tc.doer(t), tc.src)
+			if err == nil {
+				t.Fatalf("httpGet(%q) = nil error, want a failure", tc.src)
+			}
+			msg := err.Error()
+			for _, secret := range secrets {
+				if strings.Contains(msg, secret) {
+					t.Errorf("httpGet error = %q, leaks %q", msg, secret)
+				}
+			}
+			var ue *url.Error
+			if errors.As(err, &ue) {
+				t.Errorf("httpGet error still has a *url.Error in its chain (URL %q); anything formatting the cause re-exposes it", ue.URL)
+			}
+			if !strings.Contains(msg, "::1") {
+				t.Errorf("httpGet error = %q, should still name the host so the user can fix the config", msg)
+			}
+		})
 	}
 }

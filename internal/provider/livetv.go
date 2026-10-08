@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"lobster/internal/httputil"
 	"lobster/internal/media"
 )
 
@@ -184,19 +184,19 @@ func (p *LiveTV) httpGet(ctx context.Context, c httpDoer, src string) ([]byte, e
 		// reaches this branch carrying whatever the user configured — Xtream
 		// credentials included — and doLoadContext folds the last error into
 		// loadErr, which the agent commands print verbatim as JSON.
-		return nil, fmt.Errorf("livetv: building request for %s failed: %w", redactURL(src), err)
+		//
+		// The *url.Error url.Parse handed back has to be unwrapped for the
+		// same reason the Do branch below unwraps one: it stringifies the
+		// URL it was given, so wrapping it with %w would reinstate the
+		// credentials redactURL has just removed from the same message.
+		return nil, fmt.Errorf("livetv: building request for %s failed: %w", redactURL(src), httputil.CauseWithoutURL(err))
 	}
 	req.Header.Set("User-Agent", liveTVUA)
 	resp, err := c.Do(req)
 	if err != nil {
 		// A *url.Error embeds the full URL (which may carry Xtream
 		// username/password); return the redacted URL plus the underlying cause.
-		cause := err
-		var ue *url.Error
-		if errors.As(err, &ue) {
-			cause = ue.Err
-		}
-		return nil, fmt.Errorf("livetv: fetch %s failed: %w", redactURL(src), cause)
+		return nil, fmt.Errorf("livetv: fetch %s failed: %w", redactURL(src), httputil.CauseWithoutURL(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
