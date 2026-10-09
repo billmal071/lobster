@@ -270,6 +270,25 @@ provider = "Vidcloud"
 
 # Subtitle language
 subs_language = "english"
+
+# External subtitle sources, used when the stream itself carries no track (or
+# none in subs_language). SubDL ships with a key; OpenSubtitles needs your own,
+# free from an opensubtitles.com account. They are searched in that order and
+# the results are merged, so setting both is strictly better than one — the
+# catalogues do not overlap, and a current-season title missing from one is
+# often complete in the other.
+# subdl_api_key = "..."
+# opensubtitles_api_key = "..."
+
+# Optional opensubtitles.com account, which only affects how many subtitle
+# files you may download per day: the API key alone allows 5, the key plus
+# these allows 20. Twelve episodes is more than 5, and running out looks like
+# an HTTP 403 rather than a quota message, which is the only reason this is
+# worth a password sitting in a config file. Leave both unset to stay on the
+# 5/day tier — that is the default, and a login that fails falls back to it
+# rather than breaking subtitles.
+# opensubtitles_username = "..."
+# opensubtitles_password = "..."
 audio_language = "english"   # preferred audio track on multi-dub releases
 
 # Video quality (360, 480, 720, 1080)

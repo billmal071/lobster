@@ -980,7 +980,7 @@ func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle, season,
 	if strings.HasPrefix(sub.URL, "opensubtitles:") {
 		var fileID int
 		fmt.Sscanf(sub.URL, "opensubtitles:%d", &fileID)
-		osClient := subtitle.NewOpenSubtitles(cfg.OSAPIKey)
+		osClient := subtitle.NewOpenSubtitlesWithLogin(cfg.OSAPIKey, cfg.OSUsername, cfg.OSPassword)
 		downloadURL, err := osClient.ResolveDownloadURL(fileID)
 		if err != nil {
 			return "", fmt.Errorf("resolving OpenSubtitles download: %w", err)

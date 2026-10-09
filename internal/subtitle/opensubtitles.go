@@ -3,11 +3,13 @@ package subtitle
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"lobster/internal/httputil"
 	"lobster/internal/media"
@@ -19,16 +21,121 @@ var openSubtitlesAPI = "https://api.opensubtitles.com/api/v1"
 
 // OpenSubtitlesClient searches and downloads subtitles from OpenSubtitles.com.
 type OpenSubtitlesClient struct {
-	apiKey string
-	client *http.Client
+	apiKey   string
+	username string
+	password string
+	client   *http.Client
+
+	// mu guards the login state below. A client is reused across the
+	// episodes of a season, so two downloads can want a token at once; the
+	// lock is held across the /login round trip deliberately, so they wait
+	// for one login instead of racing two.
+	mu sync.Mutex
+	// token is the bearer from the last successful /login, "" when none.
+	token string
+	// loginFailed records that a login was tried and did not work, so the
+	// run stops paying a round trip per episode for credentials that are
+	// wrong or for a service that is refusing logins.
+	loginFailed bool
 }
 
-// NewOpenSubtitles creates a client for the OpenSubtitles.com REST API.
+// NewOpenSubtitles creates an anonymous client for the OpenSubtitles.com REST
+// API: the API key identifies the application, and downloads are metered on
+// the anonymous tier. Use NewOpenSubtitlesWithLogin to raise that ceiling.
 func NewOpenSubtitles(apiKey string) *OpenSubtitlesClient {
+	return NewOpenSubtitlesWithLogin(apiKey, "", "")
+}
+
+// NewOpenSubtitlesWithLogin creates a client that authenticates downloads with
+// an opensubtitles.com account.
+//
+// OpenSubtitles meters downloads, not searches, and it meters them by whether
+// the request carries a user token: an API key alone gets 5 downloads per 24h,
+// the same key plus a logged-in free account gets 20. Five is less than half
+// a season, and running out surfaces as a bare HTTP 403 that reads exactly
+// like "no key configured" — so the quota is not a detail the user can
+// diagnose from the outside.
+//
+// Empty username or password means "stay anonymous", which is the default and
+// is never an error: the account is strictly an optional upgrade, and a client
+// without one behaves as it always did.
+func NewOpenSubtitlesWithLogin(apiKey, username, password string) *OpenSubtitlesClient {
 	return &OpenSubtitlesClient{
-		apiKey: apiKey,
-		client: httputil.NewClient(),
+		apiKey:   apiKey,
+		username: username,
+		password: password,
+		client:   httputil.NewClient(),
 	}
+}
+
+// bearerToken returns the token to authenticate the next download with, "" for
+// an anonymous request.
+//
+// It logs in lazily, and only ever from the download path. Logging in eagerly
+// in the constructor would put a round trip in front of every search, and
+// searching is both free and unmetered — `find` and `episodes` never download
+// anything, so they would pay for a quota they cannot spend, on commands this
+// project requires to stay bounded. The download path already waits on a
+// request of its own, so the one login it adds (once per client, not once per
+// episode) is the cheapest place to put it.
+//
+// Every failure here returns "" rather than an error: losing the 20/day tier
+// back down to 5/day is much better than losing subtitles, so a refused or
+// unreachable login degrades to the anonymous request instead of failing the
+// download.
+//
+// refresh asks for a new token even when one is cached, which is how an
+// expired token is replaced — OpenSubtitles tokens are documented as lasting
+// roughly a day, longer than any single lobster run, so there is no clock
+// here: expiry is learned from the service rejecting it, not predicted.
+func (o *OpenSubtitlesClient) bearerToken(refresh bool) string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if o.username == "" || o.password == "" {
+		return ""
+	}
+	if o.token != "" && !refresh {
+		return o.token
+	}
+	if refresh {
+		o.token = ""
+	}
+	if o.loginFailed {
+		return ""
+	}
+
+	payload, err := json.Marshal(map[string]string{
+		"username": o.username,
+		"password": o.password,
+	})
+	if err != nil {
+		o.loginFailed = true
+		return ""
+	}
+	body, err := o.doRequest("POST", openSubtitlesAPI+"/login", payload, "")
+	if err != nil {
+		o.loginFailed = true
+		return ""
+	}
+	var resp osLoginResponse
+	if err := json.Unmarshal(body, &resp); err != nil || resp.Token == "" {
+		o.loginFailed = true
+		return ""
+	}
+	o.token = resp.Token
+	return o.token
+}
+
+// osLoginResponse is POST /login's reply.
+//
+// base_url is deliberately not read. The documented field names an account's
+// preferred API host, and honouring it would mean sending every later request
+// somewhere this change cannot verify — there is no key on hand to exercise
+// the live v1 service with. Ignoring it keeps requests going to the host that
+// already works; the cost is at most not using a VIP endpoint.
+type osLoginResponse struct {
+	Token string `json:"token"`
 }
 
 type osSearchResponse struct {
@@ -63,6 +170,14 @@ type osDownloadResponse struct {
 	Link string `json:"link"`
 }
 
+// osStatusError is a non-200 from the API, carrying the code so the download
+// path can tell a rejected token (401) from every other refusal.
+type osStatusError struct{ Code int }
+
+func (e *osStatusError) Error() string {
+	return fmt.Sprintf("API returned status %d", e.Code)
+}
+
 // Search finds subtitles for a movie or TV episode.
 func (o *OpenSubtitlesClient) Search(title, language string, season, episode int) ([]media.Subtitle, error) {
 	params := url.Values{}
@@ -79,7 +194,9 @@ func (o *OpenSubtitlesClient) Search(title, language string, season, episode int
 
 	reqURL := fmt.Sprintf("%s/subtitles?%s", openSubtitlesAPI, params.Encode())
 
-	body, err := o.doRequest("GET", reqURL, nil)
+	// No bearer: a search spends no download quota, so it is not worth a
+	// login (see bearerToken).
+	body, err := o.doRequest("GET", reqURL, nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("searching subtitles: %w", err)
 	}
@@ -136,11 +253,23 @@ func (o *OpenSubtitlesClient) Search(title, language string, season, episode int
 }
 
 // ResolveDownloadURL gets the actual download URL for a subtitle file ID.
+//
+// This is the only call that spends quota, so it is the only one that logs in.
 func (o *OpenSubtitlesClient) ResolveDownloadURL(fileID int) (string, error) {
 	reqURL := fmt.Sprintf("%s/download", openSubtitlesAPI)
 	payload := fmt.Sprintf(`{"file_id":%d}`, fileID)
 
-	body, err := o.doRequest("POST", reqURL, []byte(payload))
+	body, err := o.doRequest("POST", reqURL, []byte(payload), o.bearerToken(false))
+	// A 401 on a request that carried a token means the token is no longer
+	// good -- it expired, or the session was ended elsewhere. One fresh login
+	// and one retry; a 401 that survives that is a real failure and is
+	// reported, so this cannot loop.
+	var status *osStatusError
+	if errors.As(err, &status) && status.Code == http.StatusUnauthorized {
+		if tok := o.bearerToken(true); tok != "" {
+			body, err = o.doRequest("POST", reqURL, []byte(payload), tok)
+		}
+	}
 	if err != nil {
 		return "", fmt.Errorf("requesting download: %w", err)
 	}
@@ -157,7 +286,7 @@ func (o *OpenSubtitlesClient) ResolveDownloadURL(fileID int) (string, error) {
 	return resp.Link, nil
 }
 
-func (o *OpenSubtitlesClient) doRequest(method, reqURL string, payload []byte) ([]byte, error) {
+func (o *OpenSubtitlesClient) doRequest(method, reqURL string, payload []byte, bearer string) ([]byte, error) {
 	var body io.Reader
 	if payload != nil {
 		body = bytes.NewReader(payload)
@@ -169,6 +298,9 @@ func (o *OpenSubtitlesClient) doRequest(method, reqURL string, payload []byte) (
 	}
 
 	req.Header.Set("Api-Key", o.apiKey)
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
 	req.Header.Set("User-Agent", "lobster v0.2.0")
 	req.Header.Set("Accept", "application/json")
 	if payload != nil {
@@ -182,7 +314,7 @@ func (o *OpenSubtitlesClient) doRequest(method, reqURL string, payload []byte) (
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
+		return nil, &osStatusError{Code: resp.StatusCode}
 	}
 
 	return io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))

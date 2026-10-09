@@ -95,6 +95,28 @@ type Config struct {
 	// internal/torrentstream.newDataDir).
 	TorrentDir string       `toml:"torrent_dir"`
 	LiveTV     LiveTVConfig `toml:"live_tv"`
+	// OSUsername and OSPassword are an optional opensubtitles.com account,
+	// used alongside OSAPIKey.
+	//
+	// They exist for one reason: OpenSubtitles meters *downloads* by whether
+	// the request carries a user token. An API key on its own gets 5
+	// downloads per 24h; the same key plus a logged-in free account gets 20.
+	// Five is less than half a season, and hitting the wall surfaces as a
+	// bare HTTP 403 that is indistinguishable from having no key at all.
+	//
+	// Both empty is the default and means "stay anonymous" — the 5/day tier,
+	// which is what lobster has always used. Setting only one of the two is
+	// the same thing: a login needs both, so a half-filled pair is treated as
+	// absent rather than as a misconfiguration to complain about. A login
+	// that is refused also degrades to anonymous rather than failing the
+	// download (internal/subtitle.OpenSubtitlesClient.bearerToken).
+	//
+	// This is a password in a plaintext config file, which is a real cost for
+	// 15 extra downloads a day; it is opt-in and absent by default so that
+	// cost is only paid by someone who chose it. (live_tv.xtream already
+	// stores account credentials the same way.)
+	OSUsername string `toml:"opensubtitles_username"`
+	OSPassword string `toml:"opensubtitles_password"`
 }
 
 // XtreamConfig holds optional Xtream-codes credentials for a paid IPTV sub.
