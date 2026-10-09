@@ -2,10 +2,12 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -147,7 +149,13 @@ func TestRedactURL(t *testing.T) {
 	cases := map[string]string{
 		"http://h:8080/get.php?username=u&password=p&type=m3u_plus": "http://h:8080/get.php",
 		"https://user:pass@host/path?q=1":                           "https://host/path",
-		"https://iptv-org.github.io/iptv/index.category.m3u":        "https://iptv-org.github.io/iptv/index.category.m3u",
+		// A fragment is dropped on the parseable path too: it carries
+		// nothing the user needs and may carry anything.
+		"https://user:pass@host/path#frag":                   "https://host/path",
+		"https://iptv-org.github.io/iptv/index.category.m3u": "https://iptv-org.github.io/iptv/index.category.m3u",
+		// A local playlist path parses with an empty Host; it must still
+		// come back whole, not as "<url>".
+		"/home/u/local.m3u": "/home/u/local.m3u",
 	}
 	for in, want := range cases {
 		if got := redactURL(in); got != want {
@@ -500,5 +508,174 @@ func TestAllChannelsAndLookupDeepCopyCategories(t *testing.T) {
 	again := lt.AllChannels()
 	if len(again) != 1 || again[0].Categories[0] == "TAMPERED2" {
 		t.Fatalf("mutating a Channel returned by Lookup leaked into provider state: %v", again)
+	}
+}
+
+// redactURL is the only thing standing between a failed Xtream source and a
+// credential in an error message, and httpGet reaches it precisely when
+// url.Parse has already refused the string — a malformed authority. Returning
+// "<url>" there hid the host, which is the one part of the URL the user needs
+// to see and the one part that is not a secret.
+func TestRedactURLKeepsTheHostWhenTheURLDoesNotParse(t *testing.T) {
+	cases := map[string]string{
+		// Unbracketed IPv6 authority: url.Parse rejects it, so the
+		// fallback has to do the redaction itself.
+		"http://::1:8080/get.php?username=u&password=p&type=m3u_plus": "http://::1:8080/get.php",
+		"http://2001:db8::1/get.php?username=u&password=p":            "http://2001:db8::1/get.php",
+		// Userinfo must go even on the fallback path.
+		"http://user:pass@::1:8080/get.php?username=u&password=p": "http://::1:8080/get.php",
+		// An unescaped '@' inside the password is legal text, and the
+		// LAST '@' is the delimiter: splitting on the first would print
+		// the tail of the password as if it were the host.
+		"http://user:pa@ss@::1:8080/get.php?username=u&password=p": "http://::1:8080/get.php",
+		// Fragments carry nothing useful and may carry anything.
+		"http://::1:8080/get.php#frag": "http://::1:8080/get.php",
+		// Nothing left to show: still no leak.
+		"http://?username=u&password=p": "<url>",
+	}
+	for in, want := range cases {
+		if _, err := url.Parse(in); err == nil && want != "<url>" {
+			t.Fatalf("%q parses; this test must cover the fallback path", in)
+		}
+		got := redactURL(in)
+		if got != want {
+			t.Errorf("redactURL(%q) = %q, want %q", in, got, want)
+		}
+		for _, secret := range []string{"password=p", "user:pass", "username=u", "ss@"} {
+			if strings.Contains(got, secret) {
+				t.Errorf("redactURL(%q) = %q, leaks %q", in, got, secret)
+			}
+		}
+	}
+}
+
+// A raw '/', '?' or '#' inside userinfo makes the string ambiguous: either the
+// delimiter is unescaped text in the credential, or the '@' after it belongs to
+// the path or query. Both readings are harmful to print — one discloses a
+// password prefix, the other names a host the user never wrote — so the helper
+// has to refuse rather than pick one. A password with an unescaped delimiter is
+// exactly what a copy-pasted [live_tv].playlists entry produces.
+func TestRedactURLRefusesUserinfoWithRawDelimiters(t *testing.T) {
+	const (
+		fakeUser = "notarealuser"
+		fakePass = "notarealpassword"
+	)
+	cases := []string{
+		"http://" + fakeUser + ":" + fakePass + "?tail@host:8080/playlist.m3u",
+		"http://" + fakeUser + ":" + fakePass + "#tail@host:8080/playlist.m3u",
+		"http://" + fakeUser + ":" + fakePass + "/tail@host:8080/playlist.m3u",
+	}
+	for _, in := range cases {
+		if _, err := url.Parse(in); err == nil {
+			t.Fatalf("%q parses; this test must cover the fallback path", in)
+		}
+		got := redactURL(in)
+		if got != "<url>" {
+			t.Errorf("redactURL(%q) = %q, want %q", in, got, "<url>")
+		}
+		for _, secret := range []string{fakePass, fakeUser + ":" + fakePass} {
+			if strings.Contains(got, secret) {
+				t.Errorf("redactURL(%q) = %q, leaks %q", in, got, secret)
+			}
+		}
+	}
+}
+
+// errDoer fails every request the way http.Client does: with a *url.Error
+// carrying the full request URL. Nothing is dialled.
+type errDoer struct{ cause error }
+
+func (d errDoer) Do(r *http.Request) (*http.Response, error) {
+	return nil, &url.Error{Op: "Get", URL: r.URL.String(), Err: d.cause}
+}
+
+// refuseDoer fails the test if it is asked for anything: the request-building
+// branch must return before any transport is touched.
+type refuseDoer struct{ t *testing.T }
+
+func (d refuseDoer) Do(r *http.Request) (*http.Response, error) {
+	d.t.Fatalf("Do called for %s; request construction should have failed first", r.URL)
+	return nil, nil
+}
+
+// The credential must be absent from the WHOLE error httpGet returns, not only
+// from the part redactURL produced.
+//
+// url.Parse, http.NewRequest and http.Client.Do all return a *url.Error, and
+// its Error method prints the URL it was handed — userinfo, query string and
+// all. Wrapping one with %w therefore puts the unredacted source straight back
+// into the message the redaction had just cleaned. doLoadContext folds the last
+// source error into LiveTV.loadErr, which the agent commands print verbatim as
+// JSON, so "redactURL returns the right string" is not the guarantee that
+// matters here.
+//
+// Asserting on the chain as well as on the text is deliberate: as long as a
+// *url.Error is still reachable by errors.As, any later code that formats the
+// cause can re-expose the URL even if today's message happens not to.
+func TestHTTPGetErrorNeverCarriesCredentials(t *testing.T) {
+	const (
+		fakeUser = "notarealuser"
+		fakePass = "notarealpassword"
+	)
+	secrets := []string{fakePass, fakeUser + ":" + fakePass, "password=" + fakePass, "username=" + fakeUser}
+
+	cases := []struct {
+		name string
+		src  string
+		doer func(*testing.T) httpDoer
+		// want is the part of the message that identifies the source: the
+		// host where redaction could isolate one, the refusal sentinel
+		// where the string was too ambiguous to take apart.
+		want string
+	}{
+		{
+			// Ambiguous unbracketed IPv6 authority: config.Sources leaves it
+			// alone on purpose, so url.Parse refuses it and
+			// http.NewRequestWithContext hands back the *url.Error.
+			name: "request construction fails",
+			src:  "http://" + fakeUser + ":" + fakePass + "@::1:8080/get.php?username=" + fakeUser + "&password=" + fakePass + "&type=m3u_plus",
+			doer: func(t *testing.T) httpDoer { return refuseDoer{t: t} },
+			want: "::1",
+		},
+		{
+			// An unescaped '?' in the password: url.Parse refuses the
+			// authority, and cutting the query before the userinfo left
+			// the password itself in the "redacted" source.
+			name: "raw delimiter inside userinfo",
+			src:  "http://" + fakeUser + ":" + fakePass + "?tail@host:8080/playlist.m3u",
+			doer: func(t *testing.T) httpDoer { return refuseDoer{t: t} },
+			want: "<url>",
+		},
+		{
+			name: "transport fails",
+			src:  "http://" + fakeUser + ":" + fakePass + "@[::1]:8080/get.php?username=" + fakeUser + "&password=" + fakePass,
+			doer: func(*testing.T) httpDoer {
+				return errDoer{cause: fmt.Errorf("dial tcp [::1]:8080: connect: connection refused")}
+			},
+			want: "::1",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewLiveTV([]string{tc.src})
+			_, err := p.httpGet(context.Background(), tc.doer(t), tc.src)
+			if err == nil {
+				t.Fatalf("httpGet(%q) = nil error, want a failure", tc.src)
+			}
+			msg := err.Error()
+			for _, secret := range secrets {
+				if strings.Contains(msg, secret) {
+					t.Errorf("httpGet error = %q, leaks %q", msg, secret)
+				}
+			}
+			var ue *url.Error
+			if errors.As(err, &ue) {
+				t.Errorf("httpGet error still has a *url.Error in its chain (URL %q); anything formatting the cause re-exposes it", ue.URL)
+			}
+			if !strings.Contains(msg, tc.want) {
+				t.Errorf("httpGet error = %q, should contain %q so the user can tell which source failed", msg, tc.want)
+			}
+		})
 	}
 }

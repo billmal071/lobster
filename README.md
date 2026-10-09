@@ -38,7 +38,7 @@ See [GUIDE.md](GUIDE.md) for detailed usage instructions.
 
 ## Requirements
 
-1. **Go 1.22+** — build only
+1. **Go 1.27+** — build only
 2. **fzf** — runtime (interactive menus)
 3. **mpv** — default playback
 4. **vlc** — alternative playback
@@ -214,7 +214,8 @@ playlists = [
 ]
 
 # Optional Xtream-codes subscription. When server is set, lobster builds the
-# get.php m3u_plus URL for you.
+# get.php m3u_plus URL for you. A bare IPv6 address with a port must be
+# bracketed: server = "[2001:db8::1]:8080".
 [live_tv.xtream]
 server = "example.com:8080"
 username = "your-username"

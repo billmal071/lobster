@@ -1,6 +1,13 @@
 package config
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -384,5 +391,116 @@ func TestValidateRejectsAWhitespaceOnlyBase(t *testing.T) {
 	c.Base = "   "
 	if err := c.Validate(); err == nil {
 		t.Fatalf("Validate() with a whitespace-only base = nil, want an error")
+	}
+}
+
+// Sources prepends a scheme to a scheme-less [live_tv.xtream].server, so a
+// bare IPv6 address there is a host we assemble into a URL rather than a URL
+// the user wrote. That assembly has to produce a legal URL: Go 1.26 made
+// url.Parse reject an unbracketed IPv6 authority (GODEBUG urlstrictcolons),
+// and the lenient parse it replaced split on the last colon, so
+// "2001:db8::1" used to come out as host "2001:db8:" port 1 and dial nothing
+// that exists. Bracketing is the fix for both.
+func TestLiveTVSourcesBracketsBareIPv6XtreamServer(t *testing.T) {
+	cases := []struct {
+		server string
+		want   string
+	}{
+		// IPv6 literal, no port — one reading only, because the text
+		// before the last colon ("2001:db8:") is not an address.
+		{"2001:db8::1", "http://[2001:db8::1]/get.php?username=u&password=p&type=m3u_plus&output=m3u8"},
+		{"fe80::1", "http://[fe80::1]/get.php?username=u&password=p&type=m3u_plus&output=m3u8"},
+		{"::1", "http://[::1]/get.php?username=u&password=p&type=m3u_plus&output=m3u8"},
+		// IPv6 literal with a port — one reading only, because the whole
+		// string is nine groups and so not an address.
+		{"2001:db8:1:2:3:4:5:6:8080", "http://[2001:db8:1:2:3:4:5:6]:8080/get.php?username=u&password=p&type=m3u_plus&output=m3u8"},
+		// Already bracketed: must not be bracketed twice.
+		{"[::1]:8080", "http://[::1]:8080/get.php?username=u&password=p&type=m3u_plus&output=m3u8"},
+		{"[::1]", "http://[::1]/get.php?username=u&password=p&type=m3u_plus&output=m3u8"},
+		{"[2001:db8::1]:8080", "http://[2001:db8::1]:8080/get.php?username=u&password=p&type=m3u_plus&output=m3u8"},
+		// Hostnames and IPv4 are untouched.
+		{"tv.example.com:8080", "http://tv.example.com:8080/get.php?username=u&password=p&type=m3u_plus&output=m3u8"},
+		{"tv.example.com", "http://tv.example.com/get.php?username=u&password=p&type=m3u_plus&output=m3u8"},
+		{"1.2.3.4:8080", "http://1.2.3.4:8080/get.php?username=u&password=p&type=m3u_plus&output=m3u8"},
+	}
+	for _, tc := range cases {
+		c := LiveTVConfig{Xtream: XtreamConfig{Server: tc.server, Username: "u", Password: "p"}}
+		got := c.Sources()
+		if len(got) != 1 {
+			t.Fatalf("server %q: want 1 source, got %v", tc.server, got)
+		}
+		if got[0] != tc.want {
+			t.Errorf("server %q: Sources()[0] = %q, want %q", tc.server, got[0], tc.want)
+		}
+		// The guarantee that actually matters: the assembled URL parses.
+		if _, err := url.Parse(got[0]); err != nil {
+			t.Errorf("server %q: assembled URL does not parse: %v", tc.server, err)
+		}
+	}
+}
+
+// "::1:8080" is genuinely ambiguous: it is a valid IPv6 address on its own
+// *and* a valid address-plus-port split. Guessing either way would dial a host
+// the user did not write, so Sources leaves it alone and url.Parse rejects it
+// — a failed source naming the host beats a silent connection elsewhere.
+func TestLiveTVSourcesLeavesAmbiguousIPv6AuthorityAlone(t *testing.T) {
+	// "2001:db8:1:2:3:4:5:6:99999" is a different kind of refusal: the
+	// trailing group is not a port at all, so there is no host:port reading
+	// and no address reading either. Bracketing the first eight groups would
+	// invent a port url.Parse happens to accept because it only checks that
+	// the characters are digits.
+	for _, server := range []string{"::1:8080", "fe80::1:80", "2001:db8::1:443", "2001:db8:1:2:3:4:5:6:99999"} {
+		c := LiveTVConfig{Xtream: XtreamConfig{Server: server, Username: "u", Password: "p"}}
+		got := c.Sources()
+		if len(got) != 1 {
+			t.Fatalf("server %q: want 1 source, got %v", server, got)
+		}
+		if want := "http://" + server + "/get.php?username=u&password=p&type=m3u_plus&output=m3u8"; got[0] != want {
+			t.Errorf("server %q: Sources()[0] = %q, want it passed through as %q", server, got[0], want)
+		}
+		if _, err := url.Parse(got[0]); err == nil {
+			t.Errorf("server %q: url.Parse accepted the ambiguous authority; the error is the point", server)
+		}
+	}
+}
+
+// End to end over the path that broke: Sources() -> http.NewRequestWithContext
+// -> a real connection. The loopback address is written in full-form so the
+// authority is unambiguous; "::1:<port>" is the ambiguous shape covered above.
+func TestLiveTVSourcesXtreamURLReachesABareIPv6Server(t *testing.T) {
+	ln, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Skipf("no IPv6 loopback on this host: %v", err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "#EXTM3U\n")
+	}))
+	srv.Listener.Close()
+	srv.Listener = ln
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("SplitHostPort(%q) = %v", ln.Addr(), err)
+	}
+	c := LiveTVConfig{Xtream: XtreamConfig{Server: "0:0:0:0:0:0:0:1:" + port, Username: "u", Password: "p"}}
+	src := c.Sources()[0]
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, src, nil)
+	if err != nil {
+		t.Fatalf("building a request for %q failed: %v", src, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %q failed: %v", src, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading the body failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK || string(body) != "#EXTM3U\n" {
+		t.Fatalf("got %d %q, want 200 %q", resp.StatusCode, body, "#EXTM3U\n")
 	}
 }
