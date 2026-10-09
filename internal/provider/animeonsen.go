@@ -279,10 +279,10 @@ func (p *AnimeOnsen) animeOnsenRetryWait(attempt int, h http.Header) time.Durati
 // (lang="jpn"); there is no text AdaptationSet, and the site's own subtitle
 // data sits behind the 401 catalogue API. So Watch returns no media.Subtitle
 // tracks, and a stream from here is raw Japanese audio unless lobster's own
-// subtitle layer (internal/subtitle, SubDL) supplies a track — which needs
-// subdl_api_key to be set. That is worth knowing before naming this base for
-// a show you cannot follow unsubtitled; it is not something the provider can
-// fix by guessing a URL.
+// subtitle layer (internal/subtitle) supplies a track — which needs
+// subdl_api_key or opensubtitles_api_key to be set. That is worth knowing
+// before naming this base for a show you cannot follow unsubtitled; it is not
+// something the provider can fix by guessing a URL.
 //
 // The download side is NOT symmetrical, and the asymmetry is deliberate:
 // internal/download goes through ffmpeg, which demuxes DASH natively, while
