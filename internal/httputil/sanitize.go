@@ -17,13 +17,29 @@ var (
 )
 
 // ValidateURL checks that a URL is well-formed and uses HTTPS.
+//
+// The error it returns never carries rawURL in full, but it can quote a short
+// fragment of it, and that fragment is sometimes a credential. net/url finds
+// the authority by cutting rawURL at the first '/', '?' or '#', so a password
+// containing one of those characters raw falls outside the userinfo and is read
+// as a port: url.Parse("http://u:pa?ss@host") fails with `invalid port ":pa"
+// after host`. CauseWithoutURL keeps the whole URL out of the message (see
+// urlerr.go) but cannot keep that fragment out, and dropping the cause as well
+// would reduce every rejection to a bare "malformed URL", which is the one
+// thing a validator exists to explain.
+//
+// So ValidateURL does not promise credential safety, and as a library function
+// it cannot: it has no way to know whether the string it was handed is a
+// secret. A caller that validates credential-bearing URLs has to redact the
+// error itself and decide whether to show the cause at all, as
+// provider.LiveTV.httpGet does when its source cannot be taken apart safely.
 func ValidateURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		// Never %w the *url.Error itself: rawURL may carry credentials
-		// (an Xtream playlist URL, a tokenised download link) and
-		// url.Error.Error prints the URL it was handed in full. This is a
-		// library function, so it cannot know whether its input is a secret.
+		// Never %w the *url.Error itself: url.Error.Error prints the URL it
+		// was handed in full, and rawURL may carry credentials (an Xtream
+		// playlist URL, a tokenised download link). The cause it leaves
+		// behind can still quote a fragment of rawURL; see the doc comment.
 		return fmt.Errorf("malformed URL: %w", CauseWithoutURL(err))
 	}
 	if u.Scheme != "https" {
