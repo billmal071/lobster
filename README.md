@@ -208,14 +208,20 @@ Xtream-codes subscription in `config.toml`:
 iptv_org = true
 
 # Extra M3U URLs or local file paths. A leading "~/" is expanded.
+# If you put credentials in a URL here, percent-encode any "/", "?" or "#"
+# inside them — "/" is %2F, "?" is %3F, "#" is %23 — so a password of
+# "pa/ss" becomes "https://user:pa%2Fss@example.com/list.m3u". Left raw, the
+# URL does not parse and the error names nothing it objected to, because the
+# part it objected to is the password.
 playlists = [
   "https://example.com/sports.m3u8",
   "~/playlists/mine.m3u",
 ]
 
 # Optional Xtream-codes subscription. When server is set, lobster builds the
-# get.php m3u_plus URL for you. A bare IPv6 address with a port must be
-# bracketed: server = "[2001:db8::1]:8080".
+# get.php m3u_plus URL for you and escapes username and password itself, so
+# write those two as-is — no percent-encoding. A bare IPv6 address with a port
+# must be bracketed: server = "[2001:db8::1]:8080".
 [live_tv.xtream]
 server = "example.com:8080"
 username = "your-username"
