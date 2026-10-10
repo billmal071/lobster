@@ -316,6 +316,38 @@ func TestReportNoSubtitlesSeparatesLookedFromNeverLooked(t *testing.T) {
 			wantSubstring: "SubDL had none for it, and the search of OpenSubtitles failed, so whether it has any is unknown",
 			notSubstring:  "SubDL and OpenSubtitles had none",
 		},
+		{
+			// The field name the message tells the user to set has to be the
+			// one config actually reads: `os_api_key` is not a Config field,
+			// so following this line left OpenSubtitles silently unconfigured.
+			name:          "names the real OpenSubtitles config field",
+			wantSubstring: "opensubtitles_api_key",
+			notSubstring:  "os_api_key",
+		},
+		{
+			// The reachable case. SubDL ships a bundled default key
+			// (config.Default), so "nothing is configured" above almost never
+			// fires; what a user actually sees is SubDL answering empty. That
+			// line named no remaining source, so OpenSubtitles stayed
+			// undiscoverable even once the field name above was right.
+			name:          "points at the source that was never asked",
+			asked:         []subSourceOutcome{{Name: "SubDL"}},
+			wantSubstring: "not configured: OpenSubtitles (opensubtitles_api_key)",
+			notSubstring:  "SubDL (subdl_api_key)",
+		},
+		{
+			name:          "a failed search still points at the unasked source",
+			asked:         []subSourceOutcome{{Name: "SubDL", Err: boom}},
+			wantSubstring: "not configured: OpenSubtitles (opensubtitles_api_key)",
+			notSubstring:  "had none",
+		},
+		{
+			// Nothing left to suggest: both were asked.
+			name:          "suggests nothing when every source was asked",
+			asked:         []subSourceOutcome{{Name: "SubDL"}, {Name: "OpenSubtitles"}},
+			wantSubstring: "had none for it",
+			notSubstring:  "not configured",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			playStreamHarness(t, &stubPlayerImpl{})

@@ -270,6 +270,25 @@ provider = "Vidcloud"
 
 # Subtitle language
 subs_language = "english"
+
+# External subtitle sources, used when the stream itself carries no track (or
+# none in subs_language). SubDL ships with a key; OpenSubtitles needs your own,
+# free from an opensubtitles.com account. They are searched in that order and
+# the results are merged, so setting both is strictly better than one — the
+# catalogues do not overlap, and a current-season title missing from one is
+# often complete in the other.
+# subdl_api_key = "..."
+# opensubtitles_api_key = "..."
+
+# Optional opensubtitles.com account, which only affects how many subtitle
+# files you may download per day: the API key alone allows 5, the key plus
+# these allows 20. Twelve episodes is more than 5, and running out looks like
+# an HTTP 403 rather than a quota message, which is the only reason this is
+# worth a password sitting in a config file. Leave both unset to stay on the
+# 5/day tier — that is the default, and a login that fails falls back to it
+# rather than breaking subtitles.
+# opensubtitles_username = "..."
+# opensubtitles_password = "..."
 audio_language = "english"   # preferred audio track on multi-dub releases
 
 # Video quality (360, 480, 720, 1080)
@@ -349,7 +368,7 @@ and where the others break"). Run it before concluding a source is broken.
 | `flixhq.to`, `flixhq.ws` | Films and series | Scraper-based. `flixhq.ws` was the default before `auto`. Both check their domain at startup and try known alternates (plus any `domain_overrides`) when it is unreachable. |
 | `tbcpl`, `1shows.org` | Films and series | The same provider against the same site: `tbcpl` resolves to `https://www.1shows.org`, `1shows.org` to `https://1shows.org`. Honours `audio_language` for multi-dub releases. |
 | `kimcartoon` | Cartoons and anime | Domain-checked like FlixHQ. |
-| `animeonsen` | Anime | Public API, no key and no DRM, and in the automatic fallback chain ahead of the other anime sources. Two things to know before naming it. It **carries no subtitles** — the stream is Japanese audio and the source has no text track at all, so you need `subdl_api_key` set for anything to appear. And it has **one 720p rendition**, so `quality` has nothing to choose: a run under it reports 720 whatever you asked for, rather than claiming a height the stream does not have. Its episode counts are measured by probing the CDN (the catalogue endpoints need a key lobster does not ship), so a series with a gap in its numbering lists short rather than long. |
+| `animeonsen` | Anime | Public API, no key and no DRM, and in the automatic fallback chain ahead of the other anime sources. Two things to know before naming it. It **carries no subtitles** — the stream is Japanese audio and the source has no text track at all, so you need `subdl_api_key` or `opensubtitles_api_key` set for anything to appear. And it has **one 720p rendition**, so `quality` has nothing to choose: a run under it reports 720 whatever you asked for, rather than claiming a height the stream does not have. Its episode counts are measured by probing the CDN (the catalogue endpoints need a key lobster does not ship), so a series with a gap in its numbering lists short rather than long. |
 | `allanime` | Anime | `allow_adult_anime = true` is sometimes needed to find a title at all: the catalogue hides some ordinary shows behind the same filter as its adult ones. No longer part of the automatic fallback chain — its sources endpoint is crypto-gated behind a bot challenge — so it is reachable only by naming it here. `lobster doctor` reports whether it answers. |
 | `moviebox` | Films | **Cannot enumerate episodes.** Its episode listing is generated, not fetched: every season returns exactly ten placeholder rows, so a 22-episode season lists as 10. (The season count itself comes from search metadata, and is 1 for any ID MovieBox did not find itself.) Fine for films. |
 | `vidnest` | Films | **Cannot enumerate episodes**, the same way: every season lists episodes 1–50 whether they exist or not. Fine for films. |

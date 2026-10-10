@@ -969,6 +969,32 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	return nil
 }
 
+// osResolveDownloadURL turns an OpenSubtitles file id into a download link,
+// through the client shared by every download in the run.
+//
+// Shared, not built per download: the cached session token and the "this
+// login was refused" flag both live on the client, so a client per download
+// makes a season log in once per episode and makes a dead credential pair
+// cost a refused round trip on every episode. subtitle.OpenSubtitlesFor keys
+// that reuse on the three credential values, which is what keeps it honest
+// when cfg changes.
+//
+// A package var because this is the only place the three config fields are
+// read together, and the real client cannot be reached from a test without
+// reaching the network.
+// A failed sign-in does not fail the download -- it drops it to the much
+// smaller anonymous quota -- so the only thing that makes the degradation
+// visible is saying so. The client offers the message once per run, and the
+// wording is printed here because internal/subtitle has no output of its own.
+var osResolveDownloadURL = func(apiKey, username, password string, fileID int) (string, error) {
+	client := subtitle.OpenSubtitlesFor(apiKey, username, password)
+	link, err := client.ResolveDownloadURL(fileID)
+	if msg := client.TakeLoginWarning(); msg != "" {
+		warnf("%s", msg)
+	}
+	return link, err
+}
+
 // resolveAndDownloadSub handles downloading a subtitle, resolving provider-specific
 // URL schemes (opensubtitles:, subdl:) to actual files.
 func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle, season, episode int) (string, error) {
@@ -980,8 +1006,7 @@ func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle, season,
 	if strings.HasPrefix(sub.URL, "opensubtitles:") {
 		var fileID int
 		fmt.Sscanf(sub.URL, "opensubtitles:%d", &fileID)
-		osClient := subtitle.NewOpenSubtitles(cfg.OSAPIKey)
-		downloadURL, err := osClient.ResolveDownloadURL(fileID)
+		downloadURL, err := osResolveDownloadURL(cfg.OSAPIKey, cfg.OSUsername, cfg.OSPassword, fileID)
 		if err != nil {
 			return "", fmt.Errorf("resolving OpenSubtitles download: %w", err)
 		}
@@ -1038,20 +1063,60 @@ func reportNoSubtitles(title string, asked []subSourceOutcome) {
 			empty = append(empty, o.Name)
 		}
 	}
+	hint := unconfiguredSubSources(asked)
 	switch {
 	case len(asked) == 0:
-		warnf("no %s subtitles for %s: this source ships none, and no external subtitle source is configured (set subdl_api_key or os_api_key)",
+		warnf("no %s subtitles for %s: this source ships none, and no external subtitle source is configured (set subdl_api_key or opensubtitles_api_key)",
 			lang, title)
 	case len(failed) == 0:
-		warnf("no %s subtitles for %s: this source ships none, and %s had none for it",
-			lang, title, joinSubSources(empty))
+		warnf("no %s subtitles for %s: this source ships none, and %s had none for it%s",
+			lang, title, joinSubSources(empty), hint)
 	case len(empty) == 0:
-		warnf("no %s subtitles for %s: this source ships none, and the search of %s failed, so whether %s unknown (--debug shows why)",
-			lang, title, joinSubSources(failed), hasAny(failed))
+		warnf("no %s subtitles for %s: this source ships none, and the search of %s failed, so whether %s unknown (--debug shows why)%s",
+			lang, title, joinSubSources(failed), hasAny(failed), hint)
 	default:
-		warnf("no %s subtitles for %s: this source ships none, %s had none for it, and the search of %s failed, so whether %s unknown (--debug shows why)",
-			lang, title, joinSubSources(empty), joinSubSources(failed), hasAny(failed))
+		warnf("no %s subtitles for %s: this source ships none, %s had none for it, and the search of %s failed, so whether %s unknown (--debug shows why)%s",
+			lang, title, joinSubSources(empty), joinSubSources(failed), hasAny(failed), hint)
 	}
+}
+
+// unconfiguredSubSources names the external sources that were not asked, with
+// the config field that would enable each one.
+//
+// It exists because the "nothing is configured" branch above is very nearly
+// unreachable: config.Default ships a SubDL key, so a user who has never
+// touched the config still gets SubDL asked, and the branch that actually
+// fires is "SubDL had none for it". That line named no other source, so
+// OpenSubtitles -- which does have the titles SubDL misses -- was invisible
+// to anyone reading the only message they ever see.
+//
+// Absence from `asked` is what "not configured" is read off, not cfg:
+// searchExternalSubs records an outcome for every source whose key is
+// non-empty and skips exactly the ones whose key is empty, so the two agree,
+// and deriving it from the argument keeps the report a function of what the
+// run actually did. Nothing is suggested when no source was asked at all --
+// that branch already names both fields.
+func unconfiguredSubSources(asked []subSourceOutcome) string {
+	if len(asked) == 0 {
+		return ""
+	}
+	wasAsked := make(map[string]bool, len(asked))
+	for _, o := range asked {
+		wasAsked[o.Name] = true
+	}
+	var missing []string
+	for _, src := range []struct{ name, field string }{
+		{"SubDL", "subdl_api_key"},
+		{"OpenSubtitles", "opensubtitles_api_key"},
+	} {
+		if !wasAsked[src.name] {
+			missing = append(missing, fmt.Sprintf("%s (%s)", src.name, src.field))
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return "; not configured: " + joinSubSources(missing)
 }
 
 // joinSubSources lists source names in the order searchExternalSubs asks them.
