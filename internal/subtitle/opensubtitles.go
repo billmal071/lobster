@@ -41,13 +41,19 @@ type OpenSubtitlesClient struct {
 
 // NewOpenSubtitles creates an anonymous client for the OpenSubtitles.com REST
 // API: the API key identifies the application, and downloads are metered on
-// the anonymous tier. Use NewOpenSubtitlesWithLogin to raise that ceiling.
+// the anonymous tier. Use OpenSubtitlesFor to raise that ceiling with an
+// opensubtitles.com account.
 func NewOpenSubtitles(apiKey string) *OpenSubtitlesClient {
-	return NewOpenSubtitlesWithLogin(apiKey, "", "")
+	return newOpenSubtitlesWithLogin(apiKey, "", "")
 }
 
-// NewOpenSubtitlesWithLogin creates a client that authenticates downloads with
+// newOpenSubtitlesWithLogin creates a client that authenticates downloads with
 // an opensubtitles.com account.
+//
+// Unexported on purpose: the login state that makes an account worth having
+// only pays off when the client outlives the download, so callers outside
+// this package go through OpenSubtitlesFor and cannot build a private client
+// per episode.
 //
 // OpenSubtitles meters downloads, not searches, and it meters them by whether
 // the request carries a user token: an API key alone gets 5 downloads per 24h,
@@ -59,13 +65,60 @@ func NewOpenSubtitles(apiKey string) *OpenSubtitlesClient {
 // Empty username or password means "stay anonymous", which is the default and
 // is never an error: the account is strictly an optional upgrade, and a client
 // without one behaves as it always did.
-func NewOpenSubtitlesWithLogin(apiKey, username, password string) *OpenSubtitlesClient {
+func newOpenSubtitlesWithLogin(apiKey, username, password string) *OpenSubtitlesClient {
 	return &OpenSubtitlesClient{
 		apiKey:   apiKey,
 		username: username,
 		password: password,
 		client:   httputil.NewClient(),
 	}
+}
+
+// osCredentials identifies the account a client is logged in as. It is a map
+// key and nothing more: it is never formatted, logged or put in an error, and
+// OpenSubtitlesClient already holds the same three strings.
+type osCredentials struct {
+	apiKey   string
+	username string
+	password string
+}
+
+// sharedOpenSubtitles is the one client kept between downloads, with the
+// credentials it was built for. One slot, not a map: a process has a single
+// configuration, so capacity beyond one would only keep a second password
+// alive for the lifetime of the process without ever being asked for it.
+var sharedOpenSubtitles struct {
+	mu     sync.Mutex
+	creds  osCredentials
+	client *OpenSubtitlesClient
+}
+
+// OpenSubtitlesFor returns the client to use for these credentials, reusing
+// the one already built for them.
+//
+// The login state that makes the account worth having — the cached token, and
+// the "this login was refused" flag — lives on the client, so a fresh client
+// per download throws both away. A season then logs in once per episode
+// instead of once, and, worse, a wrong or expired credential pair costs a
+// refused round trip on every episode rather than on the first.
+//
+// Keyed on the credentials rather than remembered once, because cfg is a
+// global that can change — the tests in this repo mutate and restore it — and
+// a client retained regardless of what the credentials now say would
+// authenticate as an account the run is no longer configured for.
+func OpenSubtitlesFor(apiKey, username, password string) *OpenSubtitlesClient {
+	creds := osCredentials{apiKey: apiKey, username: username, password: password}
+
+	sharedOpenSubtitles.mu.Lock()
+	defer sharedOpenSubtitles.mu.Unlock()
+
+	if sharedOpenSubtitles.client != nil && sharedOpenSubtitles.creds == creds {
+		return sharedOpenSubtitles.client
+	}
+	client := newOpenSubtitlesWithLogin(apiKey, username, password)
+	sharedOpenSubtitles.creds = creds
+	sharedOpenSubtitles.client = client
+	return client
 }
 
 // bearerToken returns the token to authenticate the next download with, "" for

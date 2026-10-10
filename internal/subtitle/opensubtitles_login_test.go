@@ -106,7 +106,7 @@ func TestOpenSubtitlesDownloadLogsInAndSendsBearer(t *testing.T) {
 	srv := &osServer{tokens: []string{"token-1"}, acceptBearer: "token-1"}
 	newOSServer(t, srv)
 
-	link, err := NewOpenSubtitlesWithLogin("stub-key", "stub-user", "stub-pass").ResolveDownloadURL(7)
+	link, err := newOpenSubtitlesWithLogin("stub-key", "stub-user", "stub-pass").ResolveDownloadURL(7)
 	if err != nil {
 		t.Fatalf("ResolveDownloadURL: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestOpenSubtitlesLogsInOncePerClient(t *testing.T) {
 	srv := &osServer{tokens: []string{"token-1"}, acceptBearer: "token-1"}
 	newOSServer(t, srv)
 
-	c := NewOpenSubtitlesWithLogin("stub-key", "stub-user", "stub-pass")
+	c := newOpenSubtitlesWithLogin("stub-key", "stub-user", "stub-pass")
 	for i := range 3 {
 		if _, err := c.ResolveDownloadURL(i + 1); err != nil {
 			t.Fatalf("download %d: %v", i, err)
@@ -147,7 +147,7 @@ func TestOpenSubtitlesSearchDoesNotLogIn(t *testing.T) {
 	srv := &osServer{tokens: []string{"token-1"}}
 	newOSServer(t, srv)
 
-	subs, err := NewOpenSubtitlesWithLogin("stub-key", "stub-user", "stub-pass").
+	subs, err := newOpenSubtitlesWithLogin("stub-key", "stub-user", "stub-pass").
 		Search("Some Film", "en", 0, 0)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -176,7 +176,7 @@ func TestOpenSubtitlesWithoutCredentialsStaysAnonymous(t *testing.T) {
 			srv := &osServer{tokens: []string{"token-1"}}
 			newOSServer(t, srv)
 
-			link, err := NewOpenSubtitlesWithLogin("stub-key", tc.user, tc.pass).ResolveDownloadURL(7)
+			link, err := newOpenSubtitlesWithLogin("stub-key", tc.user, tc.pass).ResolveDownloadURL(7)
 			if err != nil {
 				t.Fatalf("ResolveDownloadURL: %v", err)
 			}
@@ -200,7 +200,7 @@ func TestOpenSubtitlesLoginFailureDegradesToAnonymous(t *testing.T) {
 	srv := &osServer{loginStatus: http.StatusUnauthorized}
 	newOSServer(t, srv)
 
-	c := NewOpenSubtitlesWithLogin("stub-key", "stub-user", "stub-pass")
+	c := newOpenSubtitlesWithLogin("stub-key", "stub-user", "stub-pass")
 	link, err := c.ResolveDownloadURL(7)
 	if err != nil {
 		t.Fatalf("a failed login must not fail the download: %v", err)
@@ -227,7 +227,7 @@ func TestOpenSubtitlesRelogsInWhenTokenIsRejected(t *testing.T) {
 	srv := &osServer{tokens: []string{"stale-token", "fresh-token"}, acceptBearer: "fresh-token"}
 	newOSServer(t, srv)
 
-	c := NewOpenSubtitlesWithLogin("stub-key", "stub-user", "stub-pass")
+	c := newOpenSubtitlesWithLogin("stub-key", "stub-user", "stub-pass")
 	link, err := c.ResolveDownloadURL(7)
 	if err != nil {
 		t.Fatalf("ResolveDownloadURL: %v", err)
@@ -258,7 +258,7 @@ func TestOpenSubtitlesStopsAfterOneRelogin(t *testing.T) {
 	srv := &osServer{tokens: []string{"a", "b", "c"}, acceptBearer: "never-issued"}
 	newOSServer(t, srv)
 
-	c := NewOpenSubtitlesWithLogin("stub-key", "stub-user", "stub-pass")
+	c := newOpenSubtitlesWithLogin("stub-key", "stub-user", "stub-pass")
 	if _, err := c.ResolveDownloadURL(7); err == nil {
 		t.Fatal("ResolveDownloadURL = nil error, want the 401 reported")
 	} else if !strings.Contains(err.Error(), "401") {

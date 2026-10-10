@@ -969,6 +969,23 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	return nil
 }
 
+// osResolveDownloadURL turns an OpenSubtitles file id into a download link,
+// through the client shared by every download in the run.
+//
+// Shared, not built per download: the cached session token and the "this
+// login was refused" flag both live on the client, so a client per download
+// makes a season log in once per episode and makes a dead credential pair
+// cost a refused round trip on every episode. subtitle.OpenSubtitlesFor keys
+// that reuse on the three credential values, which is what keeps it honest
+// when cfg changes.
+//
+// A package var because this is the only place the three config fields are
+// read together, and the real client cannot be reached from a test without
+// reaching the network.
+var osResolveDownloadURL = func(apiKey, username, password string, fileID int) (string, error) {
+	return subtitle.OpenSubtitlesFor(apiKey, username, password).ResolveDownloadURL(fileID)
+}
+
 // resolveAndDownloadSub handles downloading a subtitle, resolving provider-specific
 // URL schemes (opensubtitles:, subdl:) to actual files.
 func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle, season, episode int) (string, error) {
@@ -980,8 +997,7 @@ func resolveAndDownloadSub(tmpDir *subtitle.TempDir, sub media.Subtitle, season,
 	if strings.HasPrefix(sub.URL, "opensubtitles:") {
 		var fileID int
 		fmt.Sscanf(sub.URL, "opensubtitles:%d", &fileID)
-		osClient := subtitle.NewOpenSubtitlesWithLogin(cfg.OSAPIKey, cfg.OSUsername, cfg.OSPassword)
-		downloadURL, err := osClient.ResolveDownloadURL(fileID)
+		downloadURL, err := osResolveDownloadURL(cfg.OSAPIKey, cfg.OSUsername, cfg.OSPassword, fileID)
 		if err != nil {
 			return "", fmt.Errorf("resolving OpenSubtitles download: %w", err)
 		}
