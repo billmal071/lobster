@@ -211,8 +211,8 @@ iptv_org = true
 # If you put credentials in a URL here, percent-encode any "/", "?" or "#"
 # inside them — "/" is %2F, "?" is %3F, "#" is %23 — so a password of
 # "pa/ss" becomes "https://user:pa%2Fss@example.com/list.m3u". Left raw, the
-# URL does not parse and the error names nothing it objected to, because the
-# part it objected to is the password.
+# URL does not parse, and the error can quote the password up to that
+# character as an "invalid port" — so redact it before sharing it.
 playlists = [
   "https://example.com/sports.m3u8",
   "~/playlists/mine.m3u",
