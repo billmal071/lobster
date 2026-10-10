@@ -27,6 +27,63 @@ func TestValidateURLErrorNeverCarriesTheURL(t *testing.T) {
 	}
 }
 
+// The other half of ValidateURL's doc comment, and the reason that comment no
+// longer promises credential safety: the error never carries the whole URL, but
+// it can quote a short fragment of it, and when a password contains a raw '/',
+// '?' or '#' that fragment is the password (or its leading part). net/url cuts
+// the authority at the first such character, so the password falls outside the
+// userinfo and is read as a port.
+//
+// Every case asserts on the COMPLETE error string rather than on
+// CauseWithoutURL's return value: the leak this file exists for reached users
+// through the formatted message, not through a helper, and an assertion on the
+// helper is exactly what let the original one through. If net/url's wording
+// changes and these fail, ValidateURL's doc comment is the claim to recheck.
+func TestValidateURLErrorCanQuoteACredentialFragment(t *testing.T) {
+	// Obviously fake credentials throughout; the shape is the point.
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "slash in password",
+			raw:  "https://notarealuser:notarealpass/word@example.test/get.php",
+			want: `malformed URL: invalid port ":notarealpass" after host`,
+		},
+		{
+			name: "question mark in password",
+			raw:  "https://notarealuser:notarealpass?word@example.test/get.php",
+			want: `malformed URL: invalid port ":notarealpass" after host`,
+		},
+		{
+			name: "hash in password",
+			raw:  "https://notarealuser:notarealpass#word@example.test/get.php",
+			want: `malformed URL: invalid port ":notarealpass" after host`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateURL(tc.raw)
+			if err == nil {
+				t.Fatalf("ValidateURL(%q) = nil, want a parse failure", tc.raw)
+			}
+			msg := err.Error()
+			if msg != tc.want {
+				t.Errorf("ValidateURL(%q) error = %q, want %q", tc.raw, msg, tc.want)
+			}
+			if strings.Contains(msg, tc.raw) {
+				t.Errorf("ValidateURL(%q) error = %q, carries the whole URL", tc.raw, msg)
+			}
+			var ue *url.Error
+			if errors.As(err, &ue) {
+				t.Errorf("ValidateURL(%q) error still has a *url.Error in its chain (URL %q)", tc.raw, ue.URL)
+			}
+		})
+	}
+}
+
 // CauseWithoutURL is the seam every URL-bearing error has to go through before
 // it is wrapped into a message, so it is pinned directly as well as through
 // its call sites.
