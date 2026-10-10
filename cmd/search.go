@@ -982,8 +982,17 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 // A package var because this is the only place the three config fields are
 // read together, and the real client cannot be reached from a test without
 // reaching the network.
+// A failed sign-in does not fail the download -- it drops it to the much
+// smaller anonymous quota -- so the only thing that makes the degradation
+// visible is saying so. The client offers the message once per run, and the
+// wording is printed here because internal/subtitle has no output of its own.
 var osResolveDownloadURL = func(apiKey, username, password string, fileID int) (string, error) {
-	return subtitle.OpenSubtitlesFor(apiKey, username, password).ResolveDownloadURL(fileID)
+	client := subtitle.OpenSubtitlesFor(apiKey, username, password)
+	link, err := client.ResolveDownloadURL(fileID)
+	if msg := client.TakeLoginWarning(); msg != "" {
+		warnf("%s", msg)
+	}
+	return link, err
 }
 
 // resolveAndDownloadSub handles downloading a subtitle, resolving provider-specific

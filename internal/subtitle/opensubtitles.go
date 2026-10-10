@@ -33,11 +33,45 @@ type OpenSubtitlesClient struct {
 	mu sync.Mutex
 	// token is the bearer from the last successful /login, "" when none.
 	token string
-	// loginFailed records that a login was tried and did not work, so the
-	// run stops paying a round trip per episode for credentials that are
-	// wrong or for a service that is refusing logins.
-	loginFailed bool
+	// credentialsRejected records that OpenSubtitles answered /login by
+	// refusing the credentials themselves. That verdict does not change
+	// while the process keeps the same configuration, so the run stops
+	// asking: wrong credentials cost one round trip, not one per episode.
+	credentialsRejected bool
+	// failedLogins counts logins that failed for a reason that may not
+	// last -- a timeout, a 5xx, a transport error, a reply with no token.
+	// Those are retried, up to maxLoginAttempts, so a service that was
+	// briefly unavailable when the first episode started does not keep the
+	// whole season on the anonymous quota.
+	failedLogins int
+	// downloadsSinceFailure counts download requests sent since the last
+	// failed login. A retry waits for at least one, which is what stops a
+	// burst of concurrent downloads from spending the whole retry budget
+	// in the same instant -- and from stacking /login calls against a
+	// documented limit of one per second.
+	downloadsSinceFailure int
+	// warnPending is the message TakeLoginWarning hands out once;
+	// warnedRejected and warnedTransient keep each kind of degradation to a
+	// single mention per client, so a season says it is on the anonymous
+	// quota one time rather than once per episode.
+	warnPending     string
+	warnedRejected  bool
+	warnedTransient bool
 }
+
+// maxLoginAttempts bounds how many times one run will try to log in after a
+// login that failed transiently.
+//
+// A count, not a backoff: expiry and failure here are learned from the
+// service, and this package deliberately has no clock -- a time-based retry
+// would need an injectable now() and would push wall-clock waits into tests,
+// which this repo does not allow. Three is picked against the cost of being
+// wrong in either direction: the attempts are spaced by at least one real
+// download each (see downloadsSinceFailure), so a blip that ends within the
+// first few episodes is recovered from, while a service that is properly down
+// costs three wasted round trips across the whole run instead of one per
+// subtitle -- and a season stages up to three subtitles per episode.
+const maxLoginAttempts = 3
 
 // NewOpenSubtitles creates an anonymous client for the OpenSubtitles.com REST
 // API: the API key identifies the application, and downloads are metered on
@@ -96,9 +130,9 @@ var sharedOpenSubtitles struct {
 // OpenSubtitlesFor returns the client to use for these credentials, reusing
 // the one already built for them.
 //
-// The login state that makes the account worth having — the cached token, and
-// the "this login was refused" flag — lives on the client, so a fresh client
-// per download throws both away. A season then logs in once per episode
+// The login state that makes the account worth having — the cached token, the
+// verdict on the credentials, and what is left of the retry budget — lives on
+// the client, so a fresh client per download throws all of it away. A season then logs in once per episode
 // instead of once, and, worse, a wrong or expired credential pair costs a
 // refused round trip on every episode rather than on the first.
 //
@@ -123,6 +157,26 @@ func OpenSubtitlesFor(apiKey, username, password string) *OpenSubtitlesClient {
 
 // bearerToken returns the token to authenticate the next download with, "" for
 // an anonymous request.
+func (o *OpenSubtitlesClient) bearerToken() string {
+	return o.bearer("", false)
+}
+
+// bearerTokenAfter returns the token to retry a download with after the
+// request that carried `rejected` was answered with a 401.
+//
+// The rejected token is passed in rather than implied, because the client is
+// shared by every download in the run: if several downloads are in flight when
+// one token expires, each of them is refused, and each would otherwise clear
+// and replace a token another one has already replaced. One expiry would then
+// cost one /login per download in flight, against a documented limit of one
+// login per second -- turning a recoverable expiry into a refusal. Knowing
+// which token was refused is what lets all but the first caller take the
+// replacement instead of asking for another.
+func (o *OpenSubtitlesClient) bearerTokenAfter(rejected string) string {
+	return o.bearer(rejected, true)
+}
+
+// bearer is the whole login state machine, under o.mu.
 //
 // It logs in lazily, and only ever from the download path. Logging in eagerly
 // in the constructor would put a round trip in front of every search, and
@@ -141,20 +195,24 @@ func OpenSubtitlesFor(apiKey, username, password string) *OpenSubtitlesClient {
 // expired token is replaced — OpenSubtitles tokens are documented as lasting
 // roughly a day, longer than any single lobster run, so there is no clock
 // here: expiry is learned from the service rejecting it, not predicted.
-func (o *OpenSubtitlesClient) bearerToken(refresh bool) string {
+func (o *OpenSubtitlesClient) bearer(rejected string, refresh bool) string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	if o.username == "" || o.password == "" {
+	switch {
+	case o.username == "" || o.password == "":
 		return ""
-	}
-	if o.token != "" && !refresh {
+	case refresh:
+		// Somebody else may already have replaced the token this caller
+		// was refused on; take theirs rather than logging in again.
+		if o.token != "" && o.token != rejected {
+			return o.token
+		}
+		o.token = ""
+	case o.token != "":
 		return o.token
 	}
-	if refresh {
-		o.token = ""
-	}
-	if o.loginFailed {
+	if o.credentialsRejected || !o.mayAttemptLogin() {
 		return ""
 	}
 
@@ -163,21 +221,121 @@ func (o *OpenSubtitlesClient) bearerToken(refresh bool) string {
 		"password": o.password,
 	})
 	if err != nil {
-		o.loginFailed = true
+		o.recordLoginFailure(err)
 		return ""
 	}
 	body, err := o.doRequest("POST", openSubtitlesAPI+"/login", payload, "")
 	if err != nil {
-		o.loginFailed = true
+		o.recordLoginFailure(err)
 		return ""
 	}
 	var resp osLoginResponse
-	if err := json.Unmarshal(body, &resp); err != nil || resp.Token == "" {
-		o.loginFailed = true
+	if err := json.Unmarshal(body, &resp); err != nil {
+		o.recordLoginFailure(fmt.Errorf("unreadable login reply: %w", err))
+		return ""
+	}
+	if resp.Token == "" {
+		o.recordLoginFailure(errors.New("login reply carried no token"))
 		return ""
 	}
 	o.token = resp.Token
 	return o.token
+}
+
+// mayAttemptLogin reports whether a login is worth another round trip.
+// o.mu must be held.
+//
+// The first attempt is always allowed. After a transient failure the run gets
+// maxLoginAttempts in total, and each retry has to wait for a download request
+// to have gone out since the last failure. That spacing is what makes the
+// budget a property of the run rather than of how many downloads happen to be
+// in flight: a burst of concurrent downloads that all find no token spends one
+// attempt between them, not three.
+func (o *OpenSubtitlesClient) mayAttemptLogin() bool {
+	switch {
+	case o.failedLogins == 0:
+		return true
+	case o.failedLogins >= maxLoginAttempts:
+		return false
+	default:
+		return o.downloadsSinceFailure > 0
+	}
+}
+
+// recordLoginFailure classifies a failed login. o.mu must be held.
+//
+// 401 and 403 are the service stating that the sign-in itself is not
+// acceptable -- wrong username or password, or an API key it will not take.
+// Nothing this run can do changes that answer, so it is recorded as permanent
+// and never retried, which is the behaviour the per-episode round trip was
+// removed for in the first place.
+//
+// Everything else is the service failing to answer rather than answering
+// "no": a timeout, a transport error, a 5xx, a 429 from the one-login-per-
+// second limit, a reply that is not the documented shape. Those can stop being
+// true a few seconds later, so they get a bounded retry instead of ending the
+// run's chance of ever being signed in.
+//
+// Which codes a live opensubtitles.com actually returns for bad credentials
+// has not been verified from this machine -- there is no key here. 401 is what
+// the published docs and the stub model; 403 is included because the same API
+// uses it for a key it will not accept, which is equally permanent. If the
+// live service were to answer a wrong password with, say, a 500, the only cost
+// is maxLoginAttempts round trips instead of one.
+func (o *OpenSubtitlesClient) recordLoginFailure(err error) {
+	var status *osStatusError
+	if errors.As(err, &status) && (status.Code == http.StatusUnauthorized || status.Code == http.StatusForbidden) {
+		o.credentialsRejected = true
+		o.noteDegraded(&o.warnedRejected, fmt.Sprintf(
+			"OpenSubtitles rejected the sign-in (HTTP %d), so subtitles are being downloaded on the smaller anonymous quota for the rest of this run; check opensubtitles_username, opensubtitles_password and opensubtitles_api_key",
+			status.Code))
+		return
+	}
+	o.failedLogins++
+	o.downloadsSinceFailure = 0
+	o.noteDegraded(&o.warnedTransient, fmt.Sprintf(
+		"could not sign in to OpenSubtitles (%v), so subtitles are being downloaded on the smaller anonymous quota; the sign-in will be tried again on a later download",
+		err))
+}
+
+// noteDownloadAttempt records that a download request has gone out, which is
+// what lets a transient login failure be retried later in the run.
+func (o *OpenSubtitlesClient) noteDownloadAttempt() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.downloadsSinceFailure++
+}
+
+// noteDegraded queues the one-shot message for a kind of degradation.
+// o.mu must be held.
+func (o *OpenSubtitlesClient) noteDegraded(warned *bool, msg string) {
+	if *warned {
+		return
+	}
+	*warned = true
+	o.warnPending = msg
+}
+
+// TakeLoginWarning returns a message about having dropped to the anonymous
+// download quota, or "" when there is nothing new to say, and clears it.
+//
+// It exists because the degradation is otherwise silent: a run whose sign-in
+// failed keeps working, on a quota small enough that a season stops part way
+// through with a bare HTTP 403 that reads like "no key configured". The
+// wording is left to the caller to print because this package has no output of
+// its own, and each kind of failure is offered once per client so a season
+// says it one time rather than once per episode.
+//
+// It claims only what the client observed: that a sign-in was refused or could
+// not be completed, and that downloads are therefore anonymous. It does not
+// name the quota numbers, which are documented but have not been exercised
+// against the live service from here.
+func (o *OpenSubtitlesClient) TakeLoginWarning() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	msg := o.warnPending
+	o.warnPending = ""
+	return msg
 }
 
 // osLoginResponse is POST /login's reply.
@@ -312,15 +470,18 @@ func (o *OpenSubtitlesClient) ResolveDownloadURL(fileID int) (string, error) {
 	reqURL := fmt.Sprintf("%s/download", openSubtitlesAPI)
 	payload := fmt.Sprintf(`{"file_id":%d}`, fileID)
 
-	body, err := o.doRequest("POST", reqURL, []byte(payload), o.bearerToken(false))
+	tok := o.bearerToken()
+	body, err := o.doRequest("POST", reqURL, []byte(payload), tok)
+	o.noteDownloadAttempt()
 	// A 401 on a request that carried a token means the token is no longer
 	// good -- it expired, or the session was ended elsewhere. One fresh login
 	// and one retry; a 401 that survives that is a real failure and is
 	// reported, so this cannot loop.
 	var status *osStatusError
 	if errors.As(err, &status) && status.Code == http.StatusUnauthorized {
-		if tok := o.bearerToken(true); tok != "" {
-			body, err = o.doRequest("POST", reqURL, []byte(payload), tok)
+		if fresh := o.bearerTokenAfter(tok); fresh != "" {
+			body, err = o.doRequest("POST", reqURL, []byte(payload), fresh)
+			o.noteDownloadAttempt()
 		}
 	}
 	if err != nil {

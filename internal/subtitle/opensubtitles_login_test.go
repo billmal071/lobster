@@ -26,6 +26,12 @@ type osServer struct {
 	// loginStatus is the HTTP status /login answers with.
 	loginStatus int
 
+	// loginStatuses, when non-empty, overrides loginStatus with the status
+	// each successive /login answers with, the last entry repeating. It is
+	// how a service that is briefly unavailable and then recovers is
+	// modelled.
+	loginStatuses []int
+
 	// acceptBearer, when non-empty, is the only bearer /download honours;
 	// anything else gets a 401. Empty means /download does not care, which
 	// is how the anonymous tier is modelled.
@@ -56,8 +62,12 @@ func newOSServer(t *testing.T, s *osServer) {
 			if creds.Username == "" || creds.Password == "" {
 				t.Errorf("/login called without credentials: %q", body)
 			}
-			if s.loginStatus != http.StatusOK {
-				w.WriteHeader(s.loginStatus)
+			status := s.loginStatus
+			if len(s.loginStatuses) > 0 {
+				status = s.loginStatuses[min(s.logins, len(s.loginStatuses))-1]
+			}
+			if status != http.StatusOK {
+				w.WriteHeader(status)
 				_, _ = w.Write([]byte(`{"message":"nope"}`))
 				return
 			}
@@ -84,6 +94,14 @@ func newOSServer(t *testing.T, s *osServer) {
 	saved := openSubtitlesAPI
 	openSubtitlesAPI = srv.URL
 	t.Cleanup(func() { openSubtitlesAPI = saved })
+}
+
+// setAcceptBearer changes which bearer /download honours, so a test can make
+// a token that was good go stale part way through.
+func (s *osServer) setAcceptBearer(tok string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.acceptBearer = tok
 }
 
 func (s *osServer) loginCount() int {
