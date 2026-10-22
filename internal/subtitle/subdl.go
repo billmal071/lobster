@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -50,14 +51,14 @@ type subdlResult struct {
 }
 
 type subdlSubtitle struct {
-	ReleaseName  string `json:"release_name"`
-	Language     string `json:"lang"`
-	Author       string `json:"author"`
-	URL          string `json:"url"`
-	Season       int    `json:"season"`
-	Episode      int    `json:"episode"`
-	HI           bool   `json:"hi"`
-	FullSeason   bool   `json:"full_season"`
+	ReleaseName string `json:"release_name"`
+	Language    string `json:"lang"`
+	Author      string `json:"author"`
+	URL         string `json:"url"`
+	Season      int    `json:"season"`
+	Episode     int    `json:"episode"`
+	HI          bool   `json:"hi"`
+	FullSeason  bool   `json:"full_season"`
 }
 
 // Search finds subtitles for a movie or TV episode.
@@ -228,6 +229,35 @@ func preferSRT(cur, f *zip.File) *zip.File {
 	return cur
 }
 
+// isMacOSZipArtifact reports whether a zip entry is macOS packaging debris
+// rather than content. Zipping on macOS adds an AppleDouble resource fork per
+// file under __MACOSX/, named ._<original>, so it carries the real subtitle's
+// extension and looks like a second subtitle to anything counting candidates.
+func isMacOSZipArtifact(name string) bool {
+	// Zip entries use forward slashes, but some writers emit backslashes.
+	for _, seg := range strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if strings.EqualFold(seg, "__MACOSX") || strings.HasPrefix(seg, "._") {
+			return true
+		}
+	}
+	return false
+}
+
+// episodeMarkerText picks the part of a zip entry's path that decides which
+// episode the entry holds. The file's own name wins whenever it states one: a
+// pack laid out as show.s01e01.s01e02/s01e01.srt has a directory naming both
+// episodes it covers, and letting that speak for each file makes every file in
+// it answer for every episode. Only when the basename states nothing does the
+// surrounding path get a say, which is what a single release unpacked into a
+// release-named folder has to go on.
+func episodeMarkerText(name string, season int) string {
+	base := path.Base(strings.ReplaceAll(name, "\\", "/"))
+	if len(episodeNumbersIn(base, season)) > 0 {
+		return base
+	}
+	return name
+}
+
 // fetchAPI makes a GET request to the SubDL API and returns the parsed response.
 func (s *SubDLClient) fetchAPI(params url.Values) (*subdlResponse, error) {
 	reqURL := fmt.Sprintf("%s?%s", subdlAPI, params.Encode())
@@ -309,6 +339,11 @@ func (s *SubDLClient) DownloadAndExtract(zipURL string, tmpDir *TempDir, season,
 	// genuinely different names are rival candidates.
 	unnamedReleases := map[string]bool{}
 	for _, f := range reader.File {
+		// Resource forks keep the real file's extension, so they have to go
+		// before the extension filter rather than after the counting.
+		if isMacOSZipArtifact(f.Name) {
+			continue
+		}
 		ext := strings.ToLower(filepath.Ext(f.Name))
 		switch ext {
 		case ".srt", ".vtt", ".ass":
@@ -317,12 +352,13 @@ func (s *SubDLClient) DownloadAndExtract(zipURL string, tmpDir *TempDir, season,
 		}
 		if episode > 0 {
 			name := strings.ToLower(f.Name)
+			marker := episodeMarkerText(name, season)
 			// Skip files clearly for a different episode
-			if isWrongEpisode(name, season, episode) {
+			if isWrongEpisode(marker, season, episode) {
 				otherEpisodes = true
 				continue
 			}
-			if namesEpisode(name, season, episode) {
+			if namesEpisode(marker, season, episode) {
 				named = preferSRT(named, f)
 				continue
 			}

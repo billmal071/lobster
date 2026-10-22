@@ -214,3 +214,56 @@ func TestSubDLFilmZipWithSeveralFilesStillExtracts(t *testing.T) {
 		t.Errorf("extracted %q; want one of the film zip's entries", body)
 	}
 }
+
+// TestSubDLZipWithMacOSResourceForkStillExtracts covers an archive zipped on
+// macOS: alongside the real subtitle sits __MACOSX/._<name>.srt, an
+// AppleDouble resource fork carrying the same name and extension. It passed
+// the extension filter and named no episode, so it counted as a second
+// unnamed release and the refusal rejected an archive holding exactly one
+// usable subtitle.
+func TestSubDLZipWithMacOSResourceForkStillExtracts(t *testing.T) {
+	url := zipOf(t,
+		"__MACOSX/._breaking.bad.pilot.web-dl.srt",
+		"breaking.bad.pilot.web-dl.srt",
+	)
+	path, body, err := extract(t, url, 1, 1)
+	if err != nil {
+		t.Fatalf("DownloadAndExtract: %v -- the zip holds one subtitle plus macOS packaging debris", err)
+	}
+	if strings.Contains(path, "._") || !strings.Contains(body, "body of breaking.bad.pilot.web-dl.srt") {
+		t.Errorf("extracted %q (%q); want the real subtitle, not the __MACOSX resource fork", path, body)
+	}
+}
+
+// TestSubDLDoubleEpisodeDirectoryDoesNotRenameItsFiles is the directory-marker
+// case: a pack whose folder states both episodes it covers gave every file
+// inside it both markers, so asking for S01E02 could be answered with the
+// S01E01 file. A file's own name is the authority on which episode it holds.
+func TestSubDLDoubleEpisodeDirectoryDoesNotRenameItsFiles(t *testing.T) {
+	url := zipOf(t,
+		"Show.S01E01.S01E02/S01E01.srt",
+		"Show.S01E01.S01E02/S01E02.srt",
+	)
+	_, body, err := extract(t, url, 1, 2)
+	if err != nil {
+		t.Fatalf("DownloadAndExtract: %v", err)
+	}
+	if !strings.HasSuffix(body, "/S01E02.srt") {
+		t.Errorf("extracted %q for S01E02; want the S01E02.srt entry -- the directory naming both episodes must not make the S01E01 file look like episode 2", body)
+	}
+}
+
+// TestSubDLSingleReleaseInANamedDirectoryStillExtracts guards the fallback the
+// test above narrows: when a file's own name states no episode, the directory
+// around it is all there is to go on, and a single release unpacked into a
+// release-named folder is the common shape of that.
+func TestSubDLSingleReleaseInANamedDirectoryStillExtracts(t *testing.T) {
+	url := zipOf(t, "Breaking.Bad.S01E03.1080p.BluRay/subtitles.srt")
+	_, body, err := extract(t, url, 1, 3)
+	if err != nil {
+		t.Fatalf("DownloadAndExtract: %v -- the directory names the episode and the file names none", err)
+	}
+	if !strings.HasSuffix(body, "/subtitles.srt") {
+		t.Errorf("extracted %q; want the release directory's only subtitle", body)
+	}
+}
