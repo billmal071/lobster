@@ -181,8 +181,11 @@ func (s *SubDLClient) Search(title, language string, season, episode int) ([]med
 			continue
 		}
 		// SubDL API doesn't always filter by episode server-side.
-		// Filter client-side to ensure we get the right episode.
-		if episode > 0 && sub.Episode > 0 && sub.Episode != episode {
+		// Filter client-side to ensure we get the right episode. A full-season
+		// pack is exempt: it covers the whole season, so whatever its episode
+		// field says is not a claim about what the archive holds, and matching
+		// on it would drop the pack for every episode but that one.
+		if episode > 0 && sub.Episode > 0 && sub.Episode != episode && !sub.FullSeason {
 			continue
 		}
 		if season > 0 && sub.Season > 0 && sub.Season != season {

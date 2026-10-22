@@ -267,3 +267,33 @@ func TestSubDLSingleReleaseInANamedDirectoryStillExtracts(t *testing.T) {
 		t.Errorf("extracted %q; want the release directory's only subtitle", body)
 	}
 }
+
+// TestSubDLKeepsAFullSeasonPackThatNamesAnEpisode guards the pack path against
+// SubDL's own episode field. A pack covers the whole season, so whatever its
+// episode field happens to say is not a statement about what the archive
+// holds -- and filtering on it would drop the pack for every episode but one.
+// Precautionary: every full_season entry seen live on 2026-10-22 (Breaking Bad
+// S1, Game of Thrones S1) carried episode: null, so this shape did not occur
+// in practice; the filter would simply be wrong if it ever did.
+func TestSubDLKeepsAFullSeasonPackThatNamesAnEpisode(t *testing.T) {
+	stub := &subdlStub{
+		results: []subdlResult{{SDId: 1234, Type: "tv", Name: "Breaking Bad", Year: 2008}},
+		subtitles: []subdlSubtitle{{
+			ReleaseName: "Breaking.Bad.S01.COMPLETE.1080p.BluRay",
+			Language:    "English",
+			URL:         "/subtitle/breaking-bad-s01.zip",
+			Season:      1,
+			Episode:     1,
+			FullSeason:  true,
+		}},
+	}
+	stub.serve(t)
+
+	subs, err := NewSubDL("stub-key").Search("Breaking Bad", "en", 1, 5)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("Search returned %d subtitles for S01E05 when SubDL offered a full_season pack tagged episode=1; want 1 -- a pack holds every episode, so its own episode field must not filter it", len(subs))
+	}
+}
