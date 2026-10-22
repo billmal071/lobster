@@ -36,6 +36,10 @@ func FilterByEpisode(subtitles []media.Subtitle, season, episode int) []media.Su
 
 // episodeNumbersIn returns the episode numbers text states for the given
 // season, in lowercase text. Patterns: s01e02, s1e2, 1x02.
+//
+// Every occurrence of each pattern is collected, not just the first: a file
+// covering two episodes states both (s01e01.s01e02), and stopping at the first
+// marker left the second episode unstated as far as callers could tell.
 func episodeNumbersIn(text string, season int) []int {
 	patterns := []string{
 		fmt.Sprintf("s%02de", season),
@@ -44,36 +48,45 @@ func episodeNumbersIn(text string, season int) []int {
 	}
 	var nums []int
 	for _, prefix := range patterns {
-		idx := strings.Index(text, prefix)
-		if idx < 0 {
-			continue
-		}
-		// Extract episode number after the prefix
-		rest := text[idx+len(prefix):]
-		epNum := 0
-		for _, c := range rest {
-			if c >= '0' && c <= '9' {
-				epNum = epNum*10 + int(c-'0')
-			} else {
+		for rest := text; ; {
+			idx := strings.Index(rest, prefix)
+			if idx < 0 {
 				break
 			}
-		}
-		if epNum > 0 {
-			nums = append(nums, epNum)
+			// Extract episode number after the prefix
+			rest = rest[idx+len(prefix):]
+			epNum := 0
+			for _, c := range rest {
+				if c >= '0' && c <= '9' {
+					epNum = epNum*10 + int(c-'0')
+				} else {
+					break
+				}
+			}
+			if epNum > 0 {
+				nums = append(nums, epNum)
+			}
 		}
 	}
 	return nums
 }
 
-// isWrongEpisode checks if text contains an episode marker for a different episode.
-// Returns false (keep) if no marker is found.
+// isWrongEpisode checks if text states an episode and none of the episodes it
+// states is the requested one. Returns false (keep) if no marker is found.
+//
+// A stated number other than the requested one is only disqualifying when the
+// requested one is absent: a file covering s01e01 and s01e02 is the right file
+// for either of them, and rejecting it for naming the neighbour as well is how
+// a double episode ends up with no subtitles at all.
 func isWrongEpisode(text string, season, episode int) bool {
+	wrong := false
 	for _, n := range episodeNumbersIn(text, season) {
-		if n != episode {
-			return true
+		if n == episode {
+			return false
 		}
+		wrong = true
 	}
-	return false
+	return wrong
 }
 
 // namesEpisode is the other half of isWrongEpisode, and the two are not

@@ -155,3 +155,62 @@ func TestSubDLSingleReleaseZipStillExtractsItsOnlyFile(t *testing.T) {
 		t.Errorf("extracted %q; want the zip's only subtitle entry", body)
 	}
 }
+
+// TestSubDLPackOfUnnamedFilesIsRefused covers the other way a pack can state
+// no episodes: files numbered in a shape nothing recognises (01.srt, 02.srt).
+// The unnamed fallback kept whichever came last, so asking for episode 3 was
+// answered with some other episode's lines under a plausible-looking name.
+// Several candidates and no named match is a guess, not an answer.
+func TestSubDLPackOfUnnamedFilesIsRefused(t *testing.T) {
+	url := zipOf(t, "01.srt", "02.srt", "03.srt")
+	_, body, err := extract(t, url, 1, 3)
+	if err == nil {
+		t.Fatalf("DownloadAndExtract returned %q for S01E03 from a pack of three unnamed entries; want an error -- picking one of them is a guess", body)
+	}
+}
+
+// TestSubDLSeasonPackExtractsADoubleEpisodeFile guards the other half of the
+// marker scan: a file covering two episodes states both, and it is the right
+// file for either of them.
+func TestSubDLSeasonPackExtractsADoubleEpisodeFile(t *testing.T) {
+	url := zipOf(t,
+		"Breaking.Bad.S01E01.S01E02.srt",
+		"Breaking.Bad.S01E03.srt",
+	)
+	_, body, err := extract(t, url, 1, 2)
+	if err != nil {
+		t.Fatalf("DownloadAndExtract: %v", err)
+	}
+	if !strings.Contains(body, "S01E01.S01E02") {
+		t.Errorf("extracted %q for S01E02; want the S01E01.S01E02 entry -- a file stating two episodes is right for both", body)
+	}
+}
+
+// TestSubDLSingleReleaseZipInTwoFormatsStillExtracts guards the refusal above
+// from overreaching: one release shipped as .srt and .ass is a single
+// candidate in two formats, which is what preferSRT is for, not two rival
+// episodes.
+func TestSubDLSingleReleaseZipInTwoFormatsStillExtracts(t *testing.T) {
+	url := zipOf(t, "breaking.bad.pilot.web-dl.ass", "breaking.bad.pilot.web-dl.srt")
+	path, body, err := extract(t, url, 1, 1)
+	if err != nil {
+		t.Fatalf("DownloadAndExtract: %v", err)
+	}
+	if !strings.HasSuffix(path, ".srt") || !strings.Contains(body, "pilot") {
+		t.Errorf("extracted %q (%q); want the .srt of the zip's only release", path, body)
+	}
+}
+
+// TestSubDLFilmZipWithSeveralFilesStillExtracts guards it from the other
+// direction: with no episode asked for there is no episode to name, so every
+// entry is unnamed and refusing would break films outright.
+func TestSubDLFilmZipWithSeveralFilesStillExtracts(t *testing.T) {
+	url := zipOf(t, "dune.part.two.forced.ass", "dune.part.two.full.srt")
+	_, body, err := extract(t, url, 0, 0)
+	if err != nil {
+		t.Fatalf("DownloadAndExtract: %v", err)
+	}
+	if !strings.Contains(body, "dune") {
+		t.Errorf("extracted %q; want one of the film zip's entries", body)
+	}
+}

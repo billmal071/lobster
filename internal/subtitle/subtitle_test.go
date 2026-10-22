@@ -78,3 +78,33 @@ func TestTempDir(t *testing.T) {
 		t.Error("temp dir path is empty")
 	}
 }
+
+// TestNamesEpisodeSeesEveryStatedEpisode covers a filename stating more than
+// one episode: the scan stopped at the first marker, so the requested episode
+// went unseen whenever it was stated second.
+func TestNamesEpisodeSeesEveryStatedEpisode(t *testing.T) {
+	const name = "show.s01e01.s01e02.srt"
+	if !namesEpisode(name, 1, 2) {
+		t.Errorf("namesEpisode(%q, 1, 2) = false; want true -- the name states episode 2 as its second marker", name)
+	}
+	if !namesEpisode(name, 1, 1) {
+		t.Errorf("namesEpisode(%q, 1, 1) = false; want true", name)
+	}
+	if namesEpisode(name, 1, 3) {
+		t.Errorf("namesEpisode(%q, 1, 3) = true; want false", name)
+	}
+}
+
+// TestIsWrongEpisodeKeepsADoubleEpisodeFile is the companion: a file covering
+// episodes 1 and 2 is not the wrong file for either, so a stated number other
+// than the requested one only disqualifies it when the requested one is
+// absent.
+func TestIsWrongEpisodeKeepsADoubleEpisodeFile(t *testing.T) {
+	const name = "show.s01e01.s01e02.srt"
+	if isWrongEpisode(name, 1, 2) {
+		t.Errorf("isWrongEpisode(%q, 1, 2) = true; want false -- the name states episode 2", name)
+	}
+	if !isWrongEpisode(name, 1, 3) {
+		t.Errorf("isWrongEpisode(%q, 1, 3) = false; want true -- it states episodes, none of them 3", name)
+	}
+}

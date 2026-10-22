@@ -304,8 +304,13 @@ func (s *SubDLClient) DownloadAndExtract(zipURL string, tmpDir *TempDir, season,
 	// collected separately from an unnamed candidate.
 	var named, unnamed *zip.File
 	otherEpisodes := false
+	// Entries differing only by extension are one release in several formats,
+	// which is what preferSRT is for, so they are counted once. Entries with
+	// genuinely different names are rival candidates.
+	unnamedReleases := map[string]bool{}
 	for _, f := range reader.File {
-		switch strings.ToLower(filepath.Ext(f.Name)) {
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		switch ext {
 		case ".srt", ".vtt", ".ass":
 		default:
 			continue
@@ -321,6 +326,7 @@ func (s *SubDLClient) DownloadAndExtract(zipURL string, tmpDir *TempDir, season,
 				named = preferSRT(named, f)
 				continue
 			}
+			unnamedReleases[strings.TrimSuffix(name, ext)] = true
 		}
 		unnamed = preferSRT(unnamed, f)
 	}
@@ -332,7 +338,14 @@ func (s *SubDLClient) DownloadAndExtract(zipURL string, tmpDir *TempDir, season,
 		// some unnamed entry out of it is how the wrong episode's subtitles get
 		// played. A single release's zip names no episode at all, and its file
 		// is the right one, so the fallback is kept for that shape only.
-		if otherEpisodes {
+		//
+		// Several candidates stating no episode is the same problem wearing a
+		// different hat: a pack of 01.srt, 02.srt, 03.srt states nothing this
+		// recognises, so nothing distinguishes the asked-for episode from its
+		// neighbours and whichever entry the loop happened to keep would be
+		// served as episode 3. Refuse rather than guess; the fallback only
+		// answers when it is the one candidate in the archive.
+		if otherEpisodes || len(unnamedReleases) > 1 {
 			return "", fmt.Errorf("no subtitle for season %d episode %d in zip", season, episode)
 		}
 		best = unnamed
