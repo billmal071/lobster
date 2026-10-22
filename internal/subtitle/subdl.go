@@ -198,8 +198,11 @@ func (s *SubDLClient) Search(title, language string, season, episode int) ([]med
 		// SubDL has for Breaking Bad is a full-season pack, so an episode
 		// request answered with ten packs returned nothing at all.
 		//
-		// Check release name for wrong episode markers
-		if episode > 0 && isWrongEpisode(strings.ToLower(sub.ReleaseName), season, episode) {
+		// Check release name for wrong episode markers. A pack is exempt here
+		// for the same reason it is exempt from the episode field above: an
+		// episode marker in a pack's release name is not a claim about which
+		// single episode the archive holds, so it must not disqualify it.
+		if episode > 0 && !sub.FullSeason && isWrongEpisode(strings.ToLower(sub.ReleaseName), season, episode) {
 			continue
 		}
 		label := sub.Language
