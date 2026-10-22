@@ -34,15 +34,15 @@ func FilterByEpisode(subtitles []media.Subtitle, season, episode int) []media.Su
 	return filtered
 }
 
-// isWrongEpisode checks if text contains an episode marker for a different episode.
-// Returns false (keep) if no marker is found.
-func isWrongEpisode(text string, season, episode int) bool {
-	// Match patterns: s01e02, S01E02, 1x02
+// episodeNumbersIn returns the episode numbers text states for the given
+// season, in lowercase text. Patterns: s01e02, s1e2, 1x02.
+func episodeNumbersIn(text string, season int) []int {
 	patterns := []string{
 		fmt.Sprintf("s%02de", season),
 		fmt.Sprintf("s%de", season),
 		fmt.Sprintf("%dx", season),
 	}
+	var nums []int
 	for _, prefix := range patterns {
 		idx := strings.Index(text, prefix)
 		if idx < 0 {
@@ -58,7 +58,31 @@ func isWrongEpisode(text string, season, episode int) bool {
 				break
 			}
 		}
-		if epNum > 0 && epNum != episode {
+		if epNum > 0 {
+			nums = append(nums, epNum)
+		}
+	}
+	return nums
+}
+
+// isWrongEpisode checks if text contains an episode marker for a different episode.
+// Returns false (keep) if no marker is found.
+func isWrongEpisode(text string, season, episode int) bool {
+	for _, n := range episodeNumbersIn(text, season) {
+		if n != episode {
+			return true
+		}
+	}
+	return false
+}
+
+// namesEpisode is the other half of isWrongEpisode, and the two are not
+// opposites: both are false for text carrying no marker at all. Telling "this
+// is the episode" apart from "this says nothing" is what lets the right file be
+// picked out of a season pack rather than the first one that fails to object.
+func namesEpisode(text string, season, episode int) bool {
+	for _, n := range episodeNumbersIn(text, season) {
+		if n == episode {
 			return true
 		}
 	}

@@ -106,7 +106,7 @@ func (s *SubDLClient) Search(title, language string, season, episode int) ([]med
 	// with a series. A film request has season == 0 and episode == 0, so no
 	// season or episode parameter is sent, and *every* client-side filter
 	// below is gated on one of those being non-zero -- the episode check, the
-	// season check, the full-season skip and isWrongEpisode are all inert.
+	// season check and isWrongEpisode are all inert.
 	// A series sd_id answers that unfiltered query with whatever it has, so
 	// `play` on the 1996 film Fargo took "Fargo - 1x01 - The Crocodile's
 	// Dilemma" (measured against sd_id 1300401 on 2026-10-05).
@@ -187,10 +187,13 @@ func (s *SubDLClient) Search(title, language string, season, episode int) ([]med
 		if season > 0 && sub.Season > 0 && sub.Season != season {
 			continue
 		}
-		// Skip full-season packs (contain multiple episodes in one zip)
-		if episode > 0 && sub.FullSeason {
-			continue
-		}
+		// A full-season pack is kept, not skipped. It is a zip holding one file
+		// per episode, and DownloadAndExtract takes the requested episode out
+		// of it; dropping packs here instead threw away results the download
+		// path can already use. Measured 2026-10-22: every English subtitle
+		// SubDL has for Breaking Bad is a full-season pack, so an episode
+		// request answered with ten packs returned nothing at all.
+		//
 		// Check release name for wrong episode markers
 		if episode > 0 && isWrongEpisode(strings.ToLower(sub.ReleaseName), season, episode) {
 			continue
@@ -211,6 +214,18 @@ func (s *SubDLClient) Search(title, language string, season, episode int) ([]med
 	}
 
 	return subtitles, nil
+}
+
+// preferSRT keeps whichever of two zip entries is the better subtitle to
+// extract: an .srt over any other extension, and otherwise the one already held.
+func preferSRT(cur, f *zip.File) *zip.File {
+	if cur == nil {
+		return f
+	}
+	if strings.EqualFold(filepath.Ext(f.Name), ".srt") && !strings.EqualFold(filepath.Ext(cur.Name), ".srt") {
+		return f
+	}
+	return cur
 }
 
 // fetchAPI makes a GET request to the SubDL API and returns the parsed response.
@@ -281,23 +296,47 @@ func (s *SubDLClient) DownloadAndExtract(zipURL string, tmpDir *TempDir, season,
 		return "", fmt.Errorf("opening zip: %w", err)
 	}
 
-	// Find best SRT or VTT file, preferring one that matches the episode
-	var best *zip.File
+	// Find the subtitle file to extract, preferring one that names the episode.
+	//
+	// The wrong-episode filter only rejects a *stated* mismatch, so an entry
+	// stating no episode passes it -- which in a season pack means the first
+	// stray file wins over the episode actually asked for. So a named match is
+	// collected separately from an unnamed candidate.
+	var named, unnamed *zip.File
+	otherEpisodes := false
 	for _, f := range reader.File {
-		ext := strings.ToLower(filepath.Ext(f.Name))
-		if ext != ".srt" && ext != ".vtt" && ext != ".ass" {
+		switch strings.ToLower(filepath.Ext(f.Name)) {
+		case ".srt", ".vtt", ".ass":
+		default:
 			continue
 		}
-		// Skip files clearly for a different episode
-		if episode > 0 && isWrongEpisode(strings.ToLower(f.Name), season, episode) {
-			continue
+		if episode > 0 {
+			name := strings.ToLower(f.Name)
+			// Skip files clearly for a different episode
+			if isWrongEpisode(name, season, episode) {
+				otherEpisodes = true
+				continue
+			}
+			if namesEpisode(name, season, episode) {
+				named = preferSRT(named, f)
+				continue
+			}
 		}
-		best = f
-		if ext == ".srt" {
-			break // prefer SRT
-		}
+		unnamed = preferSRT(unnamed, f)
 	}
 
+	best := named
+	if best == nil {
+		// An archive naming other episodes is a pack, and if none of them is
+		// the one asked for then it does not hold this episode -- extracting
+		// some unnamed entry out of it is how the wrong episode's subtitles get
+		// played. A single release's zip names no episode at all, and its file
+		// is the right one, so the fallback is kept for that shape only.
+		if otherEpisodes {
+			return "", fmt.Errorf("no subtitle for season %d episode %d in zip", season, episode)
+		}
+		best = unnamed
+	}
 	if best == nil {
 		return "", fmt.Errorf("no subtitle file found in zip")
 	}
