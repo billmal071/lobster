@@ -256,9 +256,14 @@ func isMacOSZipArtifact(name string) bool {
 // it answer for every episode. Only when the basename states nothing does the
 // surrounding path get a say, which is what a single release unpacked into a
 // release-named folder has to go on.
-func episodeMarkerText(name string, season int) string {
+//
+// "States one" means any season's, not the requested season's. A file named
+// s02e05 is the authority on itself even when season 1 was asked for, and
+// deferring to its directory there is how a complete-series pack could answer
+// with the wrong season.
+func episodeMarkerText(name string) string {
 	base := path.Base(strings.ReplaceAll(name, "\\", "/"))
-	if len(episodeNumbersIn(base, season)) > 0 {
+	if len(seasonEpisodesIn(base)) > 0 {
 		return base
 	}
 	return name
@@ -358,7 +363,7 @@ func (s *SubDLClient) DownloadAndExtract(zipURL string, tmpDir *TempDir, season,
 		}
 		if episode > 0 {
 			name := strings.ToLower(f.Name)
-			marker := episodeMarkerText(name, season)
+			marker := episodeMarkerText(name)
 			// Skip files clearly for a different episode
 			if isWrongEpisode(marker, season, episode) {
 				otherEpisodes = true

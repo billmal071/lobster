@@ -34,54 +34,116 @@ func FilterByEpisode(subtitles []media.Subtitle, season, episode int) []media.Su
 	return filtered
 }
 
-// episodeNumbersIn returns the episode numbers text states for the given
-// season, in lowercase text. Patterns: s01e02, s1e2, 1x02.
+// seasonEpisode is a season/episode pair some text states.
+type seasonEpisode struct {
+	Season  int
+	Episode int
+}
+
+// seasonEpisodesIn returns every season/episode pair lowercase text states.
+// Patterns: s01e02, s1e2, 1x02. Both numbers are read out of the text rather
+// than one of them being assumed, so text naming a season other than the one
+// asked for is recognised as a statement about a different season instead of
+// as no statement at all -- which is what let a zip entry named s02e05 answer
+// a season 1 episode 5 request.
 //
 // Every occurrence of each pattern is collected, not just the first: a file
 // covering two episodes states both (s01e01.s01e02), and stopping at the first
 // marker left the second episode unstated as far as callers could tell.
-func episodeNumbersIn(text string, season int) []int {
-	patterns := []string{
-		fmt.Sprintf("s%02de", season),
-		fmt.Sprintf("s%de", season),
-		fmt.Sprintf("%dx", season),
-	}
-	var nums []int
-	for _, prefix := range patterns {
-		for rest := text; ; {
-			idx := strings.Index(rest, prefix)
-			if idx < 0 {
-				break
+//
+// Both patterns are bounded, because release names are full of digit-x-digit
+// and s-digit runs that mean resolutions and codecs rather than episodes. The
+// s form takes at most three digits on either side; the x form takes at most
+// two, and both of its runs must end at a non-digit. That is what keeps
+// 1080x720 from reading as season 1080 episode 720, and aac5.1x264 from
+// reading as season 1 episode 264.
+func seasonEpisodesIn(text string) []seasonEpisode {
+	var pairs []seasonEpisode
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case 's':
+			season, next, ok := digitsAt(text, i+1, 3)
+			if !ok || next >= len(text) || text[next] != 'e' {
+				continue
 			}
-			// Extract episode number after the prefix
-			rest = rest[idx+len(prefix):]
-			epNum := 0
-			for _, c := range rest {
-				if c >= '0' && c <= '9' {
-					epNum = epNum*10 + int(c-'0')
-				} else {
-					break
-				}
+			episode, _, ok := digitsAt(text, next+1, 3)
+			if !ok {
+				continue
 			}
-			if epNum > 0 {
-				nums = append(nums, epNum)
+			pairs = append(pairs, seasonEpisode{Season: season, Episode: episode})
+		case 'x':
+			season, ok := digitsBefore(text, i, 2)
+			if !ok {
+				continue
 			}
+			episode, _, ok := digitsAt(text, i+1, 2)
+			if !ok {
+				continue
+			}
+			pairs = append(pairs, seasonEpisode{Season: season, Episode: episode})
 		}
 	}
-	return nums
+	return pairs
 }
 
-// isWrongEpisode checks if text states an episode and none of the episodes it
-// states is the requested one. Returns false (keep) if no marker is found.
+// digitsAt reads the run of digits starting at i, reporting the value and the
+// index after it. A run that is empty, longer than max, or reads as zero is
+// rejected rather than truncated, so a bounded pattern cannot quietly match
+// the leading digits of a longer number.
+func digitsAt(text string, i, max int) (val, next int, ok bool) {
+	n := 0
+	for ; i < len(text) && text[i] >= '0' && text[i] <= '9'; i++ {
+		val = val*10 + int(text[i]-'0')
+		n++
+	}
+	if n == 0 || n > max || val == 0 {
+		return 0, i, false
+	}
+	return val, i, true
+}
+
+// digitsBefore is the same read running backwards from i, which is exclusive.
+func digitsBefore(text string, i, max int) (val int, ok bool) {
+	start := i
+	for start > 0 && text[start-1] >= '0' && text[start-1] <= '9' {
+		start--
+	}
+	if n := i - start; n == 0 || n > max {
+		return 0, false
+	}
+	for j := start; j < i; j++ {
+		val = val*10 + int(text[j]-'0')
+	}
+	if val == 0 {
+		return 0, false
+	}
+	return val, true
+}
+
+// statesRequest reports whether a stated pair is the one being asked for. A
+// request carrying no season matches on the episode alone, since the episode
+// is the whole of what it stated.
+func statesRequest(se seasonEpisode, season, episode int) bool {
+	if season > 0 && se.Season != season {
+		return false
+	}
+	return se.Episode == episode
+}
+
+// isWrongEpisode checks if text states a season/episode pair and none of the
+// pairs it states is the requested one. Returns false (keep) if no marker is
+// found.
 //
-// A stated number other than the requested one is only disqualifying when the
+// A stated pair other than the requested one is only disqualifying when the
 // requested one is absent: a file covering s01e01 and s01e02 is the right file
 // for either of them, and rejecting it for naming the neighbour as well is how
-// a double episode ends up with no subtitles at all.
+// a double episode ends up with no subtitles at all. A pair naming a different
+// season disqualifies on the same terms -- stating the wrong season is a
+// statement, not silence.
 func isWrongEpisode(text string, season, episode int) bool {
 	wrong := false
-	for _, n := range episodeNumbersIn(text, season) {
-		if n == episode {
+	for _, se := range seasonEpisodesIn(text) {
+		if statesRequest(se, season, episode) {
 			return false
 		}
 		wrong = true
@@ -94,8 +156,8 @@ func isWrongEpisode(text string, season, episode int) bool {
 // is the episode" apart from "this says nothing" is what lets the right file be
 // picked out of a season pack rather than the first one that fails to object.
 func namesEpisode(text string, season, episode int) bool {
-	for _, n := range episodeNumbersIn(text, season) {
-		if n == episode {
+	for _, se := range seasonEpisodesIn(text) {
+		if statesRequest(se, season, episode) {
 			return true
 		}
 	}

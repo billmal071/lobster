@@ -327,3 +327,50 @@ func TestSubDLKeepsAFullSeasonPackWhoseNameNamesAnEpisode(t *testing.T) {
 		t.Fatalf("Search returned %d subtitles for S01E05 when SubDL offered a full_season pack whose release name names S01E01; want 1 -- a pack holds every episode, so an episode marker in its name must not filter it", len(subs))
 	}
 }
+
+// TestSubDLWrongSeasonInPackIsRefused covers the season the marker scan never
+// looked at. Detection was built from the *requested* season's patterns only,
+// so an entry named S02E05 matched none of them when season 1 was asked for
+// and came out indistinguishable from an entry stating nothing at all -- the
+// sole-candidate fallback then served season 2's lines as season 1 episode 5.
+// An entry that explicitly states the wrong season is wrong, not silent.
+func TestSubDLWrongSeasonInPackIsRefused(t *testing.T) {
+	url := zipOf(t, "Show.S02E05.srt")
+	_, body, err := extract(t, url, 1, 5)
+	if err == nil {
+		t.Fatalf("DownloadAndExtract returned %q for S01E05 from an archive holding only S02E05; want an error -- the entry names a different season", body)
+	}
+}
+
+// TestSubDLMultiSeasonPackPicksTheRequestedSeason is the shape SubDL actually
+// offers: a complete-series pack whose entries span seasons. The requested
+// season's entry must win over a same-numbered episode of another season.
+func TestSubDLMultiSeasonPackPicksTheRequestedSeason(t *testing.T) {
+	url := zipOf(t,
+		"The.Office.S02E05.srt",
+		"The.Office.S01E05.srt",
+		"The.Office.S03E05.srt",
+	)
+	_, body, err := extract(t, url, 1, 5)
+	if err != nil {
+		t.Fatalf("DownloadAndExtract: %v", err)
+	}
+	if !strings.Contains(body, "S01E05") {
+		t.Errorf("extracted %q for S01E05 from a multi-season pack; want the S01E05 entry", body)
+	}
+}
+
+// TestSubDLSoleUnnamedEntryStillExtracts guards the refusal above from
+// swallowing the fallback: a genuinely unnamed entry states no season and no
+// episode for any season, and when it is the archive's one candidate it is
+// still the answer.
+func TestSubDLSoleUnnamedEntryStillExtracts(t *testing.T) {
+	url := zipOf(t, "01.srt")
+	_, body, err := extract(t, url, 1, 1)
+	if err != nil {
+		t.Fatalf("DownloadAndExtract: %v -- the archive holds exactly one candidate", err)
+	}
+	if !strings.Contains(body, "01.srt") {
+		t.Errorf("extracted %q; want the archive's only entry", body)
+	}
+}
