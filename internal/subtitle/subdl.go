@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -50,14 +51,14 @@ type subdlResult struct {
 }
 
 type subdlSubtitle struct {
-	ReleaseName  string `json:"release_name"`
-	Language     string `json:"lang"`
-	Author       string `json:"author"`
-	URL          string `json:"url"`
-	Season       int    `json:"season"`
-	Episode      int    `json:"episode"`
-	HI           bool   `json:"hi"`
-	FullSeason   bool   `json:"full_season"`
+	ReleaseName string `json:"release_name"`
+	Language    string `json:"lang"`
+	Author      string `json:"author"`
+	URL         string `json:"url"`
+	Season      int    `json:"season"`
+	Episode     int    `json:"episode"`
+	HI          bool   `json:"hi"`
+	FullSeason  bool   `json:"full_season"`
 }
 
 // Search finds subtitles for a movie or TV episode.
@@ -106,7 +107,7 @@ func (s *SubDLClient) Search(title, language string, season, episode int) ([]med
 	// with a series. A film request has season == 0 and episode == 0, so no
 	// season or episode parameter is sent, and *every* client-side filter
 	// below is gated on one of those being non-zero -- the episode check, the
-	// season check, the full-season skip and isWrongEpisode are all inert.
+	// season check and isWrongEpisode are all inert.
 	// A series sd_id answers that unfiltered query with whatever it has, so
 	// `play` on the 1996 film Fargo took "Fargo - 1x01 - The Crocodile's
 	// Dilemma" (measured against sd_id 1300401 on 2026-10-05).
@@ -180,19 +181,28 @@ func (s *SubDLClient) Search(title, language string, season, episode int) ([]med
 			continue
 		}
 		// SubDL API doesn't always filter by episode server-side.
-		// Filter client-side to ensure we get the right episode.
-		if episode > 0 && sub.Episode > 0 && sub.Episode != episode {
+		// Filter client-side to ensure we get the right episode. A full-season
+		// pack is exempt: it covers the whole season, so whatever its episode
+		// field says is not a claim about what the archive holds, and matching
+		// on it would drop the pack for every episode but that one.
+		if episode > 0 && sub.Episode > 0 && sub.Episode != episode && !sub.FullSeason {
 			continue
 		}
 		if season > 0 && sub.Season > 0 && sub.Season != season {
 			continue
 		}
-		// Skip full-season packs (contain multiple episodes in one zip)
-		if episode > 0 && sub.FullSeason {
-			continue
-		}
-		// Check release name for wrong episode markers
-		if episode > 0 && isWrongEpisode(strings.ToLower(sub.ReleaseName), season, episode) {
+		// A full-season pack is kept, not skipped. It is a zip holding one file
+		// per episode, and DownloadAndExtract takes the requested episode out
+		// of it; dropping packs here instead threw away results the download
+		// path can already use. Measured 2026-10-22: every English subtitle
+		// SubDL has for Breaking Bad is a full-season pack, so an episode
+		// request answered with ten packs returned nothing at all.
+		//
+		// Check release name for wrong episode markers. A pack is exempt here
+		// for the same reason it is exempt from the episode field above: an
+		// episode marker in a pack's release name is not a claim about which
+		// single episode the archive holds, so it must not disqualify it.
+		if episode > 0 && !sub.FullSeason && isWrongEpisode(strings.ToLower(sub.ReleaseName), season, episode) {
 			continue
 		}
 		label := sub.Language
@@ -211,6 +221,52 @@ func (s *SubDLClient) Search(title, language string, season, episode int) ([]med
 	}
 
 	return subtitles, nil
+}
+
+// preferSRT keeps whichever of two zip entries is the better subtitle to
+// extract: an .srt over any other extension, and otherwise the one already held.
+func preferSRT(cur, f *zip.File) *zip.File {
+	if cur == nil {
+		return f
+	}
+	if strings.EqualFold(filepath.Ext(f.Name), ".srt") && !strings.EqualFold(filepath.Ext(cur.Name), ".srt") {
+		return f
+	}
+	return cur
+}
+
+// isMacOSZipArtifact reports whether a zip entry is macOS packaging debris
+// rather than content. Zipping on macOS adds an AppleDouble resource fork per
+// file under __MACOSX/, named ._<original>, so it carries the real subtitle's
+// extension and looks like a second subtitle to anything counting candidates.
+func isMacOSZipArtifact(name string) bool {
+	// Zip entries use forward slashes, but some writers emit backslashes.
+	for _, seg := range strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if strings.EqualFold(seg, "__MACOSX") || strings.HasPrefix(seg, "._") {
+			return true
+		}
+	}
+	return false
+}
+
+// episodeMarkerText picks the part of a zip entry's path that decides which
+// episode the entry holds. The file's own name wins whenever it states one: a
+// pack laid out as show.s01e01.s01e02/s01e01.srt has a directory naming both
+// episodes it covers, and letting that speak for each file makes every file in
+// it answer for every episode. Only when the basename states nothing does the
+// surrounding path get a say, which is what a single release unpacked into a
+// release-named folder has to go on.
+//
+// "States one" means any season's, not the requested season's. A file named
+// s02e05 is the authority on itself even when season 1 was asked for, and
+// deferring to its directory there is how a complete-series pack could answer
+// with the wrong season.
+func episodeMarkerText(name string) string {
+	base := path.Base(strings.ReplaceAll(name, "\\", "/"))
+	if len(seasonEpisodesIn(base)) > 0 {
+		return base
+	}
+	return name
 }
 
 // fetchAPI makes a GET request to the SubDL API and returns the parsed response.
@@ -281,23 +337,66 @@ func (s *SubDLClient) DownloadAndExtract(zipURL string, tmpDir *TempDir, season,
 		return "", fmt.Errorf("opening zip: %w", err)
 	}
 
-	// Find best SRT or VTT file, preferring one that matches the episode
-	var best *zip.File
+	// Find the subtitle file to extract, preferring one that names the episode.
+	//
+	// The wrong-episode filter only rejects a *stated* mismatch, so an entry
+	// stating no episode passes it -- which in a season pack means the first
+	// stray file wins over the episode actually asked for. So a named match is
+	// collected separately from an unnamed candidate.
+	var named, unnamed *zip.File
+	otherEpisodes := false
+	// Entries differing only by extension are one release in several formats,
+	// which is what preferSRT is for, so they are counted once. Entries with
+	// genuinely different names are rival candidates.
+	unnamedReleases := map[string]bool{}
 	for _, f := range reader.File {
+		// Resource forks keep the real file's extension, so they have to go
+		// before the extension filter rather than after the counting.
+		if isMacOSZipArtifact(f.Name) {
+			continue
+		}
 		ext := strings.ToLower(filepath.Ext(f.Name))
-		if ext != ".srt" && ext != ".vtt" && ext != ".ass" {
+		switch ext {
+		case ".srt", ".vtt", ".ass":
+		default:
 			continue
 		}
-		// Skip files clearly for a different episode
-		if episode > 0 && isWrongEpisode(strings.ToLower(f.Name), season, episode) {
-			continue
+		if episode > 0 {
+			name := strings.ToLower(f.Name)
+			marker := episodeMarkerText(name)
+			// Skip files clearly for a different episode
+			if isWrongEpisode(marker, season, episode) {
+				otherEpisodes = true
+				continue
+			}
+			if namesEpisode(marker, season, episode) {
+				named = preferSRT(named, f)
+				continue
+			}
+			unnamedReleases[strings.TrimSuffix(name, ext)] = true
 		}
-		best = f
-		if ext == ".srt" {
-			break // prefer SRT
-		}
+		unnamed = preferSRT(unnamed, f)
 	}
 
+	best := named
+	if best == nil {
+		// An archive naming other episodes is a pack, and if none of them is
+		// the one asked for then it does not hold this episode -- extracting
+		// some unnamed entry out of it is how the wrong episode's subtitles get
+		// played. A single release's zip names no episode at all, and its file
+		// is the right one, so the fallback is kept for that shape only.
+		//
+		// Several candidates stating no episode is the same problem wearing a
+		// different hat: a pack of 01.srt, 02.srt, 03.srt states nothing this
+		// recognises, so nothing distinguishes the asked-for episode from its
+		// neighbours and whichever entry the loop happened to keep would be
+		// served as episode 3. Refuse rather than guess; the fallback only
+		// answers when it is the one candidate in the archive.
+		if otherEpisodes || len(unnamedReleases) > 1 {
+			return "", fmt.Errorf("no subtitle for season %d episode %d in zip", season, episode)
+		}
+		best = unnamed
+	}
 	if best == nil {
 		return "", fmt.Errorf("no subtitle file found in zip")
 	}
