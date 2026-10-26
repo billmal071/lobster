@@ -147,7 +147,8 @@ func createDetachLog() (*os.File, error) {
 // success for a stream that never started.
 var detachLiveness = 1 * time.Second
 
-// waitLiveness reports whether c is still running once liveness elapses.
+// waitLiveness reports whether c is still running once liveness elapses and
+// returns the child's exit error when it exited before the window.
 // It must reap via c.Wait rather than merely poll the pid: an un-waited
 // child becomes a zombie on Unix, where kill(pid, 0) — the only pid-based
 // liveness check available — still succeeds against a zombie, and holds an
@@ -156,15 +157,21 @@ var detachLiveness = 1 * time.Second
 // exactly the bug this replaces. Waiting is what makes failure detectable at
 // all; the blocked goroutine in the "still alive" case costs nothing, since
 // the caller returns immediately after and the whole process exits.
-func waitLiveness(c *exec.Cmd, liveness time.Duration) bool {
+func waitLiveness(c *exec.Cmd, liveness time.Duration) (bool, error) {
 	done := make(chan error, 1)
 	go func() { done <- c.Wait() }()
 	select {
-	case <-done:
-		return false
+	case err := <-done:
+		return false, err
 	case <-time.After(liveness):
-		return true
+		return true, nil
 	}
+}
+
+// detachedStartAccepted reports whether the child has either remained alive
+// for the liveness window or completed a successful 1ball browser handoff.
+func detachedStartAccepted(r playRef, alive bool, exitErr error) bool {
+	return alive || (isOneBallBrowserRef(r) && exitErr == nil)
 }
 
 // playDetached re-executes lobster as a background supervisor and returns as
@@ -198,12 +205,13 @@ func playDetached(cmd *cobra.Command, r playRef) error {
 		return emitErr("player_unavailable", exitPlayerUnavailable, "starting background player: %v", err)
 	}
 
-	if !waitLiveness(c, detachLiveness) {
+	alive, exitErr := waitLiveness(c, detachLiveness)
+	if !detachedStartAccepted(r, alive, exitErr) {
 		return emitErr("providers_failed", exitProvidersFailed,
 			"playback exited immediately; see %s", lf.Name())
 	}
 
-	return emitJSON(detachPayload(c.Process.Pid, r.Title, lf.Name()))
+	return emitJSON(detachPayloadForRef(c.Process.Pid, r, lf.Name()))
 }
 
 // detachPayload is the success envelope for a detached play.
@@ -222,6 +230,16 @@ func detachPayload(pid int, title, log string) map[string]any {
 		"log":             log,
 		"resume_tracking": playerTracksPosition(),
 	}
+}
+
+// detachPayloadForRef omits resume tracking for browser handoffs, which do
+// not use Lobster's configured media player or its playback-position tracker.
+func detachPayloadForRef(pid int, r playRef, log string) map[string]any {
+	payload := detachPayload(pid, r.Title, log)
+	if isOneBallBrowserRef(r) {
+		payload["resume_tracking"] = false
+	}
+	return payload
 }
 
 // playerTracksPosition reports whether the configured player reports playback

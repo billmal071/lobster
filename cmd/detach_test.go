@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"lobster/internal/config"
 	"lobster/internal/media"
 	"lobster/internal/provider"
 )
@@ -305,8 +306,21 @@ func TestWaitLivenessDetectsImmediateExit(t *testing.T) {
 	// tight window sees a child that hasn't exited yet and correctly — but
 	// uselessly — reports it alive. Wait returns the moment the child exits,
 	// so a generous window costs nothing when the test passes.
-	if alive := waitLiveness(c, 10*time.Second); alive {
+	if alive, err := waitLiveness(c, 10*time.Second); alive {
 		t.Fatal("waitLiveness reported alive for a process that already exited")
+	} else if err == nil {
+		t.Fatal("waitLiveness lost the child's nonzero exit status")
+	}
+}
+
+func TestWaitLivenessReportsSuccessfulEarlyExit(t *testing.T) {
+	c := exec.Command(os.Args[0])
+	c.Env = append(os.Environ(), "LOBSTER_TEST_HELPER_EXIT_CODE=0")
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if alive, err := waitLiveness(c, 10*time.Second); alive || err != nil {
+		t.Fatalf("waitLiveness = alive %v, err %v; want successful early exit", alive, err)
 	}
 }
 
@@ -321,8 +335,32 @@ func TestWaitLivenessReportsAliveWhileChildStillRunning(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = c.Process.Kill() })
 
-	if alive := waitLiveness(c, 100*time.Millisecond); !alive {
+	if alive, err := waitLiveness(c, 100*time.Millisecond); !alive || err != nil {
 		t.Fatal("waitLiveness reported dead for a process still running")
+	}
+}
+
+func TestDetachedStartAcceptsOnlySuccessfulOneBallEarlyExit(t *testing.T) {
+	oneBall := playRef{Source: "https://1ball.pk/api/matches"}
+	other := playRef{Source: "https://example.com/playlist.m3u"}
+	cases := []struct {
+		name  string
+		ref   playRef
+		alive bool
+		err   error
+		want  bool
+	}{
+		{name: "live child", ref: other, alive: true, want: true},
+		{name: "successful oneball handoff", ref: oneBall, want: true},
+		{name: "failed oneball child", ref: oneBall, err: errors.New("exit status 1")},
+		{name: "successful non-browser exit", ref: other},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := detachedStartAccepted(tc.ref, tc.alive, tc.err); got != tc.want {
+				t.Fatalf("detachedStartAccepted = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -417,5 +455,20 @@ func TestDetachPayloadReportsStartedNotPlaying(t *testing.T) {
 	}
 	if got["title"] != "Some Show" {
 		t.Fatalf("title = %v, want Some Show", got["title"])
+	}
+}
+
+func TestBrowserDetachPayloadDoesNotClaimResumeTracking(t *testing.T) {
+	prevCfg := cfg
+	cfg = config.Default()
+	cfg.Player = "mpv"
+	t.Cleanup(func() { cfg = prevCfg })
+
+	got := detachPayloadForRef(4242, playRef{
+		Title:  "Example Match",
+		Source: "https://1ball.pk/api/matches",
+	}, "/tmp/play-x.log")
+	if got["resume_tracking"] != false {
+		t.Fatalf("resume_tracking = %v, want false for a browser handoff", got["resume_tracking"])
 	}
 }

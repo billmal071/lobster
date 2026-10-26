@@ -20,6 +20,11 @@ const maxSurfFailures = 12
 // (searchRun) reopens the browser.
 var errSurfBackToList = errors.New("surf: back to channel list")
 
+var errSurfPlayerUnavailable = errors.New("surf: configured media player is unavailable")
+
+// agentSurfMenu lets tests handle the post-play menu without a TTY.
+var agentSurfMenu = surfMenu
+
 type surfAction int
 
 const (
@@ -39,9 +44,6 @@ func playLiveSurf(p provider.StreamProvider, lineup []media.SearchResult, startI
 		return nil
 	}
 	pl := player.NewWithDebug(cfg.Player, cfg.AudioLanguage, cfg.Debug)
-	if !pl.Available() {
-		return player.NotFoundError(cfg.Player)
-	}
 	autoSkip := pl.Name() == "mpv"
 	if !autoSkip {
 		fmt.Fprintf(os.Stderr, "Auto-skip of dead channels needs mpv; on %s use the menu to change channels.\n", pl.Name())
@@ -52,6 +54,9 @@ func playLiveSurf(p provider.StreamProvider, lineup []media.SearchResult, startI
 	for {
 		ch := lineup[i]
 		res, perr := surfPlayOne(pl, p, ch)
+		if errors.Is(perr, errSurfPlayerUnavailable) {
+			return perr
+		}
 		switch playlist.DecideSurf(res.Position, perr, autoSkip) {
 		case playlist.SurfAdvance:
 			failCount++
@@ -63,7 +68,7 @@ func playLiveSurf(p provider.StreamProvider, lineup []media.SearchResult, startI
 			i = playlist.NextIndex(i, len(lineup))
 		default: // playlist.SurfMenu
 			failCount = 0
-			action, err := surfMenu(ch.Title)
+			action, err := agentSurfMenu(ch.Title)
 			if err != nil {
 				if errors.Is(err, ui.ErrCancelled) {
 					return nil // user aborted the menu -> quit cleanly
@@ -92,10 +97,13 @@ func surfPlayOne(pl player.Player, p provider.StreamProvider, ch media.SearchRes
 		return player.PlayResult{}, err
 	}
 	if stream.BrowserURL != "" {
-		if err := player.OpenBrowser(stream.BrowserURL); err != nil {
+		if err := agentOpenBrowser(stream.BrowserURL); err != nil {
 			return player.PlayResult{}, err
 		}
 		return player.PlayResult{PositionUnknown: true, PositionUntracked: true}, nil
+	}
+	if !pl.Available() {
+		return player.PlayResult{}, fmt.Errorf("%w: %v", errSurfPlayerUnavailable, player.NotFoundError(pl.Name()))
 	}
 	return pl.Play(stream, ch.Title, 0, nil)
 }

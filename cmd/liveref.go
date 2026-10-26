@@ -15,11 +15,20 @@ import (
 // tests can observe what would be played without launching mpv.
 var agentPlayLive = func(stream *media.Stream, title string) error {
 	if stream.BrowserURL != "" {
-		return player.OpenBrowser(stream.BrowserURL)
+		return agentOpenBrowser(stream.BrowserURL)
 	}
 	pl := player.NewWithDebug(cfg.Player, cfg.AudioLanguage, cfg.Debug)
 	_, err := pl.Play(stream, title, 0, nil)
 	return err
+}
+
+// agentOpenBrowser allows command tests to observe a browser handoff without
+// launching a real browser.
+var agentOpenBrowser = player.OpenBrowser
+
+// isOneBallBrowserRef reports whether r identifies the built-in 1ball feed.
+func isOneBallBrowserRef(r playRef) bool {
+	return r.Source == "https://1ball.pk/api/matches"
 }
 
 // playLiveRef plays a live channel ref.
@@ -54,8 +63,7 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 		return emitErr("unsupported", exitUsage,
 			"--download is not supported for live channels")
 	}
-	browserRef := r.Source == "https://1ball.pk/api/matches"
-	if !browserRef {
+	if !isOneBallBrowserRef(r) {
 		if available, name := agentPlayerCheck(); !available {
 			return emitErr("player_unavailable", exitPlayerUnavailable,
 				"%s is not installed or not on PATH", name)

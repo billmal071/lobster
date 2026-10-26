@@ -21,6 +21,8 @@ type oneBallStream struct {
 	URL   string `json:"url"`
 }
 
+// parseOneBallMatches converts a 1ball JSON match feed into browser-backed
+// Live TV channels, rejecting malformed slugs and unsupported embed hosts.
 func parseOneBallMatches(data []byte) ([]Channel, error) {
 	var matches []oneBallMatch
 	if err := json.Unmarshal(data, &matches); err != nil {
@@ -55,6 +57,7 @@ func parseOneBallMatches(data []byte) ([]Channel, error) {
 	return channels, nil
 }
 
+// validOneBallSlug accepts only path-safe lowercase fixture slugs.
 func validOneBallSlug(s string) bool {
 	if s == "" || len(s) > 180 || s[0] == '-' || s[len(s)-1] == '-' {
 		return false
@@ -67,6 +70,7 @@ func validOneBallSlug(s string) bool {
 	return true
 }
 
+// validOneBallEmbedURL restricts embeds to HTTPS pages on embed.st.
 func validOneBallEmbedURL(u *url.URL) bool {
 	if u == nil || u.Scheme != "https" || u.User != nil || u.Port() != "" || u.Hostname() != "embed.st" {
 		return false
@@ -74,6 +78,7 @@ func validOneBallEmbedURL(u *url.URL) bool {
 	return strings.HasPrefix(u.Path, "/embed-low/")
 }
 
+// oneBallSportName maps the feed's sport codes to display categories.
 func oneBallSportName(s string) string {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "foot", "football":
