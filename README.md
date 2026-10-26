@@ -207,6 +207,10 @@ Xtream-codes subscription in `config.toml`:
 # Set false to use only your own sources.
 iptv_org = true
 
+# Include 1ball.pk live sports (default: true). Playback opens the match page
+# in your default browser because the site's JavaScript player handles the stream.
+oneball = true
+
 # Extra M3U URLs or local file paths. A leading "~/" is expanded.
 # If you put credentials in a URL here, percent-encode any "/", "?" or "#"
 # inside them — "/" is %2F, "?" is %3F, "#" is %23 — so a password of
@@ -228,8 +232,8 @@ username = "your-username"
 password = "your-password"
 ```
 
-Sources are merged in that order — iptv-org first, then your playlists, then
-Xtream — so your own channels appear alongside the free ones.
+Sources are merged in that order — iptv-org, 1ball.pk, your playlists, then
+Xtream — so your own channels appear alongside the built-in sports listings.
 
 ---
 
@@ -427,6 +431,7 @@ download_dir = "~/Videos/lobster"
 # Live TV sources. See "Live TV and Sports" above.
 [live_tv]
 iptv_org = true          # include the built-in iptv-org playlist
+oneball = true           # include 1ball.pk live sports (opens its match page in your browser)
 playlists = []           # extra M3U URLs or local file paths
 ```
 

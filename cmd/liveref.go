@@ -14,7 +14,10 @@ import (
 // agentPlayLive hands a resolved live stream to the player. A package var so
 // tests can observe what would be played without launching mpv.
 var agentPlayLive = func(stream *media.Stream, title string) error {
-	pl := player.New(cfg.Player, cfg.AudioLanguage)
+	if stream.BrowserURL != "" {
+		return player.OpenBrowser(stream.BrowserURL)
+	}
+	pl := player.NewWithDebug(cfg.Player, cfg.AudioLanguage, cfg.Debug)
 	_, err := pl.Play(stream, title, 0, nil)
 	return err
 }
@@ -51,9 +54,12 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 		return emitErr("unsupported", exitUsage,
 			"--download is not supported for live channels")
 	}
-	if available, name := agentPlayerCheck(); !available {
-		return emitErr("player_unavailable", exitPlayerUnavailable,
-			"%s is not installed or not on PATH", name)
+	browserRef := r.Source == "https://1ball.pk/api/matches"
+	if !browserRef {
+		if available, name := agentPlayerCheck(); !available {
+			return emitErr("player_unavailable", exitPlayerUnavailable,
+				"%s is not installed or not on PATH", name)
+		}
 	}
 
 	// The sources are discovered before the --detach fork. Discovering them

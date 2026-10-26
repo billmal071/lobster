@@ -76,11 +76,12 @@ type Server struct {
 
 // Stream contains the resolved streaming URLs.
 type Stream struct {
-	URL       string     // m3u8 or direct video URL
-	Subtitles []Subtitle // Available subtitle tracks
-	Quality   string     // Resolved quality
-	Referer   string     // Referer header required by the CDN (if any)
-	UserAgent string     // User-Agent header required by the CDN (if any)
+	URL        string     // m3u8 or direct video URL
+	BrowserURL string     // page to open when playback requires the site's JavaScript player
+	Subtitles  []Subtitle // Available subtitle tracks
+	Quality    string     // Resolved quality
+	Referer    string     // Referer header required by the CDN (if any)
+	UserAgent  string     // User-Agent header required by the CDN (if any)
 	// Deobfuscate marks an HLS stream whose segments are wrapped in a fake-PNG
 	// header (megaplay/ibyteimg) and must be served through the local
 	// de-obfuscating proxy; a plain player cannot demux them directly.

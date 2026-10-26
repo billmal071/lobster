@@ -21,6 +21,7 @@ import (
 // and IPC via Unix socket at a randomized temp path.
 type MPV struct {
 	audioLang  string
+	debug      bool
 	checkpoint func(position, duration float64)
 }
 
@@ -62,8 +63,12 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 		stream.URL,
 		"--force-media-title=" + title,
 		"--input-ipc-server=" + ipc.path,
-		"--really-quiet",
 		"--network-timeout=15",
+	}
+	if m.debug {
+		args = append(args, "--msg-level=all=info")
+	} else {
+		args = append(args, "--really-quiet")
 	}
 
 	args = append(args, audioLangArgs(m.audioLang)...)

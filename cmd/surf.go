@@ -38,7 +38,7 @@ func playLiveSurf(p provider.StreamProvider, lineup []media.SearchResult, startI
 	if len(lineup) == 0 {
 		return nil
 	}
-	pl := player.New(cfg.Player, cfg.AudioLanguage)
+	pl := player.NewWithDebug(cfg.Player, cfg.AudioLanguage, cfg.Debug)
 	if !pl.Available() {
 		return player.NotFoundError(cfg.Player)
 	}
@@ -90,6 +90,12 @@ func surfPlayOne(pl player.Player, p provider.StreamProvider, ch media.SearchRes
 	stream, err := p.Watch(ch.ID, "", "LiveTV", cfg.Quality)
 	if err != nil {
 		return player.PlayResult{}, err
+	}
+	if stream.BrowserURL != "" {
+		if err := player.OpenBrowser(stream.BrowserURL); err != nil {
+			return player.PlayResult{}, err
+		}
+		return player.PlayResult{PositionUnknown: true, PositionUntracked: true}, nil
 	}
 	return pl.Play(stream, ch.Title, 0, nil)
 }

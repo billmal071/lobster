@@ -33,7 +33,7 @@ var agentPlayerCheck = func() (available bool, name string) {
 	if cfg == nil {
 		return true, ""
 	}
-	p := player.New(cfg.Player, cfg.AudioLanguage)
+	p := player.NewWithDebug(cfg.Player, cfg.AudioLanguage, cfg.Debug)
 	return p.Available(), p.Name()
 }
 
