@@ -255,11 +255,12 @@ func sanitizeFailedSources(failed []string) []string {
 // field back and must compare like-for-like against a sanitized value too.
 func liveChannelRef(ch provider.Channel) (string, error) {
 	return encodeRef(playRef{
-		ID:     ch.ID,
-		Title:  ch.Name,
-		Type:   liveRefType,
-		TVGID:  ch.TVGID,
-		Source: displaySource(ch.Source),
-		SrcKey: sourceKey(ch.Source),
+		ID:            ch.ID,
+		Title:         ch.Name,
+		Type:          liveRefType,
+		TVGID:         ch.TVGID,
+		Source:        displaySource(ch.Source),
+		SrcKey:        sourceKey(ch.Source),
+		BrowserBacked: ch.EmbedURL != "",
 	})
 }

@@ -187,6 +187,13 @@ func TestLocalJSONBrowserRefDoesNotRequireConfiguredPlayer(t *testing.T) {
 	body := `[{"slug":"local-match","sport":"football","title":"Local Match","streams":[{"label":"Main","url":"https://embed.st/embed-low/local"}]}]`
 	usePlaylist(t, body)
 	ref := refFromPlaylist(t, body, "Local Match — Main")
+	decoded, err := decodeRef(ref)
+	if err != nil {
+		t.Fatalf("decode local browser ref: %v", err)
+	}
+	if !decoded.BrowserBacked {
+		t.Fatal("local JSON browser ref does not carry its browser-backed handoff hint")
+	}
 
 	oldCheck := agentPlayerCheck
 	agentPlayerCheck = func() (bool, string) { return false, "mpv" }

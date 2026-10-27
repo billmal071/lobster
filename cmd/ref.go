@@ -66,14 +66,15 @@ import (
 // a digest of the raw source, so those two subscriptions stay distinct, while
 // the digest itself discloses nothing. See sourceKey (cmd/channels.go).
 type playRef struct {
-	ID     string `json:"id"`
-	Title  string `json:"title"`
-	Year   string `json:"year,omitempty"`
-	Type   string `json:"type"`
-	Base   string `json:"base,omitempty"`
-	TVGID  string `json:"tvg_id,omitempty"`  // live only: stable upstream id, "" when the playlist omits it
-	Source string `json:"source,omitempty"`  // live only: the playlist the channel was loaded from, sanitized for display
-	SrcKey string `json:"src_key,omitempty"` // live only: collision-safe digest of the raw playlist source; the value matching compares
+	ID            string `json:"id"`
+	Title         string `json:"title"`
+	Year          string `json:"year,omitempty"`
+	Type          string `json:"type"`
+	Base          string `json:"base,omitempty"`
+	TVGID         string `json:"tvg_id,omitempty"`         // live only: stable upstream id, "" when the playlist omits it
+	Source        string `json:"source,omitempty"`         // live only: the playlist the channel was loaded from, sanitized for display
+	SrcKey        string `json:"src_key,omitempty"`        // live only: collision-safe digest of the raw playlist source; the value matching compares
+	BrowserBacked bool   `json:"browser_backed,omitempty"` // live only: the channel resolves to a browser-backed player page
 }
 
 // liveRefType is the playRef.Type of a live channel. Lowercase and exact:

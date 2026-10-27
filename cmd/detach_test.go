@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -363,6 +364,24 @@ func TestDetachedBrowserHandoffRequiresDedicatedExitStatus(t *testing.T) {
 				t.Fatalf("detachedBrowserHandoff = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestWaitBrowserOutcomeWaitsPastMediaLivenessForBrowserLaunch(t *testing.T) {
+	modeFile := filepath.Join(t.TempDir(), "mode.signal")
+	c := exec.Command(os.Args[0])
+	c.Env = append(os.Environ(),
+		"LOBSTER_TEST_HELPER_EXIT_CODE=70",
+		"LOBSTER_TEST_HELPER_SLEEP_MS=1100",
+		"LOBSTER_TEST_HELPER_MODE_FILE="+modeFile,
+		"LOBSTER_TEST_HELPER_MODE=browser",
+	)
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	mode, alive, err := waitBrowserOutcome(c, modeFile, 3*time.Second)
+	if mode != "browser" || alive || detachedExitCode(err) != exitBrowserHandoff {
+		t.Fatalf("waitBrowserOutcome = mode %q, alive %v, exit %d; want completed browser handoff", mode, alive, detachedExitCode(err))
 	}
 }
 

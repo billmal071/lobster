@@ -312,6 +312,13 @@ claim the match is playing until the player is visibly active or the user
 confirms it. Other live channels continue to use the configured media player
 and return `"status": "started"` with a pid.
 
+A browser-backed ref can take longer to resolve than a normal player launch.
+If the bounded handoff wait expires, Lobster returns `"status": "pending"` with
+the live supervisor pid and log path. This means the browser launch has not
+finished yet; do not report it as opened or playing. The pid identifies the
+currently running supervisor, and the log may show whether it later opened the
+browser or failed.
+
 A live ref is re-matched against the current playlists on every play, not
 trusted blindly — playlists reload and reorder, so this is what lets a ref
 stay valid across a reorder instead of silently playing whatever now sits at

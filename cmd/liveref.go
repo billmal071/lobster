@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -26,6 +27,22 @@ var agentPlayLive = func(stream *media.Stream, title string) error {
 // agentOpenBrowser allows command tests to observe a browser handoff without
 // launching a real browser.
 var agentOpenBrowser = player.OpenBrowser
+
+const detachModeFileEnv = "LOBSTER_DETACH_MODE_FILE"
+
+// signalDetachPlaybackMode lets a detached parent distinguish a resolved
+// browser handoff from a still-running media-player supervisor.
+func signalDetachPlaybackMode(browser bool) error {
+	path := os.Getenv(detachModeFileEnv)
+	if path == "" {
+		return nil
+	}
+	mode := "player\n"
+	if browser {
+		mode = "browser\n"
+	}
+	return os.WriteFile(path, []byte(mode), 0o600)
+}
 
 // playLiveRef plays a live channel ref.
 //
@@ -107,6 +124,13 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 	if err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "%v", err)
 	}
+	if flagSupervised {
+		if err := signalDetachPlaybackMode(stream.BrowserURL != ""); err != nil {
+			// The signal only lets the parent choose a more precise response.
+			// A missing marker must not prevent the requested playback itself.
+			_, _ = os.Stderr.WriteString("warning: could not report detached playback mode: " + err.Error() + "\n")
+		}
+	}
 	if stream.BrowserURL == "" {
 		if available, name := agentPlayerCheck(); !available {
 			return emitErr("player_unavailable", exitPlayerUnavailable,
@@ -118,6 +142,7 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 	}
 	if stream.BrowserURL != "" {
 		if flagSupervised {
+			_, _ = os.Stderr.WriteString("browser handoff opened successfully\n")
 			return &exitError{code: exitBrowserHandoff, err: errors.New("browser handoff complete")}
 		}
 		return emitJSON(map[string]any{"status": "opened", "title": ch.Name, "resume_tracking": false})
