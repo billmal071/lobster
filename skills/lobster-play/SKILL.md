@@ -120,7 +120,7 @@ source and extracting the stream usually takes five to thirty, so most failures
 happen after this response was sent. **If the user says nothing happened, read
 the `log` path from this response** — that is where the child's output went.
 
-Report the pid so the user can stop playback.
+For media-player playback, report the pid so the user can stop playback.
 
 The `log` path is randomly generated (`play-<random>.log` in the user cache
 dir) — it is not derived from the pid, so the only way to find a given run's
@@ -302,12 +302,15 @@ runtime; a channel blocks forever).
 with a live ref, regardless of value — a channel has no seasons and cannot be
 downloaded.
 
-For a 1ball ref, `play --detach` opens the match page in Chrome (or the default
-browser). The 1ball page's JavaScript player handles the stream; Lobster does
-not hand its HLS URL to mpv. A `"status": "started"` response confirms the
-browser handoff, not that video has rendered. Do not claim the match is
-playing until the player is visibly active or the user confirms it. Other live
-channels continue to use the configured media player.
+For a browser-backed live stream, including 1ball matches, `play --detach`
+opens the match page in Chrome (or the default browser). The page's JavaScript
+player handles the stream; Lobster does not hand its HLS URL to mpv. A
+`"status": "opened"` response confirms the browser handoff, not that video has
+rendered. This response has no pid because Lobster's supervisor exits after
+opening the browser; do not report a pid or resume tracking for it. Do not
+claim the match is playing until the player is visibly active or the user
+confirms it. Other live channels continue to use the configured media player
+and return `"status": "started"` with a pid.
 
 A live ref is re-matched against the current playlists on every play, not
 trusted blindly — playlists reload and reorder, so this is what lets a ref

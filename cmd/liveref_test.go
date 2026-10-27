@@ -183,6 +183,28 @@ func TestPlayLiveRejectsSeasonAndEpisode(t *testing.T) {
 	}
 }
 
+func TestLocalJSONBrowserRefDoesNotRequireConfiguredPlayer(t *testing.T) {
+	body := `[{"slug":"local-match","sport":"football","title":"Local Match","streams":[{"label":"Main","url":"https://embed.st/embed-low/local"}]}]`
+	usePlaylist(t, body)
+	ref := refFromPlaylist(t, body, "Local Match — Main")
+
+	oldCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return false, "mpv" }
+	t.Cleanup(func() { agentPlayerCheck = oldCheck })
+	oldOpen := agentOpenBrowser
+	opened := ""
+	agentOpenBrowser = func(url string) error { opened = url; return nil }
+	t.Cleanup(func() { agentOpenBrowser = oldOpen })
+
+	run := runAgentInvocation(t, playCmd, "--ref", ref)
+	if run.err != nil {
+		t.Fatalf("play local browser ref: %v", run.err)
+	}
+	if opened != "https://1ball.pk/watch/local-match" {
+		t.Fatalf("opened URL = %q, want the match page", opened)
+	}
+}
+
 // TestPlayLiveRejectsExplicitZeroSeason covers "--season 0": a value check
 // (flagSeason > 0) lets this through silently, discarding a flag the caller
 // explicitly supplied instead of rejecting it. Passing --season or --episode

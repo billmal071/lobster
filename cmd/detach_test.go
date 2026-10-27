@@ -10,7 +10,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"lobster/internal/config"
 	"lobster/internal/media"
 	"lobster/internal/provider"
 )
@@ -340,25 +339,28 @@ func TestWaitLivenessReportsAliveWhileChildStillRunning(t *testing.T) {
 	}
 }
 
-func TestDetachedStartAcceptsOnlySuccessfulOneBallEarlyExit(t *testing.T) {
-	oneBall := playRef{Source: "https://1ball.pk/api/matches"}
-	other := playRef{Source: "https://example.com/playlist.m3u"}
+func TestDetachedBrowserHandoffRequiresDedicatedExitStatus(t *testing.T) {
+	handoffCmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
+	handoffCmd.Env = append(os.Environ(), "LOBSTER_TEST_HELPER_EXIT_CODE=70")
+	handoffErr := handoffCmd.Run()
+	failureCmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
+	failureCmd.Env = append(os.Environ(), "LOBSTER_TEST_HELPER_EXIT_CODE=1")
+	failureErr := failureCmd.Run()
 	cases := []struct {
 		name  string
-		ref   playRef
 		alive bool
 		err   error
 		want  bool
 	}{
-		{name: "live child", ref: other, alive: true, want: true},
-		{name: "successful oneball handoff", ref: oneBall, want: true},
-		{name: "failed oneball child", ref: oneBall, err: errors.New("exit status 1")},
-		{name: "successful non-browser exit", ref: other},
+		{name: "still running", alive: true, want: false},
+		{name: "generic successful exit", want: false},
+		{name: "failed child", err: failureErr, want: false},
+		{name: "browser handoff", err: handoffErr, want: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := detachedStartAccepted(tc.ref, tc.alive, tc.err); got != tc.want {
-				t.Fatalf("detachedStartAccepted = %v, want %v", got, tc.want)
+			if got := detachedBrowserHandoff(tc.alive, tc.err); got != tc.want {
+				t.Fatalf("detachedBrowserHandoff = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -458,16 +460,14 @@ func TestDetachPayloadReportsStartedNotPlaying(t *testing.T) {
 	}
 }
 
-func TestBrowserDetachPayloadDoesNotClaimResumeTracking(t *testing.T) {
-	prevCfg := cfg
-	cfg = config.Default()
-	cfg.Player = "mpv"
-	t.Cleanup(func() { cfg = prevCfg })
-
-	got := detachPayloadForRef(4242, playRef{
-		Title:  "Example Match",
-		Source: "https://1ball.pk/api/matches",
-	}, "/tmp/play-x.log")
+func TestBrowserDetachPayloadDoesNotReportDeadPIDOrResumeTracking(t *testing.T) {
+	got := browserHandoffPayload("Example Match", "/tmp/play-x.log")
+	if got["status"] != "opened" {
+		t.Fatalf("status = %v, want opened", got["status"])
+	}
+	if _, ok := got["pid"]; ok {
+		t.Fatalf("browser handoff reports a dead supervisor PID: %#v", got["pid"])
+	}
 	if got["resume_tracking"] != false {
 		t.Fatalf("resume_tracking = %v, want false for a browser handoff", got["resume_tracking"])
 	}

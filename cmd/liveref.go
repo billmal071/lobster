@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -25,11 +26,6 @@ var agentPlayLive = func(stream *media.Stream, title string) error {
 // agentOpenBrowser allows command tests to observe a browser handoff without
 // launching a real browser.
 var agentOpenBrowser = player.OpenBrowser
-
-// isOneBallBrowserRef reports whether r identifies the built-in 1ball feed.
-func isOneBallBrowserRef(r playRef) bool {
-	return r.Source == "https://1ball.pk/api/matches"
-}
 
 // playLiveRef plays a live channel ref.
 //
@@ -63,13 +59,6 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 		return emitErr("unsupported", exitUsage,
 			"--download is not supported for live channels")
 	}
-	if !isOneBallBrowserRef(r) {
-		if available, name := agentPlayerCheck(); !available {
-			return emitErr("player_unavailable", exitPlayerUnavailable,
-				"%s is not installed or not on PATH", name)
-		}
-	}
-
 	// The sources are discovered before the --detach fork. Discovering them
 	// is cheap beside loading them (config, plus a TBCPL catalog fetch that
 	// is usually a warm cache read), and doing it late is wrong: with no live
@@ -118,8 +107,20 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 	if err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "%v", err)
 	}
+	if stream.BrowserURL == "" {
+		if available, name := agentPlayerCheck(); !available {
+			return emitErr("player_unavailable", exitPlayerUnavailable,
+				"%s is not installed or not on PATH", name)
+		}
+	}
 	if err := agentPlayLive(stream, ch.Name); err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "%v", err)
+	}
+	if stream.BrowserURL != "" {
+		if flagSupervised {
+			return &exitError{code: exitBrowserHandoff, err: errors.New("browser handoff complete")}
+		}
+		return emitJSON(map[string]any{"status": "opened", "title": ch.Name, "resume_tracking": false})
 	}
 	return emitJSON(map[string]any{"status": "finished", "title": ch.Name})
 }

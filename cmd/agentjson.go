@@ -24,6 +24,9 @@ const (
 	exitNoResults         = 2
 	exitProvidersFailed   = 3
 	exitPlayerUnavailable = 4
+	// exitBrowserHandoff signals that a supervised child opened a browser URL
+	// successfully and has no playback process left to supervise.
+	exitBrowserHandoff = 70
 )
 
 // agentOut is where JSON payloads go. A package var so tests can capture them

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -168,10 +169,22 @@ func waitLiveness(c *exec.Cmd, liveness time.Duration) (bool, error) {
 	}
 }
 
-// detachedStartAccepted reports whether the child has either remained alive
-// for the liveness window or completed a successful 1ball browser handoff.
-func detachedStartAccepted(r playRef, alive bool, exitErr error) bool {
-	return alive || (isOneBallBrowserRef(r) && exitErr == nil)
+// detachedBrowserHandoff reports whether the supervised child successfully
+// opened a browser URL and exited with the internal handoff status.
+func detachedBrowserHandoff(alive bool, exitErr error) bool {
+	if alive || exitErr == nil {
+		return false
+	}
+	var ee *exec.ExitError
+	return errors.As(exitErr, &ee) && ee.ExitCode() == exitBrowserHandoff
+}
+
+func detachedExitCode(exitErr error) int {
+	var ee *exec.ExitError
+	if errors.As(exitErr, &ee) {
+		return ee.ExitCode()
+	}
+	return -1
 }
 
 // playDetached re-executes lobster as a background supervisor and returns as
@@ -206,12 +219,30 @@ func playDetached(cmd *cobra.Command, r playRef) error {
 	}
 
 	alive, exitErr := waitLiveness(c, detachLiveness)
-	if !detachedStartAccepted(r, alive, exitErr) {
+	if detachedBrowserHandoff(alive, exitErr) {
+		return emitJSON(browserHandoffPayload(r.Title, lf.Name()))
+	}
+	if !alive {
+		if detachedExitCode(exitErr) == exitPlayerUnavailable {
+			return emitErr("player_unavailable", exitPlayerUnavailable,
+				"the configured player is unavailable; see %s", lf.Name())
+		}
 		return emitErr("providers_failed", exitProvidersFailed,
 			"playback exited immediately; see %s", lf.Name())
 	}
 
-	return emitJSON(detachPayloadForRef(c.Process.Pid, r, lf.Name()))
+	return emitJSON(detachPayload(c.Process.Pid, r.Title, lf.Name()))
+}
+
+// browserHandoffPayload reports a completed browser launch without a stale
+// child PID: Chrome owns the page after lobster exits.
+func browserHandoffPayload(title, log string) map[string]any {
+	return map[string]any{
+		"status":          "opened",
+		"title":           title,
+		"log":             log,
+		"resume_tracking": false,
+	}
 }
 
 // detachPayload is the success envelope for a detached play.
@@ -230,16 +261,6 @@ func detachPayload(pid int, title, log string) map[string]any {
 		"log":             log,
 		"resume_tracking": playerTracksPosition(),
 	}
-}
-
-// detachPayloadForRef omits resume tracking for browser handoffs, which do
-// not use Lobster's configured media player or its playback-position tracker.
-func detachPayloadForRef(pid int, r playRef, log string) map[string]any {
-	payload := detachPayload(pid, r.Title, log)
-	if isOneBallBrowserRef(r) {
-		payload["resume_tracking"] = false
-	}
-	return payload
 }
 
 // playerTracksPosition reports whether the configured player reports playback
