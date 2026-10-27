@@ -45,6 +45,11 @@ func TestMain(m *testing.M) {
 				time.Sleep(time.Duration(n) * time.Millisecond)
 			}
 		}
+		if path := os.Getenv("LOBSTER_TEST_HELPER_MODE_FILE"); path != "" {
+			if err := os.WriteFile(path, []byte(os.Getenv("LOBSTER_TEST_HELPER_MODE")+"\n"), 0o600); err != nil {
+				os.Exit(74)
+			}
+		}
 		n, err := strconv.Atoi(code)
 		if err != nil {
 			n = 1

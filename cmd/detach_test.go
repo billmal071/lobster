@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -305,8 +306,21 @@ func TestWaitLivenessDetectsImmediateExit(t *testing.T) {
 	// tight window sees a child that hasn't exited yet and correctly — but
 	// uselessly — reports it alive. Wait returns the moment the child exits,
 	// so a generous window costs nothing when the test passes.
-	if alive := waitLiveness(c, 10*time.Second); alive {
+	if alive, err := waitLiveness(c, 10*time.Second); alive {
 		t.Fatal("waitLiveness reported alive for a process that already exited")
+	} else if err == nil {
+		t.Fatal("waitLiveness lost the child's nonzero exit status")
+	}
+}
+
+func TestWaitLivenessReportsSuccessfulEarlyExit(t *testing.T) {
+	c := exec.Command(os.Args[0])
+	c.Env = append(os.Environ(), "LOBSTER_TEST_HELPER_EXIT_CODE=0")
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if alive, err := waitLiveness(c, 10*time.Second); alive || err != nil {
+		t.Fatalf("waitLiveness = alive %v, err %v; want successful early exit", alive, err)
 	}
 }
 
@@ -321,8 +335,53 @@ func TestWaitLivenessReportsAliveWhileChildStillRunning(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = c.Process.Kill() })
 
-	if alive := waitLiveness(c, 100*time.Millisecond); !alive {
+	if alive, err := waitLiveness(c, 100*time.Millisecond); !alive || err != nil {
 		t.Fatal("waitLiveness reported dead for a process still running")
+	}
+}
+
+func TestDetachedBrowserHandoffRequiresDedicatedExitStatus(t *testing.T) {
+	handoffCmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
+	handoffCmd.Env = append(os.Environ(), "LOBSTER_TEST_HELPER_EXIT_CODE=70")
+	handoffErr := handoffCmd.Run()
+	failureCmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
+	failureCmd.Env = append(os.Environ(), "LOBSTER_TEST_HELPER_EXIT_CODE=1")
+	failureErr := failureCmd.Run()
+	cases := []struct {
+		name  string
+		alive bool
+		err   error
+		want  bool
+	}{
+		{name: "still running", alive: true, want: false},
+		{name: "generic successful exit", want: false},
+		{name: "failed child", err: failureErr, want: false},
+		{name: "browser handoff", err: handoffErr, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := detachedBrowserHandoff(tc.alive, tc.err); got != tc.want {
+				t.Fatalf("detachedBrowserHandoff = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWaitBrowserOutcomeWaitsPastMediaLivenessForBrowserLaunch(t *testing.T) {
+	modeFile := filepath.Join(t.TempDir(), "mode.signal")
+	c := exec.Command(os.Args[0])
+	c.Env = append(os.Environ(),
+		"LOBSTER_TEST_HELPER_EXIT_CODE=70",
+		"LOBSTER_TEST_HELPER_SLEEP_MS=1100",
+		"LOBSTER_TEST_HELPER_MODE_FILE="+modeFile,
+		"LOBSTER_TEST_HELPER_MODE=browser",
+	)
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	mode, alive, err := waitBrowserOutcome(c, modeFile, 3*time.Second)
+	if mode != "browser" || alive || detachedExitCode(err) != exitBrowserHandoff {
+		t.Fatalf("waitBrowserOutcome = mode %q, alive %v, exit %d; want completed browser handoff", mode, alive, detachedExitCode(err))
 	}
 }
 
@@ -417,5 +476,18 @@ func TestDetachPayloadReportsStartedNotPlaying(t *testing.T) {
 	}
 	if got["title"] != "Some Show" {
 		t.Fatalf("title = %v, want Some Show", got["title"])
+	}
+}
+
+func TestBrowserDetachPayloadDoesNotReportDeadPIDOrResumeTracking(t *testing.T) {
+	got := browserHandoffPayload("Example Match", "/tmp/play-x.log")
+	if got["status"] != "opened" {
+		t.Fatalf("status = %v, want opened", got["status"])
+	}
+	if _, ok := got["pid"]; ok {
+		t.Fatalf("browser handoff reports a dead supervisor PID: %#v", got["pid"])
+	}
+	if got["resume_tracking"] != false {
+		t.Fatalf("resume_tracking = %v, want false for a browser handoff", got["resume_tracking"])
 	}
 }

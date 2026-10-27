@@ -133,18 +133,24 @@ type XtreamConfig struct {
 // LiveTVConfig configures the Live TV tab's playlist sources.
 type LiveTVConfig struct {
 	IPTVOrg   bool         `toml:"iptv_org"`  // include the built-in iptv-org playlist (default true)
+	OneBall   bool         `toml:"oneball"`   // include 1ball.pk live sports (default true)
 	Playlists []string     `toml:"playlists"` // extra M3U URLs or local file paths
 	Xtream    XtreamConfig `toml:"xtream"`    // optional Xtream-codes subscription
 }
 
 const iptvOrgPlaylist = "https://iptv-org.github.io/iptv/index.category.m3u"
+const oneBallMatchesURL = "https://1ball.pk/api/matches"
 
 // Sources returns the resolved playlist URLs/paths in priority order:
-// iptv-org (if enabled), then custom playlists, then a templated Xtream URL.
+// iptv-org, 1ball.pk, custom playlists, then a templated Xtream URL, omitting
+// either built-in feed when its corresponding setting is disabled.
 func (c LiveTVConfig) Sources() []string {
 	var s []string
 	if c.IPTVOrg {
 		s = append(s, iptvOrgPlaylist)
+	}
+	if c.OneBall {
+		s = append(s, oneBallMatchesURL)
 	}
 	for _, pl := range c.Playlists {
 		s = append(s, expandTilde(pl))
@@ -257,7 +263,7 @@ func Default() *Config {
 		MaxRetries:             3,
 		SubDLAPIKey:            "KCCm2v2q5ZObZOPQgQX8jpQ3-07IEY2c",
 		TBCPLFeed:              true,
-		LiveTV:                 LiveTVConfig{IPTVOrg: true},
+		LiveTV:                 LiveTVConfig{IPTVOrg: true, OneBall: true},
 	}
 }
 

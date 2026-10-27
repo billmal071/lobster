@@ -79,15 +79,20 @@ func NotFoundError(name string) error {
 // language; it is passed to the player so a multi-dub release does not default
 // to whichever track the muxer happened to list first.
 func New(name, audioLang string) Player {
+	return NewWithDebug(name, audioLang, false)
+}
+
+// NewWithDebug creates a player with verbose output enabled when debugging.
+func NewWithDebug(name, audioLang string, debug bool) Player {
 	switch name {
 	case "mpv":
-		return &MPV{audioLang: audioLang}
+		return &MPV{audioLang: audioLang, debug: debug}
 	case "vlc":
 		return &VLC{audioLang: audioLang}
 	case "iina", "celluloid":
 		return &Generic{name: name, audioLang: audioLang}
 	default:
-		return &MPV{audioLang: audioLang} // Default to mpv
+		return &MPV{audioLang: audioLang, debug: debug} // Default to mpv
 	}
 }
 

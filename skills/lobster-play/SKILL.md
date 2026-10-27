@@ -1,9 +1,9 @@
 ---
 name: lobster-play
-description: Use when the user asks to find, search for, or play a movie or TV episode — for example "put on Parasite", "find me something to watch", "play The Bear season 2 episode 3".
+description: Use when the user asks to find or play a movie, TV episode, live TV channel, or football match — for example "put on Parasite", "play The Bear season 2 episode 3", or "find the football match".
 ---
 
-# Playing movies and TV with lobster
+# Playing movies, TV, and live sports with lobster
 
 `lobster` is a terminal media streamer. It has a machine-readable mode that
 never prompts, which is what you use. Its interactive commands will hang you
@@ -120,7 +120,7 @@ source and extracting the stream usually takes five to thirty, so most failures
 happen after this response was sent. **If the user says nothing happened, read
 the `log` path from this response** — that is where the child's output went.
 
-Report the pid so the user can stop playback.
+For media-player playback, report the pid so the user can stop playback.
 
 The `log` path is randomly generated (`play-<random>.log` in the user cache
 dir) — it is not derived from the pid, so the only way to find a given run's
@@ -242,6 +242,13 @@ that log rather than running `doctor` — the cause is in it.
 
 `lobster channels` lists live TV channels as JSON. It never prompts.
 
+The built-in `1ball.pk` feed is enabled by default and includes live football
+matches. When the user asks for football or a specific match, check this feed
+with `lobster channels --category Football --limit 20` (or `--search` for a
+team name), inspect any `failed_sources`, and use a fresh row's `ref`. Do not
+construct or reuse a ref. Show matching fixtures and ask which one to open if
+the user's choice is not already clear.
+
 With no flags it lists categories and how many channels each holds:
 
 ```sh
@@ -294,6 +301,23 @@ runtime; a channel blocks forever).
 `--season`, `--episode`, and `--download` are all rejected outright if passed
 with a live ref, regardless of value — a channel has no seasons and cannot be
 downloaded.
+
+For a browser-backed live stream, including 1ball matches, `play --detach`
+opens the match page in Chrome (or the default browser). The page's JavaScript
+player handles the stream; Lobster does not hand its HLS URL to mpv. A
+`"status": "opened"` response confirms the browser handoff, not that video has
+rendered. This response has no pid because Lobster's supervisor exits after
+opening the browser; do not report a pid or resume tracking for it. Do not
+claim the match is playing until the player is visibly active or the user
+confirms it. Other live channels continue to use the configured media player
+and return `"status": "started"` with a pid.
+
+A browser-backed ref can take longer to resolve than a normal player launch.
+If the bounded handoff wait expires, Lobster returns `"status": "pending"` with
+the live supervisor pid and log path. This means the browser launch has not
+finished yet; do not report it as opened or playing. The pid identifies the
+currently running supervisor, and the log may show whether it later opened the
+browser or failed.
 
 A live ref is re-matched against the current playlists on every play, not
 trusted blindly — playlists reload and reorder, so this is what lets a ref

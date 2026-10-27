@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +17,8 @@ var (
 	flagDetach     bool
 	flagSupervised bool
 )
+
+const browserHandoffWait = 20 * time.Second
 
 // forwardedStringFlags are persistent flags whose value config.Load folds
 // into cfg (root.go's loadConfig) and that must therefore be forwarded to a
@@ -147,7 +150,8 @@ func createDetachLog() (*os.File, error) {
 // success for a stream that never started.
 var detachLiveness = 1 * time.Second
 
-// waitLiveness reports whether c is still running once liveness elapses.
+// waitLiveness reports whether c is still running once liveness elapses and
+// returns the child's exit error when it exited before the window.
 // It must reap via c.Wait rather than merely poll the pid: an un-waited
 // child becomes a zombie on Unix, where kill(pid, 0) — the only pid-based
 // liveness check available — still succeeds against a zombie, and holds an
@@ -156,14 +160,95 @@ var detachLiveness = 1 * time.Second
 // exactly the bug this replaces. Waiting is what makes failure detectable at
 // all; the blocked goroutine in the "still alive" case costs nothing, since
 // the caller returns immediately after and the whole process exits.
-func waitLiveness(c *exec.Cmd, liveness time.Duration) bool {
+func waitLiveness(c *exec.Cmd, liveness time.Duration) (bool, error) {
 	done := make(chan error, 1)
 	go func() { done <- c.Wait() }()
 	select {
-	case <-done:
-		return false
+	case err := <-done:
+		return false, err
 	case <-time.After(liveness):
-		return true
+		return true, nil
+	}
+}
+
+// detachedBrowserHandoff reports whether the supervised child successfully
+// opened a browser URL and exited with the internal handoff status.
+func detachedBrowserHandoff(alive bool, exitErr error) bool {
+	if alive || exitErr == nil {
+		return false
+	}
+	var ee *exec.ExitError
+	return errors.As(exitErr, &ee) && ee.ExitCode() == exitBrowserHandoff
+}
+
+func detachedExitCode(exitErr error) int {
+	var ee *exec.ExitError
+	if errors.As(exitErr, &ee) {
+		return ee.ExitCode()
+	}
+	return -1
+}
+
+// waitBrowserOutcome waits for a supervised browser-intent ref to resolve its
+// actual playback mode. Browser mode is then followed until the child reports
+// success/failure or the bound expires; player mode returns immediately so
+// ordinary media playback retains the short detach response time.
+func waitBrowserOutcome(c *exec.Cmd, modeFile string, timeout time.Duration) (mode string, alive bool, exitErr error) {
+	done := make(chan error, 1)
+	go func() { done <- c.Wait() }()
+	startedAt := time.Now()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	mode = readDetachPlaybackMode(modeFile)
+	for {
+		select {
+		case err := <-done:
+			return readDetachPlaybackMode(modeFile), false, err
+		case <-ticker.C:
+			if observed := readDetachPlaybackMode(modeFile); observed != "" {
+				mode = observed
+				if mode == "player" {
+					remaining := detachLiveness - time.Since(startedAt)
+					if remaining > 0 {
+						mediaTimer := time.NewTimer(remaining)
+						defer mediaTimer.Stop()
+						select {
+						case err := <-done:
+							return mode, false, err
+						case <-mediaTimer.C:
+						}
+					}
+					select {
+					case err := <-done:
+						return mode, false, err
+					default:
+						return mode, true, nil
+					}
+				}
+			}
+		case <-timer.C:
+			select {
+			case err := <-done:
+				return readDetachPlaybackMode(modeFile), false, err
+			default:
+				return mode, true, nil
+			}
+		}
+	}
+}
+
+func readDetachPlaybackMode(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	switch strings.TrimSpace(string(data)) {
+	case "browser", "player":
+		return strings.TrimSpace(string(data))
+	default:
+		return ""
 	}
 }
 
@@ -193,17 +278,93 @@ func playDetached(cmd *cobra.Command, r playRef) error {
 	defer lf.Close()
 	c.Stdout = lf
 	c.Stderr = lf
+	modeFile := ""
+	cleanupModeFile := true
+	defer func() {
+		if modeFile != "" && cleanupModeFile {
+			_ = os.Remove(modeFile)
+		}
+	}()
+	if r.BrowserBacked || r.Source == "https://1ball.pk/api/matches" {
+		mf, createErr := os.CreateTemp(filepath.Dir(lf.Name()), "play-mode-*.signal")
+		if createErr != nil {
+			return emitErr("internal", 1, "creating playback mode signal: %v", createErr)
+		}
+		modeFile = mf.Name()
+		if closeErr := mf.Close(); closeErr != nil {
+			_ = os.Remove(modeFile)
+			return emitErr("internal", 1, "closing playback mode signal: %v", closeErr)
+		}
+		childEnv := make([]string, 0, len(os.Environ())+1)
+		for _, entry := range os.Environ() {
+			if !strings.HasPrefix(entry, detachModeFileEnv+"=") {
+				childEnv = append(childEnv, entry)
+			}
+		}
+		c.Env = append(childEnv, detachModeFileEnv+"="+modeFile)
+	}
 
 	if err := c.Start(); err != nil {
 		return emitErr("player_unavailable", exitPlayerUnavailable, "starting background player: %v", err)
 	}
 
-	if !waitLiveness(c, detachLiveness) {
+	var mode string
+	var alive bool
+	var exitErr error
+	if modeFile != "" {
+		mode, alive, exitErr = waitBrowserOutcome(c, modeFile, browserHandoffWait)
+	} else {
+		alive, exitErr = waitLiveness(c, detachLiveness)
+	}
+	if detachedBrowserHandoff(alive, exitErr) {
+		return emitJSON(browserHandoffPayload(r.Title, lf.Name()))
+	}
+	if !alive {
+		if detachedExitCode(exitErr) == exitPlayerUnavailable {
+			return emitErr("player_unavailable", exitPlayerUnavailable,
+				"the configured player is unavailable; see %s", lf.Name())
+		}
 		return emitErr("providers_failed", exitProvidersFailed,
 			"playback exited immediately; see %s", lf.Name())
 	}
+	if mode == "browser" {
+		return emitJSON(browserPendingPayload(c.Process.Pid, r.Title, lf.Name()))
+	}
+	if modeFile != "" && mode == "" {
+		// The child may still be resolving the channel. Report the live
+		// supervisor as pending; a missing marker later must not prevent the
+		// child from completing the requested playback.
+		return emitJSON(browserResolutionPendingPayload(c.Process.Pid, r.Title, lf.Name()))
+	}
 
 	return emitJSON(detachPayload(c.Process.Pid, r.Title, lf.Name()))
+}
+
+func browserPendingPayload(pid int, title, log string) map[string]any {
+	return map[string]any{
+		"status":          "pending",
+		"pid":             pid,
+		"title":           title,
+		"log":             log,
+		"resume_tracking": false,
+	}
+}
+
+func browserResolutionPendingPayload(pid int, title, log string) map[string]any {
+	payload := browserPendingPayload(pid, title, log)
+	payload["playback_mode"] = "resolving"
+	return payload
+}
+
+// browserHandoffPayload reports a completed browser launch without a stale
+// child PID: Chrome owns the page after lobster exits.
+func browserHandoffPayload(title, log string) map[string]any {
+	return map[string]any{
+		"status":          "opened",
+		"title":           title,
+		"log":             log,
+		"resume_tracking": false,
+	}
 }
 
 // detachPayload is the success envelope for a detached play.

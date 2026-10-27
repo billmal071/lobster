@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"regexp"
 	"strings"
 )
@@ -16,6 +17,7 @@ type Channel struct {
 	UserAgent  string   // from #EXTVLCOPT:http-user-agent
 	TVGID      string   // the tvg-id attribute verbatim; "" when absent
 	Source     string   // playlist this channel was loaded from; set by LiveTV.doLoadContext, not by the parser
+	EmbedURL   string   // browser-resolved player page for sources that require JavaScript/WASM
 }
 
 var (
@@ -27,6 +29,12 @@ var (
 // attributes, commas inside quoted attributes and names, missing URL lines,
 // unknown # directives, blank lines, and CRLF/LF endings.
 func ParseM3U(data []byte) []Channel {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		if channels, err := parseOneBallMatches(trimmed); err == nil {
+			return channels
+		}
+	}
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	var out []Channel
 	var cur *Channel

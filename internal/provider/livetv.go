@@ -550,6 +550,9 @@ func (p *LiveTV) Watch(mediaID, _, _, _ string) (*media.Stream, error) {
 	if !ok {
 		return nil, fmt.Errorf("livetv: unknown channel %q", mediaID)
 	}
+	if ch.EmbedURL != "" {
+		return &media.Stream{URL: ch.URL, BrowserURL: ch.URL, Quality: "Browser"}, nil
+	}
 	return &media.Stream{URL: ch.URL, Referer: ch.Referer, UserAgent: ch.UserAgent}, nil
 }
 

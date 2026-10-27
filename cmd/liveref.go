@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"errors"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -14,9 +16,32 @@ import (
 // agentPlayLive hands a resolved live stream to the player. A package var so
 // tests can observe what would be played without launching mpv.
 var agentPlayLive = func(stream *media.Stream, title string) error {
-	pl := player.New(cfg.Player, cfg.AudioLanguage)
+	if stream.BrowserURL != "" {
+		return agentOpenBrowser(stream.BrowserURL)
+	}
+	pl := player.NewWithDebug(cfg.Player, cfg.AudioLanguage, cfg.Debug)
 	_, err := pl.Play(stream, title, 0, nil)
 	return err
+}
+
+// agentOpenBrowser allows command tests to observe a browser handoff without
+// launching a real browser.
+var agentOpenBrowser = player.OpenBrowser
+
+const detachModeFileEnv = "LOBSTER_DETACH_MODE_FILE"
+
+// signalDetachPlaybackMode lets a detached parent distinguish a resolved
+// browser handoff from a still-running media-player supervisor.
+func signalDetachPlaybackMode(browser bool) error {
+	path := os.Getenv(detachModeFileEnv)
+	if path == "" {
+		return nil
+	}
+	mode := "player\n"
+	if browser {
+		mode = "browser\n"
+	}
+	return os.WriteFile(path, []byte(mode), 0o600)
 }
 
 // playLiveRef plays a live channel ref.
@@ -51,11 +76,6 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 		return emitErr("unsupported", exitUsage,
 			"--download is not supported for live channels")
 	}
-	if available, name := agentPlayerCheck(); !available {
-		return emitErr("player_unavailable", exitPlayerUnavailable,
-			"%s is not installed or not on PATH", name)
-	}
-
 	// The sources are discovered before the --detach fork. Discovering them
 	// is cheap beside loading them (config, plus a TBCPL catalog fetch that
 	// is usually a warm cache read), and doing it late is wrong: with no live
@@ -104,8 +124,28 @@ func playLiveRef(cmd *cobra.Command, r playRef) error {
 	if err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "%v", err)
 	}
+	if flagSupervised {
+		if err := signalDetachPlaybackMode(stream.BrowserURL != ""); err != nil {
+			// The signal only lets the parent choose a more precise response.
+			// A missing marker must not prevent the requested playback itself.
+			_, _ = os.Stderr.WriteString("warning: could not report detached playback mode: " + err.Error() + "\n")
+		}
+	}
+	if stream.BrowserURL == "" {
+		if available, name := agentPlayerCheck(); !available {
+			return emitErr("player_unavailable", exitPlayerUnavailable,
+				"%s is not installed or not on PATH", name)
+		}
+	}
 	if err := agentPlayLive(stream, ch.Name); err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "%v", err)
+	}
+	if stream.BrowserURL != "" {
+		if flagSupervised {
+			_, _ = os.Stderr.WriteString("browser handoff opened successfully\n")
+			return &exitError{code: exitBrowserHandoff, err: errors.New("browser handoff complete")}
+		}
+		return emitJSON(map[string]any{"status": "opened", "title": ch.Name, "resume_tracking": false})
 	}
 	return emitJSON(map[string]any{"status": "finished", "title": ch.Name})
 }
