@@ -87,9 +87,11 @@ func registerPersistentFlags(c *cobra.Command) {
 	fs.BoolVarP(&flagJSON, "json", "j", false, "Output stream metadata as JSON")
 	// Kept to one line and in step with GUIDE.md's "Content sources" table,
 	// which is where each value's scope and limits are written down; an
-	// unrecognised value is not rejected but falls through to moviebox
-	// (newProvider, cmd/provider.go), which is worth knowing before typing one.
-	fs.StringVar(&flagBase, "base", "", "Content source: auto | soap2day | vaplayer | flixhq.to | flixhq.ws | tbcpl | 1shows.org | kimcartoon | allanime | moviebox | vidnest | yts (see GUIDE.md)")
+	// unrecognised value is not rejected but falls through to vaplayer
+	// (newProvider, cmd/provider.go), which is worth knowing before typing
+	// one; a retired source's name (config.RetiredBase) is rejected outright
+	// here, and downgraded to auto with a warning when it comes from the file.
+	fs.StringVar(&flagBase, "base", "", "Content source: auto | vaplayer | flixhq.ws | tbcpl | 1shows.org | animeonsen | yts | nyaa | eztv (see GUIDE.md)")
 	fs.BoolVarP(&flagDebug, "debug", "x", false, "Debug logging to stderr")
 }
 
@@ -202,6 +204,14 @@ func applyConfig() error {
 		cfg.SubsLanguage = flagLanguage
 	}
 	if flagBase != "" {
+		// Load downgrades a retired base in the file to "auto" with a
+		// warning; one typed on the command line is a mistake worth
+		// stopping on. Not when api_url is set: base is never read then.
+		if cfg.APIURL == "" {
+			if err := config.RetiredBaseError(flagBase); err != nil {
+				return fmt.Errorf("invalid configuration: %w", err)
+			}
+		}
 		cfg.Base = flagBase
 	}
 	if flagDebug {
@@ -247,7 +257,7 @@ func applyConfig() error {
 // carries the base it was found under, and applyRefBase (cmd/play.go) copies
 // that into cfg.Base inside RunE — after this function has been consulted and
 // the backend decided. `lobster play --ref <ref minted under --base yts>`
-// under a configured `base = "soap2day"` therefore streams a magnet on
+// under a configured `base = "vaplayer"` therefore streams a magnet on
 // whichever backend a non-torrent run was given. It cannot be closed from
 // here: the value is not knowable until the ref is decoded, and re-execing
 // once it is would replay argv after the process has committed to the
@@ -307,7 +317,9 @@ func mayStreamTorrent(c *config.Config) bool {
 	// by substring, so `base = "yts.mx"` (a documented value, GUIDE.md's
 	// source table) is a real YTS primary. An equality test here missed it and
 	// left that run on the mmap backend.
-	if config.IsYTSBase(c.Base) {
+	//
+	// IsTorrentBase, not IsYTSBase: `--base nyaa` and `--base eztv` are magnet-only too.
+	if config.IsTorrentBase(c.Base) {
 		return true
 	}
 	// The auto arm mirrors routeByType's own conditions (cmd/typeroute.go),

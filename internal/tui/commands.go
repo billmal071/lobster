@@ -20,7 +20,7 @@ import (
 func fetchTabCmd(p provider.Provider, active tab) tea.Cmd {
 	return func() tea.Msg {
 		mediaType := media.Movie
-		if active == tabSeries || active == tabCartoons || active == tabAnime {
+		if active == tabSeries || active == tabAnime {
 			mediaType = media.TV
 		}
 

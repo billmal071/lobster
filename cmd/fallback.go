@@ -108,10 +108,6 @@ func sharedHealth() *resolver.HealthStore {
 	return sharedHealthStore
 }
 
-// flixhqDomain resolves a healthy FlixHQ mirror, memoized per session.
-// Package var so tests can stub the probe.
-var flixhqDomain = provider.FirstHealthyDomainCached
-
 func cfgQuality() string {
 	if cfg != nil && cfg.Quality != "" {
 		return cfg.Quality
@@ -130,26 +126,17 @@ func fallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 }
 
 // fallbackProviders returns all available fallback providers, excluding the primary.
-// Both StreamProviders (Soap2Day, MovieBox, TBCPL) and regular Providers
-// (FlixHQWS, KimCartoon) are included so the app tries every source before
-// giving up. Consumet joins them only when api_url is configured.
+// Both StreamProviders (VaPlayer, TBCPL) and regular Providers (FlixHQWS) are
+// included so the app tries every source before giving up. Consumet joins
+// them only when api_url is configured.
+//
+// Retired sources (config.retiredBases) are not here: each one in the chain
+// cost a probe timeout per resolve for an answer that could only be a failure.
 func fallbackProviders(primary provider.Provider) []provider.Provider {
 	var fallbacks []provider.Provider
 
 	if _, ok := primary.(*provider.VaPlayer); !ok {
 		fallbacks = append(fallbacks, provider.NewVaPlayer())
-	}
-
-	if _, ok := primary.(*provider.VidNest); !ok {
-		fallbacks = append(fallbacks, provider.NewVidNest())
-	}
-
-	if _, ok := primary.(*provider.Soap2Day); !ok {
-		fallbacks = append(fallbacks, provider.NewSoap2Day())
-	}
-
-	if _, ok := primary.(*provider.MovieBox); !ok {
-		fallbacks = append(fallbacks, provider.NewMovieBox())
 	}
 
 	if _, ok := primary.(*provider.TBCPL); !ok {
@@ -170,48 +157,29 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 		}
 	}
 
+	// EZTV before the remaining scrapers for a series (complete encodes, not a
+	// player's HLS), gated like YTS below: its magnet puts the user in a swarm.
+	if _, ok := primary.(*provider.EZTV); !ok {
+		if cfg != nil && cfg.TorrentFallback {
+			fallbacks = append(fallbacks, provider.NewEZTV())
+		}
+	}
+
 	if _, ok := primary.(*provider.FlixHQWS); !ok {
 		fallbacks = append(fallbacks, provider.NewFlixHQWS("flixhq.ws"))
 	}
 
-	// The flixhq.to engine family (flixhq.to, sflix.to, myflixerz.to, ...) has
-	// been origin-down since ~Aug 2026, so the scraper joins the chain only when
-	// a health probe finds a live mirror. The probe runs in parallel across all
-	// candidates and is cached for the session, so while everything is dead this
-	// costs one probe timeout per run — and the provider revives automatically
-	// the moment any mirror answers again.
-	if _, ok := primary.(*provider.FlixHQ); !ok {
-		var overrides map[string][]string
-		if cfg != nil {
-			overrides = cfg.DomainOverrides
-		}
-		if d := flixhqDomain("flixhq", overrides); d != "" {
-			fallbacks = append(fallbacks, provider.NewFlixHQ(d))
-		}
-	}
-
-	if _, ok := primary.(*provider.KimCartoon); !ok {
-		fallbacks = append(fallbacks, provider.NewKimCartoon("kimcartoon.com.co"))
-	}
-
-	// Last so movie/TV scrapers keep priority; these catch anime the others
-	// lack. AniPub is the anime path. AllAnime is retired: its API now sits behind a
-	// Cloudflare bot challenge on top of the crypto-gated sources endpoint
-	// (AA_CRYPTO_MISSING, mid-2026), so it can neither search nor stream. The
-	// provider code stays for the day either gate lifts.
-
-	// AnimeOnsen goes ahead of AniPub because it is the one that can still
-	// return a playable URL. megaplay (AniPub's backend) is alive and
-	// well-stocked, but its stream/getSources no longer carries a `sources`
-	// key: the URL now sits inside an encrypted `enc` blob, which is on the
-	// wrong side of the project's content boundary to open. AniPub stays in
-	// the chain for its subtitle tracks and for the day that changes back.
+	// Last so movie/TV scrapers keep priority; this catches anime the others
+	// lack. AnimeOnsen is the only anime source left standing.
 	if _, ok := primary.(*provider.AnimeOnsen); !ok {
 		fallbacks = append(fallbacks, provider.NewAnimeOnsen())
 	}
 
-	if _, ok := primary.(*provider.AniPub); !ok {
-		fallbacks = append(fallbacks, provider.NewAniPub())
+	// Nyaa after AnimeOnsen: anime torrents for what it lacks, gated the same way.
+	if _, ok := primary.(*provider.Nyaa); !ok {
+		if cfg != nil && cfg.TorrentFallback {
+			fallbacks = append(fallbacks, provider.NewNyaa())
+		}
 	}
 
 	if cat := tbcplCatalog(); cat != nil {
@@ -237,7 +205,7 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 	// because a scraper broke is not, which is why this stays off until asked.
 	//
 	// Opting out of swarming altogether is a source, not this flag:
-	// `base = "soap2day"` — or any explicit non-YTS base, or an api_url,
+	// `base = "vaplayer"` — or any explicit non-YTS base, or an api_url,
 	// which overrides base entirely — with torrent_fallback off never
 	// reaches a magnet.
 	if _, ok := primary.(*provider.YTS); !ok {

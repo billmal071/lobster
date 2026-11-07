@@ -190,10 +190,10 @@ func baseBroadeningWarnings(configured, primaryBase string, results []media.Sear
 		return nil
 	}
 	// A base that selected nothing. newProvider has no unknown-base arm, so
-	// `--base sopa2day` searches MovieBox and primaryBase becomes "moviebox";
+	// `--base sopa2day` searches VaPlayer and primaryBase becomes "vaplayer";
 	// tallying rows against it would count another provider's answers as the
 	// requested base's and, when it answered in full, say nothing at all —
-	// while every ref in the same response honestly reads "moviebox".
+	// while every ref in the same response honestly reads "vaplayer".
 	if !baseNamedThePrimary(configured, primaryBase) {
 		return []map[string]any{{
 			"code":              "base_unknown",
@@ -239,27 +239,29 @@ func baseBroadeningWarnings(configured, primaryBase string, results []media.Sear
 //
 // The one refinement over row.Provider is spelling. A base is matched by
 // substring (newProvider, cmd/provider.go), so a user who configured a
-// specific mirror — "flixhq.xx" — gets a primary built from that domain, and
-// collapsing their row to the generic "flixhq" would send a later play to the
-// default domain instead. When the row came from the primary *and* the
+// specific mirror — an alternate flixhq.ws domain — gets a primary built from
+// that domain, and collapsing their row to the generic "flixhq.ws" would send
+// a later play to the default domain instead. When the row came from the primary *and* the
 // configured value still names that provider, the caller's own spelling is
 // both honest and more precise, so it is preserved.
 //
 // Both halves of that condition are load-bearing:
 //
-//   - "came from the primary" — "flixhq.ws" contains "flixhq", so without it a
-//     row that FlixHQ supplied as a fallback under a FlixHQWS primary would be
-//     restamped as FlixHQWS's.
+//   - "came from the primary" — the configured spelling describes the primary
+//     only. Without this half a fallback's row whose token the configured
+//     value happens to contain (FlixHQ's "flixhq" sat inside a "flixhq.ws"
+//     primary until FlixHQ was retired) would be restamped with the primary's
+//     spelling and replay against the wrong source.
 //   - "still names that provider" — newProvider has no unknown-base arm and
-//     falls through to MovieBox, so `--base nonesuch` yields MovieBox rows.
+//     falls through to VaPlayer, so `--base nonesuch` yields VaPlayer rows.
 //     Echoing "nonesuch" back would name a source that does not exist;
-//     "moviebox" is what actually answered. config.BaseAuto is excluded by the
+//     "vaplayer" is what actually answered. config.BaseAuto is excluded by the
 //     same test, which is what it deserves: "auto" names no provider, it
 //     licenses routing movies to YTS and opening a magnet (cmd/typeroute.go,
 //     cmd/root.go).
 //
 // Containment alone does not settle the second half, which is why
-// baseNamedThePrimary is asked as well: "notmoviebox" contains the
+// baseNamedThePrimary is asked as well: "notvaplayer" contains the
 // fall-through's token while selecting nothing, and the two tests disagree
 // only there. Keeping both is deliberate — containment is what says the
 // caller's spelling is a more precise form of the same token and so worth

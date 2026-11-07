@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"lobster/internal/media"
@@ -18,6 +19,11 @@ const validateTimeout = 4 * time.Second
 func validateStream(client *http.Client, s *media.Stream) error {
 	if s == nil || s.URL == "" {
 		return fmt.Errorf("empty stream")
+	}
+	// A magnet cannot be fetched: its reachability is only known once the
+	// swarm answers, which the torrent server bounds with its own timeout.
+	if isMagnet(s.URL) {
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), validateTimeout)
 	defer cancel()
@@ -39,4 +45,10 @@ func validateStream(client *http.Client, s *media.Stream) error {
 		return fmt.Errorf("validation status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// isMagnet mirrors torrentstream.IsMagnet without pulling the torrent library
+// into the resolver.
+func isMagnet(u string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(u)), "magnet:")
 }

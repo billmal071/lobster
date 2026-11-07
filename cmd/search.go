@@ -717,7 +717,8 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		stopWatch := ui.StartSpinner(fmt.Sprintf("Fetching %s media stream...", title))
 		defer stopWatch()
 
-		ordered := orderServers(servers, cfg.Provider)
+		// YTS: an explicit server name beats --quality in pickTorrent.
+		ordered := orderServers(preferQualityServers(servers, cfg.Quality), cfg.Provider)
 		var stream *media.Stream
 		for _, srv := range ordered {
 			debugf("trying server (watch): %s (ID: %s)", srv.Name, srv.ID)
@@ -754,10 +755,8 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	if err != nil {
 		debugf("fallback failed: %v", err)
 		hint := ""
-		if _, isFlixHQ := p.(*provider.FlixHQ); isFlixHQ {
-			hint = "\nTip: try --base moviebox or --base vaplayer for better stream availability"
-		} else if _, isFlixHQWS := p.(*provider.FlixHQWS); isFlixHQWS {
-			hint = "\nTip: try --base moviebox or --base vaplayer for better stream availability"
+		if _, isFlixHQWS := p.(*provider.FlixHQWS); isFlixHQWS {
+			hint = "\nTip: try --base vaplayer or --base yts for better stream availability"
 		}
 		return fmt.Errorf("all providers failed for %s: %w%s", title, err, hint)
 	}
@@ -765,14 +764,76 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 }
 
 // newTorrentServer stands up the loopback torrent server. A package var so a
-// test can assert which data directory playStream hands it without starting a
-// torrent client or joining a swarm.
-var newTorrentServer = torrentstream.New
+// test can stand in a server without starting a torrent client or joining a
+// swarm.
+var newTorrentServer = func(opts torrentstream.Options) (torrentServer, error) {
+	s, err := torrentstream.New(opts)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// torrentServer is what serveTorrent needs from torrentstream.Server.
+type torrentServer interface {
+	Serve(magnet string) (string, error)
+	Close() error
+	DataDir() string
+}
 
 // newPlayer constructs the player playStream launches. A package var, seamed
 // like agentProvider and agentResolveAndPlay (cmd/play.go), so tests can
 // exercise playStream's post-playback handling without a real media player.
 var newPlayer = player.New
+
+// serveTorrent stands up the local torrent server for a magnet and returns a
+// copy of stream pointing at its loopback URL (a non-magnet is returned as
+// is). The cleanup is never nil. Shared by playStream and the session loop.
+func serveTorrent(stream *media.Stream) (*media.Stream, func(), error) {
+	noop := func() {}
+	if !torrentstream.IsMagnet(stream.URL) {
+		return stream, noop, nil
+	}
+	fmt.Fprintln(os.Stderr, "Torrent source: joining swarm — your IP is visible to its peers.")
+	// The data directory is where tens of gigabytes may land, so it is
+	// not lobster's to pick silently: torrent_dir names it, and an empty
+	// value lets torrentstream choose a place on the user's home volume.
+	torrentDir, err := cfg.ExpandTorrentDir()
+	if err != nil {
+		return nil, noop, fmt.Errorf("resolving torrent_dir: %w", err)
+	}
+	// WholeFile is what separates the two callers for the free-space check:
+	// the server is stood up before the --download branch, so a magnet does
+	// reach the download path, and a download that cannot fit should be
+	// refused rather than warned about — it has no useful partial outcome.
+	// Plain playback writes only what is watched, so it is warned and
+	// allowed to start.
+	ts, err := newTorrentServer(torrentstream.Options{
+		DataDir:   torrentDir,
+		Warnf:     warnf,
+		WholeFile: flagDownload != "",
+	})
+	if err != nil {
+		return nil, noop, fmt.Errorf("starting torrent stream: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Torrent data: %s (removed when playback ends)\n", ts.DataDir())
+
+	stopT := ui.StartSpinner("Fetching torrent metadata...")
+	localURL, err := ts.Serve(stream.URL)
+	stopT()
+	if err != nil {
+		_ = ts.Close()
+		return nil, noop, fmt.Errorf("torrent stream: %w", err)
+	}
+	debugf("torrent serving at %s", localURL)
+	// Copy rather than mutate: the caller's stream is reused for history.
+	local := *stream
+	local.URL = localURL
+	local.Referer = ""
+	local.LocalTorrent = true
+	fmt.Fprintln(os.Stderr, "Buffering — playback starts once the first pieces arrive.")
+	return &local, func() { _ = ts.Close() }, nil
+}
 
 // playStream handles all post-stream-resolution logic: JSON output, subtitle
 // download, download mode, playback, and history saving.
@@ -841,46 +902,13 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	// A magnet is not something a player or ffmpeg can open. Stand up the local
 	// torrent server, which downloads pieces in reading order and serves the
 	// film over loopback, then carry on with an ordinary HTTP URL.
-	if torrentstream.IsMagnet(stream.URL) {
-		fmt.Fprintln(os.Stderr, "Torrent source: joining swarm — your IP is visible to its peers.")
-		// The data directory is where tens of gigabytes may land, so it is
-		// not lobster's to pick silently: torrent_dir names it, and an empty
-		// value lets torrentstream choose a place on the user's home volume.
-		torrentDir, err := cfg.ExpandTorrentDir()
-		if err != nil {
-			return fmt.Errorf("resolving torrent_dir: %w", err)
-		}
-		// WholeFile is what separates the two callers for the free-space check:
-		// this function stands the server up before its --download branch
-		// below, so a magnet does reach the download path, and a download that
-		// cannot fit should be refused rather than warned about — it has no
-		// useful partial outcome. Plain playback writes only what is watched,
-		// so it is warned and allowed to start.
-		ts, err := newTorrentServer(torrentstream.Options{
-			DataDir:   torrentDir,
-			Warnf:     warnf,
-			WholeFile: flagDownload != "",
-		})
-		if err != nil {
-			return fmt.Errorf("starting torrent stream: %w", err)
-		}
-		defer func() { _ = ts.Close() }()
-		fmt.Fprintf(os.Stderr, "Torrent data: %s (removed when playback ends)\n", ts.DataDir())
-
-		stopT := ui.StartSpinner("Fetching torrent metadata...")
-		localURL, err := ts.Serve(stream.URL)
-		stopT()
-		if err != nil {
-			return fmt.Errorf("torrent stream: %w", err)
-		}
-		debugf("torrent serving at %s", localURL)
-		// Copy rather than mutate: the caller's stream is reused for history.
-		local := *stream
-		local.URL = localURL
-		local.Referer = ""
-		stream = &local
-		fmt.Fprintln(os.Stderr, "Buffering — playback starts once the first pieces arrive.")
+	stream, closeTorrent, err := serveTorrent(stream)
+	if err != nil {
+		// No other source is reachable from here — the selection is already
+		// made — so name the work and point at what the user can change.
+		return fmt.Errorf("%s: %w; try another --quality or a different --base", title, err)
 	}
+	defer closeTorrent()
 
 	// Download mode
 	if flagDownload != "" {
@@ -907,8 +935,12 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		entries, _ := history.Load()
 		for _, e := range entries {
 			if e.ID == selected.ID && e.Season == season && e.Episode == episode {
-				startPos = e.Position
-				debugf("resuming from position: %.0fs", startPos)
+				startPos = resumePosition(e)
+				if startPos == 0 && e.Position > 0 {
+					debugf("stored position %.0fs is at the end of a %.0fs file; starting over", e.Position, e.Duration)
+				} else {
+					debugf("resuming from position: %.0fs", startPos)
+				}
 				break
 			}
 		}

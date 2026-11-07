@@ -1,5 +1,10 @@
 # MovieBox Provider Implementation
 
+> **Retired 2026-11-07.** MovieBox's API now requires app attestation, which
+> lobster cannot supply, so the provider is no longer wired into `--base`, the
+> fallback chain, `lobster doctor` or the TUI. The code stays under
+> `internal/provider/moviebox.go` and this document describes it as built.
+
 ## Overview
 
 MovieBox (`h5.aoneroom.com` / `moviebox.ph`) is a self-hosted streaming platform backed by Alibaba Cloud infrastructure. It exposes a clean JSON REST API with no Cloudflare or bot protection. Streams are delivered as direct m3u8/MP4 from the `macdn.aoneroom.com` CDN — no third-party embed hosts are involved, so no embed extraction layer is needed.

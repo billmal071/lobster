@@ -162,7 +162,7 @@ func routeByType(p provider.Provider, sel media.SearchResult) (provider.Provider
 	if sel.Type == media.TV {
 		// Defensive rather than live: nothing reaches here with a YTS primary
 		// today. This route only runs under config.BaseAuto, newProvider maps
-		// BaseAuto to autoBase ("soap2day", cmd/provider.go), and an explicit
+		// BaseAuto to autoBase ("vaplayer", cmd/provider.go), and an explicit
 		// --base yts returns above — YTS is otherwise only a fallback *search*
 		// source (fallbackProviders, cmd/fallback.go), never the provider a
 		// selection is played through. It stays as insurance against autoBase

@@ -2,32 +2,39 @@ package doctor
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"lobster/internal/media"
+	"lobster/internal/provider"
 )
 
 // fakeProvider stands in for a real one. Each stage can be made to fail so the
 // diagnosis can be checked against a known cause.
 type fakeProvider struct {
-	name      string
-	results   []media.SearchResult
-	searchErr error
-	servers   []media.Server
-	serverErr error
-	embed     string
-	embedErr  error
-	stream    *media.Stream
-	watchErr  error
-	isStream  bool
+	name       string
+	results    []media.SearchResult
+	searchErr  error
+	servers    []media.Server
+	serverErr  error
+	embed      string
+	embedErr   error
+	stream     *media.Stream
+	watchErr   error
+	isStream   bool
+	seasons    []media.Season
+	seasonErr  error
+	episodes   []media.Episode
+	episodeErr error
+	watchedEp  string
 }
 
-func (f *fakeProvider) Search(string) ([]media.SearchResult, error) { return f.results, f.searchErr }
+func (f *fakeProvider) Search(string) ([]media.SearchResult, error)     { return f.results, f.searchErr }
 func (f *fakeProvider) GetDetails(string) (*media.ContentDetail, error) { return nil, nil }
-func (f *fakeProvider) GetSeasons(string) ([]media.Season, error)       { return nil, nil }
+func (f *fakeProvider) GetSeasons(string) ([]media.Season, error)       { return f.seasons, f.seasonErr }
 func (f *fakeProvider) GetEpisodes(string, string) ([]media.Episode, error) {
-	return nil, nil
+	return f.episodes, f.episodeErr
 }
 func (f *fakeProvider) GetServers(string, string) ([]media.Server, error) {
 	return f.servers, f.serverErr
@@ -40,7 +47,8 @@ func (f *fakeProvider) Recent(media.MediaType) ([]media.SearchResult, error) { r
 
 type fakeStreamProvider struct{ fakeProvider }
 
-func (f *fakeStreamProvider) Watch(string, string, string, string) (*media.Stream, error) {
+func (f *fakeStreamProvider) Watch(_, episodeID, _, _ string) (*media.Stream, error) {
+	f.watchedEp = episodeID
 	return f.stream, f.watchErr
 }
 
@@ -181,4 +189,52 @@ type recordingProvider struct {
 func (r *recordingProvider) Search(q string) ([]media.SearchResult, error) {
 	*r.seen = q
 	return oneResult(), nil
+}
+
+// A series is probed through its episode path: Nyaa and EZTV carry TV only
+// and have nothing to Watch without an episode ID, so a movie-shaped probe
+// would report a working provider broken at watch.
+func TestCheckProbesASeriesThroughItsFirstEpisode(t *testing.T) {
+	p := &fakeStreamProvider{fakeProvider{
+		results:  []media.SearchResult{{ID: "eztv/1", Title: "Foo", Type: media.TV}},
+		seasons:  []media.Season{{Number: 1, ID: "1"}},
+		episodes: []media.Episode{{Number: 1, ID: "1x1"}},
+		stream:   &media.Stream{URL: "magnet:?xt=urn:btih:abc"},
+	}}
+	got := Check("Fake", p, "foo")
+	if !got.OK {
+		t.Fatalf("want OK, got stage=%q detail=%q", got.Stage, got.Detail)
+	}
+	if p.watchedEp != "1x1" {
+		t.Errorf("Watch got episode %q, want the first episode 1x1", p.watchedEp)
+	}
+	if !strings.Contains(got.Detail, "magnet resolved") {
+		t.Errorf("detail = %q, want it to say the magnet resolved", got.Detail)
+	}
+}
+
+func TestCheckReportsSeasonsStageFailureForASeries(t *testing.T) {
+	p := &fakeStreamProvider{fakeProvider{
+		results:   []media.SearchResult{{ID: "tv/1", Title: "Foo", Type: media.TV}},
+		seasonErr: errors.New("404"),
+	}}
+	if got := Check("Fake", p, "foo"); got.Stage != StageSeasons {
+		t.Errorf("stage = %q, want %q", got.Stage, StageSeasons)
+	}
+}
+
+// A partial episode list (provider.ErrIncompleteEpisodeList alongside a
+// non-nil list) is the documented steady state of a probing enumerator, and
+// its first episode is all the probe needs.
+func TestCheckToleratesAnIncompleteEpisodeList(t *testing.T) {
+	p := &fakeStreamProvider{fakeProvider{
+		results:    []media.SearchResult{{ID: "ao/1", Title: "Foo", Type: media.TV}},
+		seasons:    []media.Season{{Number: 1, ID: "1"}},
+		episodes:   []media.Episode{{Number: 1, ID: "1"}},
+		episodeErr: fmt.Errorf("probe budget: %w", provider.ErrIncompleteEpisodeList),
+		stream:     &media.Stream{URL: "https://cdn/x.m3u8"},
+	}}
+	if got := Check("Fake", p, "foo"); !got.OK {
+		t.Fatalf("want OK, got stage=%q detail=%q", got.Stage, got.Detail)
+	}
 }

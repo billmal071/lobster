@@ -555,11 +555,7 @@ func tryEmbedProviderFallback(fb provider.Provider, match *media.SearchResult, m
 // This ensures extractors send the correct origin domain instead of a hardcoded one.
 func providerReferer(p provider.Provider) string {
 	switch v := p.(type) {
-	case *provider.FlixHQ:
-		return v.BaseURL() + "/"
 	case *provider.FlixHQWS:
-		return v.BaseURL() + "/"
-	case *provider.KimCartoon:
 		return v.BaseURL() + "/"
 	default:
 		return ""

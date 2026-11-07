@@ -86,6 +86,9 @@ type Stream struct {
 	// header (megaplay/ibyteimg) and must be served through the local
 	// de-obfuscating proxy; a plain player cannot demux them directly.
 	Deobfuscate bool
+	// LocalTorrent marks a stream served by the local torrent server, which
+	// blocks while the swarm catches up rather than failing.
+	LocalTorrent bool
 }
 
 // Subtitle represents a subtitle track.

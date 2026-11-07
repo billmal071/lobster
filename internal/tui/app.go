@@ -35,7 +35,6 @@ type tab int
 const (
 	tabMovies tab = iota
 	tabSeries
-	tabCartoons
 	tabAnime
 	tabLiveTV
 	tabDownloads
@@ -45,7 +44,6 @@ const (
 type AppModel struct {
 	state             state
 	provider          provider.Provider
-	cartoonProvider   provider.Provider
 	animeProvider     provider.Provider
 	fallbackProviders []provider.Provider
 	config            *config.Config
@@ -138,10 +136,10 @@ func StartApp(p provider.Provider, cfg *config.Config, liveSources []string, mgr
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4C4C"))
 
 	m := AppModel{
-		state:             stateTrending,
-		provider:          p,
-		cartoonProvider:   provider.NewKimCartoon(provider.ResolveDomain("kimcartoon.com.co", "kimcartoon", cfg.DomainOverrides)),
-		animeProvider:     newTUIAllAnime(cfg),
+		state:    stateTrending,
+		provider: p,
+		// AnimeOnsen is the one anime source still standing (config.retiredBases).
+		animeProvider:     provider.NewAnimeOnsen(),
 		liveTVProvider:    provider.NewLiveTV(liveSources),
 		fallbackProviders: fallbacks,
 		config:            cfg,
@@ -237,12 +235,12 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.currentItem = nil
 				cmds = append(cmds, m.list.StartSpinner())
 				// Only the Movies/Series tabs fan out to the movies fallback
-				// providers. Anime/Cartoons have their own dedicated provider, so
-				// searching them must NOT wait on the (often slow/dead) movies
-				// fallbacks — that was adding the multi-search timeout to every
-				// anime search.
+				// providers. Anime has its own dedicated provider, so searching
+				// it must NOT wait on the (often slow/dead) movies fallbacks —
+				// that was adding the multi-search timeout to every anime
+				// search.
 				fallbacks := m.fallbackProviders
-				if m.activeTab == tabAnime || m.activeTab == tabCartoons {
+				if m.activeTab == tabAnime {
 					fallbacks = nil
 				}
 				return m, tea.Batch(searchCmd(m.providerForActiveTab(), m.searchInput.Value(), fallbacks...), m.list.StartSpinner())
@@ -267,12 +265,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "2":
 			return m, m.switchTab(tabSeries)
 		case "3":
-			return m, m.switchTab(tabCartoons)
-		case "4":
 			return m, m.switchTab(tabAnime)
-		case "5":
+		case "4":
 			return m, m.switchTab(tabLiveTV)
-		case "6":
+		case "5":
 			if m.dlManager != nil {
 				return m, m.switchTab(tabDownloads)
 			}
@@ -337,19 +333,6 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "d":
-			if m.activeTab == tabAnime {
-				if aa, ok := m.animeProvider.(*provider.AllAnime); ok {
-					if aa.Translation() == "dub" {
-						aa.SetTranslation("sub")
-					} else {
-						aa.SetTranslation("dub")
-					}
-					m.toast = "Anime audio: " + aa.Translation()
-					m.results = nil
-					m.currentItem = nil
-					return m, tea.Batch(fetchTabCmd(m.providerForActiveTab(), m.activeTab), m.list.StartSpinner())
-				}
-			}
 			if m.activeTab == tabLiveTV {
 				m.toast = "Live channels can't be downloaded"
 				return m, nil
@@ -619,12 +602,9 @@ func (m AppModel) View() string {
 		footer = footerStyle.Render("[P] Pause/Resume  [X] Cancel  [R] Retry  [BS] Remove  [C] Clear  [Shift+R] Refresh  [TAB] Browse")
 	} else {
 		dlHint := ""
-		tabRange := "[1-5]"
-		if m.dlManager != nil {
-			tabRange = "[1-6]"
-			if m.activeTab != tabLiveTV {
-				dlHint = "  [D] Download  "
-			}
+		tabRange := tabRangeHint(m.dlManager != nil)
+		if m.dlManager != nil && m.activeTab != tabLiveTV {
+			dlHint = "  [D] Download  "
 		}
 		footer = footerStyle.Render("[ENTER] Play" + dlHint + "[S] Search  " + tabRange + " Categories  [TAB] Next Tab  [Q] Quit")
 	}
@@ -661,16 +641,15 @@ func (m AppModel) renderTabBar() string {
 	}{
 		{tabMovies, "1 Movies"},
 		{tabSeries, "2 Series"},
-		{tabCartoons, "3 Cartoons"},
-		{tabAnime, "4 Anime"},
-		{tabLiveTV, "5 Live TV"},
+		{tabAnime, "3 Anime"},
+		{tabLiveTV, "4 Live TV"},
 	}
 
 	if m.dlManager != nil {
 		labels = append(labels, struct {
 			tab   tab
 			label string
-		}{tabDownloads, "6 Downloads"})
+		}{tabDownloads, "5 Downloads"})
 	}
 
 	rendered := make([]string, 0, len(labels)*2)
@@ -687,8 +666,6 @@ func (m AppModel) renderTabBar() string {
 
 func (m AppModel) providerForActiveTab() provider.Provider {
 	switch m.activeTab {
-	case tabCartoons:
-		return m.cartoonProvider
 	case tabAnime:
 		return m.animeProvider
 	case tabLiveTV:
@@ -699,8 +676,8 @@ func (m AppModel) providerForActiveTab() provider.Provider {
 }
 
 // posterLookup returns the poster-enrichment policy for the active tab: a TMDB
-// high-res upgrade on the Movies/Series (FlixHQ) tabs, and none elsewhere so
-// Cartoons/Anime keep their own posters and skip needless TMDB lookups.
+// high-res upgrade on the Movies/Series tabs, and none elsewhere so Anime
+// keeps its own posters and skips needless TMDB lookups.
 func (m AppModel) posterLookup() func(title, year string, isTV bool) string {
 	if m.activeTab == tabMovies || m.activeTab == tabSeries {
 		return provider.TMDBPoster
@@ -713,8 +690,6 @@ func (m AppModel) nextTab() tab {
 	case tabMovies:
 		return tabSeries
 	case tabSeries:
-		return tabCartoons
-	case tabCartoons:
 		return tabAnime
 	case tabAnime:
 		return tabLiveTV
@@ -767,8 +742,6 @@ func (m AppModel) tabTitle(t tab) string {
 	switch t {
 	case tabSeries:
 		return "Series"
-	case tabCartoons:
-		return "Cartoons"
 	case tabAnime:
 		return "Anime"
 	case tabLiveTV:
@@ -914,12 +887,13 @@ func (m AppModel) renderDetailText(textWidth int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, titleStr, typeStr, "", extDetails)
 }
 
-// newTUIAllAnime builds the anime provider the TUI uses, with the adult-filter
-// setting applied. The CLI does the same in cmd.newProvider; both have to,
-// because the flag is a setter rather than a constructor argument, and a
-// forgotten call here would be a setting the TUI silently ignores.
-func newTUIAllAnime(cfg *config.Config) *provider.AllAnime {
-	aa := provider.NewAllAnime(cfg.AnimeDub)
-	aa.SetAllowAdult(cfg.AllowAdultAnime)
-	return aa
+// tabRangeHint is the footer's "[1-N]" for the number keys that switch tabs:
+// derived from the tab constants so it cannot drift when a tab is added or
+// retired (the footer read [1-5] for four tabs after AllAnime's tab went).
+func tabRangeHint(hasDownloads bool) string {
+	last := tabLiveTV
+	if hasDownloads {
+		last = tabDownloads
+	}
+	return fmt.Sprintf("[1-%d]", int(last)+1)
 }

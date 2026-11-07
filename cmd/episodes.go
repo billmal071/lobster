@@ -47,7 +47,9 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		return emitErr("not_a_series", 1, "%q is a %s, which has no episodes", r.Title, r.Type)
 	}
 
-	applyRefBase(cmd, r)
+	if err := applyRefBase(cmd, r); err != nil {
+		return err
+	}
 
 	primary := agentProvider()
 	src := seasonSource(primary, r)

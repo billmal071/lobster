@@ -13,6 +13,7 @@ import (
 	"lobster/internal/playlist"
 	"lobster/internal/provider"
 	"lobster/internal/subtitle"
+	"lobster/internal/torrentstream"
 	"lobster/internal/ui"
 )
 
@@ -167,30 +168,19 @@ func episodeListMenu(sess *playlist.Session) error {
 }
 
 // resolveStream resolves a stream for the current episode. A primary provider
-// that implements StreamProvider (e.g. AllAnime) is tried first with the
-// session's native episode ID; otherwise (e.g. FlixHQ, used for metadata only)
-// resolution goes through the resilient fallback path.
+// that implements StreamProvider (e.g. VaPlayer, TBCPL) is tried first with
+// the session's native episode ID; otherwise (e.g. FlixHQWS, used for metadata
+// only) resolution goes through the resilient fallback path.
 func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media.Stream, string, error) {
 	// Primary StreamProvider gets first crack with the native episode ID from the
-	// session — lets providers like AllAnime (opaque IDs "showId|1.5|sub") reach
-	// their own Watch verbatim, bypassing tmdbID:season:episode reconstruction.
+	// session — lets a provider with its own ID scheme (TBCPL, VaPlayer) reach
+	// its own Watch verbatim, bypassing tmdbID:season:episode reconstruction.
 	// Skip it once it's been excluded (its last stream failed playback), so a
 	// dead Primary stream can't trap playCurrentEpisode in an infinite retry.
 	if sp, ok := sess.Provider.(provider.StreamProvider); ok && !excludeNames["Primary"] {
 		ep := sess.Current()
 		if stream, err := sp.Watch(sess.ProviderKey(), ep.ID, "Default", cfg.Quality); err == nil && stream != nil {
 			return stream, "Primary", nil
-		}
-		// AllAnime can't reliably stream FINISHED series (its CDN goes 500/404),
-		// so fall back to AniPub by title + episode number (AniPub has its own
-		// IDs; match by title). Airing shows resolve above and never reach here.
-		if aa, isAnime := sess.Provider.(*provider.AllAnime); isAnime && !excludeNames["AniPub"] {
-			if stream, err := provider.NewAniPub().ResolveByTitle(
-				sess.Content.Title, sess.Current().Number, aa.Translation() == "dub",
-			); err == nil && stream != nil {
-				debugf("AniPub fallback resolved %s ep %d", sess.Content.Title, sess.Current().Number)
-				return stream, "AniPub", nil
-			}
 		}
 	}
 
@@ -224,6 +214,13 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		if err != nil {
 			return err
 		}
+		// Same refusal as playStream's JSON branch (cmd/search.go): a magnet
+		// is not a URL a JSON consumer can open, and a loopback URL would die
+		// with this process.
+		if torrentstream.IsMagnet(stream.URL) {
+			return fmt.Errorf("%s resolved to a torrent, which --json cannot express as a playable URL; "+
+				"play it without --json, or use --download to fetch it first", title)
+		}
 		return outputJSON(stream, title)
 	}
 
@@ -233,6 +230,11 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		if err != nil {
 			return err
 		}
+		stream, closeTorrent, err := serveTorrent(stream)
+		if err != nil {
+			return err
+		}
+		defer closeTorrent()
 		return downloadEpisode(stream, sess, title)
 	}
 
@@ -264,8 +266,12 @@ func playCurrentEpisode(sess *playlist.Session) error {
 			if e.ID == sess.Content.ID &&
 				e.Season == sess.CurrentSeason().Number &&
 				e.Episode == sess.Current().Number {
-				startPos = e.Position
-				debugf("resuming from position: %.0fs", startPos)
+				startPos = resumePosition(e)
+				if startPos == 0 && e.Position > 0 {
+					debugf("stored position %.0fs is at the end of a %.0fs file; starting over", e.Position, e.Duration)
+				} else {
+					debugf("resuming from position: %.0fs", startPos)
+				}
 				break
 			}
 		}
@@ -279,7 +285,24 @@ func playCurrentEpisode(sess *playlist.Session) error {
 
 		subFiles, cleanupSubs := resolveSubtitles(stream, sess.Content.Title, sess.CurrentSeason().Number, sess.Current().Number)
 
+		// A magnet (Nyaa, EZTV, or YTS via torrent_fallback) has to go
+		// through the local torrent server before a player can open it.
+		stream, closeTorrent, err := serveTorrent(stream)
+		if err != nil {
+			cleanupSubs()
+			// A dead swarm is a failed source like any other: exclude it and
+			// try the next one, exactly as a Play failure below does.
+			if serverName == "Fallback" {
+				return err
+			}
+			excludeNames[serverName] = true
+			cachedServerName = ""
+			fmt.Fprintf(os.Stderr, "Torrent source failed, trying another source...\n")
+			debugf("torrent error: %v (server %s excluded)", err, serverName)
+			continue
+		}
 		result, playErr := p.Play(stream, title, startPos, subFiles)
+		closeTorrent()
 		cleanupSubs()
 		if playErr == nil {
 			sess.LastPosition = result.Position
@@ -291,8 +314,8 @@ func playCurrentEpisode(sess *playlist.Session) error {
 
 		// Playback failed — if user watched some of it, resume from there
 		if result.Position > 0 {
-			startPos = result.Position
-			debugf("playback stopped at %.0fs, will resume from there", result.Position)
+			startPos = resumePosition(media.HistoryEntry{Position: result.Position, Duration: result.Duration})
+			debugf("playback stopped at %.0fs, will resume from %.0fs", result.Position, startPos)
 		}
 
 		// If the fallback stream also failed, don't retry endlessly

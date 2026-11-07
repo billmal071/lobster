@@ -16,6 +16,16 @@ import (
 	"lobster/internal/media"
 )
 
+// mpvNetworkTimeoutArg bounds how long mpv waits on a silent stream; a torrent
+// stream stalls whenever the swarm does, so it gets 0 (FFmpeg's default: no
+// read timeout for http) rather than a cutoff that would end the film mid-way.
+func mpvNetworkTimeoutArg(stream *media.Stream) string {
+	if stream.LocalTorrent {
+		return "--network-timeout=0"
+	}
+	return "--network-timeout=15"
+}
+
 // MPV implements the Player interface for mpv.
 // Uses exec.Command with explicit args (no shell interpretation)
 // and IPC via Unix socket at a randomized temp path.
@@ -63,7 +73,7 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 		stream.URL,
 		"--force-media-title=" + title,
 		"--input-ipc-server=" + ipc.path,
-		"--network-timeout=15",
+		mpvNetworkTimeoutArg(stream),
 	}
 	if m.debug {
 		args = append(args, "--msg-level=all=info")

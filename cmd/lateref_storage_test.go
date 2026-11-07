@@ -304,3 +304,34 @@ func TestRefCmdRestoresTheFlagGlobalsItRegistrationClobbers(t *testing.T) {
 		}
 	}
 }
+
+// A ref stamped with a retired source still names the work: play re-searches
+// by title (cmd/ref.go), and older soap2day refs carry TMDB IDs VaPlayer
+// reads. The stamp is ignored, the configured base stays, and one warning
+// says so — on stderr even under --json, since play's envelope carries no
+// warnings field.
+func TestApplyRefBaseIgnoresARetiredRefBaseWithAWarning(t *testing.T) {
+	unsetStorageEnv(t)
+	withOutputFlags(t, true, "")
+	prev := cfg
+	cfg = &config.Config{Base: "vaplayer", Quality: "1080", Player: "mpv"}
+	t.Cleanup(func() { cfg = prev })
+	out := captureAgentOut(t)
+	warnings := captureWarnings(t)
+
+	if err := applyRefBase(refCmd(t), playRef{Base: "soap2day"}); err != nil {
+		t.Fatalf("applyRefBase(ref base soap2day) = %v, want nil: the run continues on the configured source", err)
+	}
+	if cfg.Base != "vaplayer" {
+		t.Errorf("base = %q after a retired ref base, want the configured vaplayer", cfg.Base)
+	}
+	if out.Len() != 0 {
+		t.Errorf("stdout = %q, want nothing: no envelope is emitted for a warning", out.String())
+	}
+	if len(*warnings) != 1 {
+		t.Fatalf("got %d warnings %q, want exactly one", len(*warnings), *warnings)
+	}
+	if !strings.Contains((*warnings)[0], "Soap2Day") {
+		t.Errorf("warning = %q, want it to name the retired source", (*warnings)[0])
+	}
+}

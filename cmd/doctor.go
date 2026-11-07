@@ -12,9 +12,10 @@ import (
 
 const (
 	doctorDefaultQuery = "The Matrix"
-	// Probed against the anime providers, whose catalogues do not carry the
-	// default title at all.
-	doctorAnimeQuery = "Naruto"
+	// Probed against AnimeOnsen, whose catalogue carries neither The Matrix nor Naruto.
+	doctorAnimeOnsenQuery = "One Punch Man"
+	// Probed against EZTV, which carries TV series only.
+	doctorEZTVQuery = "Severance"
 )
 
 var doctorCmd = &cobra.Command{
@@ -39,23 +40,22 @@ func doctorRun(cmd *cobra.Command, args []string) error {
 		query = args[0]
 	}
 
+	// Only sources newProvider or fallbackProviders can still reach; the
+	// retired ones (config.retiredBases) would only ever read FAIL.
 	providers := []doctor.Named{
-		{Name: "MovieBox", Provider: provider.NewMovieBox()},
 		{Name: "VaPlayer", Provider: provider.NewVaPlayer()},
-		{Name: "VidNest", Provider: provider.NewVidNest()},
-		{Name: "Soap2Day", Provider: provider.NewSoap2Day()},
 		{Name: "TBCPL", Provider: provider.NewTBCPL("tbcpl")},
-		{Name: "FlixHQ", Provider: provider.NewFlixHQ("flixhq.to")},
 		{Name: "FlixHQWS", Provider: provider.NewFlixHQWS("flixhq.ws")},
-		{Name: "KimCartoon", Provider: provider.NewKimCartoon("kimcartoon.com.co")},
 		// 1shows.org is the same TBCPL provider on a different base, and the two
 		// domains fail independently — worth probing as its own entry.
 		{Name: "TBCPL(1shows)", Provider: provider.NewTBCPL("1shows.org")},
+		{Name: "YTS", Provider: provider.NewYTS()},
 		// Anime catalogues need an anime title, or they report broken for being
 		// asked about the wrong film.
-		{Name: "AllAnime", Provider: provider.NewAllAnime(false), Query: doctorAnimeQuery},
-		{Name: "AnimeOnsen", Provider: provider.NewAnimeOnsen(), Query: doctorAnimeQuery},
-		{Name: "AniPub", Provider: provider.NewAniPub(), Query: doctorAnimeQuery},
+		{Name: "AnimeOnsen", Provider: provider.NewAnimeOnsen(), Query: doctorAnimeOnsenQuery},
+		{Name: "Nyaa", Provider: provider.NewNyaa(), Query: doctorAnimeOnsenQuery},
+		// A TV-only catalogue needs a series title, for the same reason.
+		{Name: "EZTV", Provider: provider.NewEZTV(), Query: doctorEZTVQuery},
 	}
 
 	stop := ui.StartSpinner(fmt.Sprintf("Probing %d providers with %q...", len(providers), query))

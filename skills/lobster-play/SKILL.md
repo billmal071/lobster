@@ -59,7 +59,7 @@ can mix sources, and three entries say how that went:
   source, and do not present the whole list as that source's.
 - `{"code": "base_unknown", "base": "sopa2day", "results_from_base": 0,
   "results_total": 20}` — what they asked for names no source; an unrecognised
-  base is not rejected, it quietly falls through to MovieBox. Tell them the
+  base is not rejected, it quietly falls through to VaPlayer. Tell them the
   name was not recognised and ask which source they meant, rather than
   presenting the results as theirs.
 
@@ -80,8 +80,8 @@ whose base matches when they asked for one.
   tell the user an episode past it definitely does not exist, and offer to try
   playing it if they ask for one. This is the normal outcome for sources that
   enumerate by probing, so do not present it to the user as a problem.
-- `{"code": "episode_list_from_fallback", "base": "animeonsen",
-  "provider": "anipub", "episodes_listed": 10}` — the base the user asked for
+- `{"code": "episode_list_from_fallback", "base": "flixhq.ws",
+  "provider": "tbcpl", "episodes_listed": 10}` — the base the user asked for
   could not list this season and a fallback answered instead. Say which source
   the list came from, and do not promise the episodes will play: a fallback can
   list episodes it cannot stream. Try the base again before treating its count

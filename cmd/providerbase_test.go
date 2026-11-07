@@ -34,27 +34,22 @@ func hermeticProviderSelection(t *testing.T, base string) {
 // If the token does not round-trip, the ref names a source that did not
 // produce the row — the exact dishonesty providerBase exists to end — and it
 // does so silently, because newProvider has no "unknown base" arm and falls
-// through to MovieBox.
+// through to VaPlayer.
 //
 // Substring matching is why this cannot be checked by reading: newProvider
-// tests "flixhq.ws" before "flixhq", so the tokens of those two providers are
-// order-dependent, and the type name resolver.ProviderName would give
-// ("FlixHQWS" -> lowercased "flixhqws") does *not* contain "flixhq.ws" and
-// would select FlixHQ instead. That is why this table exists rather than a
-// reuse of ProviderName.
+// selects FlixHQWS on "flixhq.ws", and the type name resolver.ProviderName
+// would give ("FlixHQWS" -> lowercased "flixhqws") does *not* contain
+// "flixhq.ws" — it would fall through instead. That is why this table exists
+// rather than a reuse of ProviderName.
 func TestProviderBaseRoundTripsThroughNewProvider(t *testing.T) {
 	for _, p := range []provider.Provider{
-		provider.NewSoap2Day(),
-		provider.NewKimCartoon("kimcartoon.com.co"),
 		provider.NewFlixHQWS("flixhq.ws"),
-		provider.NewFlixHQ("flixhq.to"),
 		provider.NewTBCPL("tbcpl"),
-		provider.NewVidNest(),
 		provider.NewVaPlayer(),
 		provider.NewYTS(),
-		provider.NewAllAnime(false),
 		provider.NewAnimeOnsen(),
-		provider.NewMovieBox(),
+		provider.NewNyaa(),
+		provider.NewEZTV(),
 	} {
 		want := fmt.Sprintf("%T", p)
 		t.Run(want, func(t *testing.T) {
@@ -79,24 +74,20 @@ func TestProviderBaseRoundTripsThroughNewProvider(t *testing.T) {
 // someone decides which of the two it is. Silent fall-through would stamp ""
 // on its rows, which is safe but loses the attribution for good.
 func TestProviderBaseCoversEveryProviderInTheSearchChain(t *testing.T) {
-	// Deliberately unnamed: no base value reaches these. AniPub and
-	// TBCPLEmbed are not in newProvider's chain at all, and Consumet is
-	// selected by api_url rather than by base, so any token would name a
-	// different provider than the one that answered.
+	// Deliberately unnamed: no base value reaches these. TBCPLEmbed is not
+	// in newProvider's chain at all, and Consumet is selected by api_url
+	// rather than by base, so any token would name a different provider than
+	// the one that answered.
 	unnamed := map[string]bool{
-		"*provider.AniPub":     true,
 		"*provider.TBCPLEmbed": true,
 		"*provider.Consumet":   true,
 	}
 
 	hermeticProviderSelection(t, config.BaseAuto)
-	prevFlix := flixhqDomain
-	flixhqDomain = func(string, map[string][]string) string { return "flixhq.to" }
-	t.Cleanup(func() { flixhqDomain = prevFlix })
 
 	primary := newProvider()
 	chain := append([]provider.Provider{primary}, fallbackSearchProviders(primary)...)
-	if len(chain) < 5 {
+	if len(chain) < 4 {
 		t.Fatalf("search chain has only %d providers (%v); the fixture is not exercising the real chain", len(chain), providerNames(chain))
 	}
 

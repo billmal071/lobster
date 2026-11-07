@@ -178,6 +178,34 @@ func orderServers(servers []media.Server, preferred string) []media.Server {
 	return append(ordered, rest...)
 }
 
+// preferQualityServers moves servers whose name starts with the requested
+// quality token ("1080p ...") ahead of the rest, keeping relative order.
+// "best", an empty quality, or an unstocked quality leaves the list untouched.
+func preferQualityServers(servers []media.Server, quality string) []media.Server {
+	want := strings.ToLower(strings.TrimSpace(quality))
+	if want == "" || want == "best" {
+		return servers
+	}
+	height, err := strconv.Atoi(strings.TrimSuffix(want, "p"))
+	if err != nil {
+		return servers
+	}
+	token := strconv.Itoa(height) + "p"
+	var matched, rest []media.Server
+	for _, s := range servers {
+		name := strings.ToLower(s.Name)
+		if name == token || strings.HasPrefix(name, token+" ") {
+			matched = append(matched, s)
+		} else {
+			rest = append(rest, s)
+		}
+	}
+	if len(matched) == 0 {
+		return servers
+	}
+	return append(matched, rest...)
+}
+
 // orderServersWithCache orders servers: cached name first, then preferred, then rest.
 func orderServersWithCache(servers []media.Server, preferred, cached string) []media.Server {
 	if cached == "" {
