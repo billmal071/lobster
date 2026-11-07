@@ -122,3 +122,14 @@ func TestMagnetHasInfoHashToleratesUnencodedDisplayName(t *testing.T) {
 		t.Fatal("a magnet with a valid btih was rejected because dn did not parse")
 	}
 }
+
+func TestMagnetHasInfoHashRejectsSeveralDistinctHashes(t *testing.T) {
+	const a = "0123456789abcdef0123456789abcdef01234567"
+	const b = "89abcdef0123456789abcdef0123456789abcdef"
+	if magnetHasInfoHash("magnet:?xt=urn:btih:" + a + "&xt=urn:btih:" + b + "&dn=Show") {
+		t.Fatal("a magnet naming two different info hashes was accepted")
+	}
+	if !magnetHasInfoHash("magnet:?xt=urn:btih:" + a + "&xt=urn:btih:" + a + "&dn=Show") {
+		t.Fatal("a magnet repeating one info hash was rejected")
+	}
+}

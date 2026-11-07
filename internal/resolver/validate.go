@@ -65,7 +65,8 @@ func isMagnet(u string) bool {
 
 // magnetHasInfoHash reports whether a magnet URI names a BitTorrent info hash
 // (an xt=urn:btih: of 40 hex or 32 base32 characters) the torrent server can
-// act on.
+// act on. A magnet naming several different hashes is refused: the torrent
+// client rejects it.
 func magnetHasInfoHash(u string) bool {
 	_, query, found := strings.Cut(strings.TrimSpace(u), "?")
 	if !found {
@@ -74,6 +75,7 @@ func magnetHasInfoHash(u string) bool {
 	// ParseQuery still returns what it could parse; a stray ';' or '%' in
 	// dn must not discard a magnet whose xt is fine.
 	values, _ := url.ParseQuery(query)
+	valid := map[string]bool{}
 	for _, xt := range values["xt"] {
 		hash, ok := strings.CutPrefix(strings.ToLower(xt), "urn:btih:")
 		if !ok {
@@ -82,13 +84,13 @@ func magnetHasInfoHash(u string) bool {
 		switch len(hash) {
 		case 40:
 			if strings.Trim(hash, "0123456789abcdef") == "" {
-				return true
+				valid[hash] = true
 			}
 		case 32:
 			if strings.Trim(hash, "abcdefghijklmnopqrstuvwxyz234567") == "" {
-				return true
+				valid[hash] = true
 			}
 		}
 	}
-	return false
+	return len(valid) == 1
 }

@@ -11,6 +11,7 @@ import (
 	"lobster/internal/dlmanager"
 	"lobster/internal/media"
 	"lobster/internal/provider"
+	"lobster/internal/torrentstream"
 )
 
 // magnetProvider stands in for a torrent fallback (EZTV, Nyaa, YTS): it
@@ -142,5 +143,38 @@ func TestFallbackProvidersIncludesEZTVWhenOptedIn(t *testing.T) {
 	t.Cleanup(func() { cfg = prev })
 	if !hasProvider[*provider.EZTV](fallbackProviders(nil)) {
 		t.Fatalf("EZTV missing after opt-in: %v", providerNames(fallbackProviders(nil)))
+	}
+}
+
+func TestOpenBatchStreamFallsBackWhenTorrentSetupFails(t *testing.T) {
+	prev := cfg
+	cfg = &config.Config{Base: "nyaa", Quality: "1080"}
+	t.Cleanup(func() { cfg = prev })
+
+	prevSrv := newTorrentServer
+	newTorrentServer = func(torrentstream.Options) (torrentServer, error) {
+		return nil, errors.New("stubbed: no peers answered")
+	}
+	t.Cleanup(func() { newTorrentServer = prevSrv })
+
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPartialContent)
+	}))
+	t.Cleanup(cdn.Close)
+	scraper := &magnetProvider{
+		stubStreamProvider: stubStreamProvider{stream: &media.Stream{URL: cdn.URL + "/ep.m3u8"}},
+		results:            []media.SearchResult{{ID: "tv/1", Title: "Show", Type: media.TV}},
+	}
+	withRecordingFallbackChain(t, scraper)
+
+	primary := &stubStreamProvider{stream: &media.Stream{URL: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Show"}}
+	sel := media.SearchResult{ID: "nyaa/Show", Title: "Show", Type: media.TV}
+	stream, closeFn, err := openBatchStream(primary, sel, media.Episode{Number: 2, ID: "2"}, 1)
+	if err != nil {
+		t.Fatalf("openBatchStream: %v", err)
+	}
+	defer closeFn()
+	if stream.URL != cdn.URL+"/ep.m3u8" {
+		t.Fatalf("stream = %+v, want the fallback scraper's stream", stream)
 	}
 }

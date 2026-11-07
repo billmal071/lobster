@@ -261,6 +261,8 @@ func TestNyaaParseTitle(t *testing.T) {
 		// A trailing year is a film's release date, not episode 2016.
 		{"[Group] Some Film 2016 [1080p][AAC]", "Group", "", 0, 0, 1080, "", false},
 		{"Beyblade X 2024 - The Kingdom's Way", "", "Beyblade X", 0, 2024, 0, "", false},
+		{"[Group] Show 01 - Happy New Year 2026 [1080p]", "Group", "Show", 0, 1, 1080, "", false},
+		{"[Group] Show - 05 (2019) [1080p]", "Group", "Show", 0, 5, 1080, "", false},
 		{"Sayonara.Lara.2026.S01E11.MULTI.Audio.Sub.1080p.BDRip.CUSTOM.x264.PCM-KuroNeko VOSTFR Goodbye Lara", "", "Sayonara Lara", 1, 11, 1080, "2026", false},
 		{"[AnoZu] One Piece S23E03 1080p CR WEB-DL Dual-Audio DDP 2.0 H.264", "AnoZu", "One Piece", 23, 3, 1080, "", false},
 		// "EP<n>" with no separator.
@@ -788,3 +790,29 @@ func TestNyaaRejectsBadIDsAndUpstreamErrors(t *testing.T) {
 }
 
 var _ StreamProvider = (*Nyaa)(nil)
+
+func nyaaFeedItem(title, hash string) string {
+	return "<item><title>" + title + "</title><link>https://nyaa.si/download/1.torrent</link>" +
+		"<nyaa:seeders>5</nyaa:seeders><nyaa:leechers>0</nyaa:leechers><nyaa:infoHash>" + hash +
+		"</nyaa:infoHash><nyaa:category>Anime - English-translated</nyaa:category><nyaa:size>1 GiB</nyaa:size></item>"
+}
+
+func TestNyaaUndatedIDWithSeveralDatedAdaptationsIsAmbiguous(t *testing.T) {
+	feed := func(items ...string) string {
+		return `<rss xmlns:nyaa="https://nyaa.si/xmlns/nyaa" version="2.0"><channel>` + strings.Join(items, "") + `</channel></rss>`
+	}
+	both := feed(
+		nyaaFeedItem("[A] Ranma (1989) - 01 [1080p]", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		nyaaFeedItem("[B] Ranma (2024) - 01 [1080p]", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+	)
+	nyaaStubWith(t, both)
+	_, err := NewNyaa().GetEpisodes("nyaa/Ranma", "1")
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("err = %v, want an ambiguity error", err)
+	}
+
+	nyaaStubWith(t, feed(nyaaFeedItem("[A] Ranma (2024) - 01 [1080p]", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")))
+	if _, err := NewNyaa().GetEpisodes("nyaa/Ranma", "1"); err != nil {
+		t.Fatalf("a single dated adaptation must still resolve: %v", err)
+	}
+}

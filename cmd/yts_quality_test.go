@@ -117,3 +117,33 @@ func TestResolveAndPlayBestKeepsHighestQualityFirst(t *testing.T) {
 		t.Fatalf("first Watch server = %q, want the 2160p entry for -q best", got)
 	}
 }
+
+func TestPreferQualityServersNeverPromotesAboveTheCeiling(t *testing.T) {
+	srv := func(names ...string) []media.Server {
+		out := make([]media.Server, len(names))
+		for i, n := range names {
+			out[i] = media.Server{Name: n}
+		}
+		return out
+	}
+	cases := []struct {
+		name    string
+		servers []media.Server
+		quality string
+		want    []string
+	}{
+		{"only above the ceiling keeps order", srv("2160p x", "1080p y", "720p z"), "480", []string{"2160p x", "1080p y", "720p z"}},
+		{"closest lower beats a higher one listed first", srv("2160p x", "1080p y", "360p z", "240p w"), "480", []string{"360p z", "2160p x", "1080p y", "240p w"}},
+		{"exact match beats higher and lower", srv("2160p x", "720p y", "1080p z"), "1080", []string{"1080p z", "2160p x", "720p y"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := preferQualityServers(tc.servers, tc.quality)
+			for i, w := range tc.want {
+				if got[i].Name != w {
+					t.Fatalf("order[%d] = %q, want %q", i, got[i].Name, w)
+				}
+			}
+		})
+	}
+}

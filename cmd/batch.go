@@ -155,17 +155,34 @@ func batchDownload(chainPrimary provider.Provider, selected media.SearchResult, 
 // batchDownload. A magnet is served through the local torrent server first,
 // as the single-episode path does (playStream).
 func downloadSingleEpisode(chainPrimary provider.Provider, selected media.SearchResult, ep media.Episode, seasonNum int, outputDir, title string) error {
-	stream, err := resolveBatchStream(chainPrimary, selected, ep, seasonNum)
-	if err != nil {
-		return err
-	}
-	stream, closeTorrent, err := serveTorrent(stream)
+	stream, closeTorrent, err := openBatchStream(chainPrimary, selected, ep, seasonNum)
 	if err != nil {
 		return err
 	}
 	defer closeTorrent()
 	_, dlErr := download.Download(stream, title, outputDir, "")
 	return dlErr
+}
+
+// openBatchStream resolves an episode and serves it if it is a magnet. A
+// torrent that cannot be set up (no peers, metadata timeout) falls through to
+// the streaming providers; torrent sources are left out of that chain so it
+// cannot pick the same swarm again.
+func openBatchStream(chainPrimary provider.Provider, selected media.SearchResult, ep media.Episode, seasonNum int) (*media.Stream, func(), error) {
+	stream, err := resolveBatchStream(chainPrimary, selected, ep, seasonNum)
+	if err != nil {
+		return nil, nil, err
+	}
+	served, closeTorrent, err := serveTorrent(stream)
+	if err == nil {
+		return served, closeTorrent, nil
+	}
+	debugf("torrent setup failed for %s S%dE%d, trying streaming providers: %v", selected.Title, seasonNum, ep.Number, err)
+	fb, fbErr := tryFallbackStreamFrom(withoutMagnetSources(agentFallbackProviders(chainPrimary)), selected, seasonNum, ep.Number)
+	if fbErr != nil {
+		return nil, nil, fmt.Errorf("%w; streaming fallback: %v", err, fbErr)
+	}
+	return serveTorrent(fb)
 }
 
 // resolveBatchStream asks the fallback chain for an episode's stream. An

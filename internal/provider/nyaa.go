@@ -197,6 +197,11 @@ var (
 	nyaaSpaceRe         = regexp.MustCompile(`\s+`)
 )
 
+func nyaaCapturedTrailingYear(bare, captured string) bool {
+	y := nyaaBareYearRe.FindStringSubmatch(bare)
+	return y != nil && y[1] == captured
+}
+
 // parseNyaaTitle reads a torrent name. Episode is 0 when none was found and
 // Batch is set for packs; both make the grouping skip the item.
 func parseNyaaTitle(raw string) nyaaRelease {
@@ -259,7 +264,7 @@ func parseNyaaTitle(raw string) nyaaRelease {
 		// A trailing year ("Some Film 2016") is a release date, not
 		// episode 2016 of a series.
 		bare := strings.TrimSpace(nyaaParenRe.ReplaceAllString(nyaaBracketRe.ReplaceAllString(s, ""), ""))
-		if m := nyaaBareEpRe.FindStringSubmatch(bare); m != nil && !nyaaBareYearRe.MatchString(bare) {
+		if m := nyaaBareEpRe.FindStringSubmatch(bare); m != nil && !nyaaCapturedTrailingYear(bare, m[2]) {
 			r.Episode, _ = strconv.Atoi(m[2])
 			titlePart = m[1]
 		}
@@ -485,7 +490,7 @@ func (n *Nyaa) Search(query string) ([]media.SearchResult, error) {
 //
 // A dated ID names one adaptation exactly. An undated one (an older ref, or a
 // series whose releases carry no year) takes the undated series when there is
-// one, else the title's first dated series.
+// one, else the title's only dated series; several dated ones are ambiguous.
 func (n *Nyaa) seriesReleases(id string) (*nyaaSeries, error) {
 	base, season, year, err := parseNyaaID(id)
 	if err != nil {
@@ -497,17 +502,21 @@ func (n *Nyaa) seriesReleases(id string) (*nyaaSeries, error) {
 	}
 	series, _ := groupNyaa(items)
 	want := nyaaGroupKey(base, season, year)
-	var anyYear *nyaaSeries
+	var dated []*nyaaSeries
 	for _, s := range series {
 		if s.Key == want {
 			return s, nil
 		}
-		if year == "" && anyYear == nil && nyaaKey(s.Base, s.Season) == want {
-			anyYear = s
+		if year == "" && nyaaKey(s.Base, s.Season) == want {
+			dated = append(dated, s)
 		}
 	}
-	if anyYear != nil {
-		return anyYear, nil
+	switch len(dated) {
+	case 0:
+	case 1:
+		return dated[0], nil
+	default:
+		return nil, fmt.Errorf("nyaa: %s is ambiguous: %d adaptations by year match, pick one from search", id, len(dated))
 	}
 	return nil, fmt.Errorf("nyaa: no episodes found for %s", id)
 }
