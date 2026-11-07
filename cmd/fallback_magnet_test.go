@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"lobster/internal/config"
+	"lobster/internal/dlmanager"
 	"lobster/internal/media"
 	"lobster/internal/provider"
 )
@@ -18,6 +21,12 @@ type magnetProvider struct {
 }
 
 func (p *magnetProvider) Search(string) ([]media.SearchResult, error) { return p.results, nil }
+
+// torrentDouble is a magnetProvider the chain filter recognises as a torrent
+// source, so a test can prove the download queue never races one.
+type torrentDouble struct{ magnetProvider }
+
+func (*torrentDouble) ServesMagnets() {}
 
 // The resolver validates every candidate stream with an HTTP GET, and a
 // magnet is not something an HTTP client can fetch, so every torrent
@@ -52,6 +61,76 @@ func TestTryFallbackStreamYieldsAMagnetWhenScrapersFail(t *testing.T) {
 	}
 	if stream == nil || !strings.HasPrefix(stream.URL, "magnet:") {
 		t.Fatalf("stream = %+v, want the torrent fallback's magnet", stream)
+	}
+}
+
+// The download queue cannot open a magnet (streamToResultChecked), so the
+// torrent sources must not be in its race at all: a magnet winning fails the
+// download while a scraper that could have served it is abandoned.
+func TestWithoutMagnetSourcesDropsTorrentProviders(t *testing.T) {
+	chain := []provider.Provider{provider.NewEZTV(), provider.NewVaPlayer(), provider.NewNyaa(), provider.NewYTS(), provider.NewFlixHQWS("flixhq.ws")}
+	got := withoutMagnetSources(chain)
+	if len(got) != 2 || !hasProvider[*provider.VaPlayer](got) || !hasProvider[*provider.FlixHQWS](got) {
+		t.Fatalf("withoutMagnetSources = %v, want VaPlayer and FlixHQWS only", providerNames(got))
+	}
+}
+
+func TestMakeStreamResolverSkipsTorrentSourcesForTheQueue(t *testing.T) {
+	prev := cfg
+	cfg = &config.Config{Base: "vaplayer", Quality: "1080", TorrentFallback: true}
+	t.Cleanup(func() { cfg = prev })
+
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusPartialContent) }))
+	t.Cleanup(cdn.Close)
+	scraper := &magnetProvider{
+		stubStreamProvider: stubStreamProvider{stream: &media.Stream{URL: cdn.URL + "/ep.m3u8"}},
+		results:            []media.SearchResult{{ID: "tv/1396", Title: "Show", Year: "2008", Type: media.TV}},
+	}
+	// A torrent source ahead of the scraper that answers instantly with a
+	// magnet: left in the race it wins, and the queue rejects the result.
+	torrent := &torrentDouble{magnetProvider{
+		stubStreamProvider: stubStreamProvider{stream: &media.Stream{URL: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Show"}},
+		results:            []media.SearchResult{{ID: "tv/1396", Title: "Show", Year: "2008", Type: media.TV}},
+	}}
+	withRecordingFallbackChain(t, torrent, scraper)
+
+	res, err := makeStreamResolver(&stubProvider{})(dlmanager.ResolveRequest{MediaID: "tv/1396", Title: "Show", Year: "2008", MediaType: "tv", Season: 1, Episode: 2})
+	if err != nil {
+		t.Fatalf("makeStreamResolver: %v", err)
+	}
+	if res.URL != cdn.URL+"/ep.m3u8" || res.StreamType != "hls" {
+		t.Fatalf("result = %+v, want the scraper's HLS stream", res)
+	}
+}
+
+// A batch download under `--base nyaa` or `--base eztv` must ask that
+// provider first: the chain excludes its primary, so without this the one
+// source the user named — and the one that listed the episodes — is skipped.
+func TestResolveBatchStreamAsksTheSelectedTorrentSourceFirst(t *testing.T) {
+	prev := cfg
+	cfg = &config.Config{Base: "nyaa", Quality: "1080"}
+	t.Cleanup(func() { cfg = prev })
+
+	const magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Show"
+	primary := &stubStreamProvider{stream: &media.Stream{URL: magnet}}
+	rec := withRecordingFallbackChain(t, &stubProvider{searchErr: errors.New("scraper down")})
+
+	sel := media.SearchResult{ID: "nyaa/Show", Title: "Show", Type: media.TV}
+	stream, err := resolveBatchStream(primary, sel, media.Episode{Number: 2, ID: "2"}, 1)
+	if err != nil {
+		t.Fatalf("resolveBatchStream: %v", err)
+	}
+	if stream.URL != magnet {
+		t.Fatalf("stream = %+v, want the selected source's magnet", stream)
+	}
+	if len(rec.seen()) != 0 {
+		t.Fatalf("fallback chain consulted %d times before the selected torrent source", len(rec.seen()))
+	}
+
+	// A streaming base keeps the chain-only behaviour.
+	cfg.Base = "vaplayer"
+	if _, err := resolveBatchStream(primary, sel, media.Episode{Number: 2, ID: "2"}, 1); err == nil {
+		t.Fatal("a non-torrent primary was asked directly; want the chain's failure")
 	}
 }
 

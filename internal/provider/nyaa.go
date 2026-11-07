@@ -256,8 +256,10 @@ func parseNyaaTitle(raw string) nyaaRelease {
 		titlePart = s[:loc[0]]
 	default:
 		// "Welsh And Shedar 01", "Beyblade X 138 - The Kingdom's Way".
+		// A trailing year ("Some Film 2016") is a release date, not
+		// episode 2016 of a series.
 		bare := strings.TrimSpace(nyaaParenRe.ReplaceAllString(nyaaBracketRe.ReplaceAllString(s, ""), ""))
-		if m := nyaaBareEpRe.FindStringSubmatch(bare); m != nil {
+		if m := nyaaBareEpRe.FindStringSubmatch(bare); m != nil && !nyaaBareYearRe.MatchString(bare) {
 			r.Episode, _ = strconv.Atoi(m[2])
 			titlePart = m[1]
 		}
@@ -351,8 +353,24 @@ type nyaaSeries struct {
 	Releases []nyaaRelease
 }
 
+// nyaaGroupKey is nyaaKey with the adaptation's year, when a release carries
+// one: same-title adaptations from different years are different series.
+func nyaaGroupKey(series string, season int, year string) string {
+	key := nyaaKey(series, season)
+	if year != "" {
+		key += "|y" + year
+	}
+	return key
+}
+
 // groupNyaa buckets playable releases by series in order of first appearance.
 // Batches and unparsed titles are dropped; their count is returned.
+//
+// Year is part of a series' identity. Releases that carry none join the one
+// year-tagged series of that title when there is exactly one — most groups
+// tag the year, some do not, and it is the same show — but when the feed
+// holds two adaptations they stay a series of their own rather than being
+// dealt to either one.
 func groupNyaa(items []nyaaRelease) (series []*nyaaSeries, skipped int) {
 	byKey := map[string]*nyaaSeries{}
 	for _, r := range items {
@@ -360,48 +378,73 @@ func groupNyaa(items []nyaaRelease) (series []*nyaaSeries, skipped int) {
 			skipped++
 			continue
 		}
-		key := nyaaKey(r.Series, r.Season)
+		key := nyaaGroupKey(r.Series, r.Season, r.Year)
 		s, ok := byKey[key]
 		if !ok {
-			s = &nyaaSeries{Key: key, Base: r.Series, Title: r.Series, Season: r.Season}
+			s = &nyaaSeries{Key: key, Base: r.Series, Title: r.Series, Season: r.Season, Year: r.Year}
 			if r.Season >= 2 {
 				s.Title = fmt.Sprintf("%s Season %d", r.Series, r.Season)
 			}
 			byKey[key] = s
 			series = append(series, s)
 		}
-		if s.Year == "" && r.Year != "" {
-			s.Year = r.Year
-		}
 		s.Releases = append(s.Releases, r)
 	}
-	return series, skipped
+	// Fold each undated series into its title's sole dated one.
+	dated := map[string][]*nyaaSeries{}
+	for _, s := range series {
+		if s.Year != "" {
+			k := nyaaKey(s.Base, s.Season)
+			dated[k] = append(dated[k], s)
+		}
+	}
+	kept := series[:0]
+	for _, s := range series {
+		if s.Year == "" {
+			if ds := dated[nyaaKey(s.Base, s.Season)]; len(ds) == 1 {
+				ds[0].Releases = append(ds[0].Releases, s.Releases...)
+				continue
+			}
+		}
+		kept = append(kept, s)
+	}
+	return kept, skipped
 }
 
-// nyaaID encodes a series as "nyaa/<escaped base title>", plus "?s=N" for a
-// sequel, so the search query stays the bare title.
-func nyaaID(base string, season int) string {
+// nyaaID encodes a series as "nyaa/<escaped base title>", plus "s=N" for a
+// sequel and "y=YYYY" for a dated adaptation, so the search query stays the
+// bare title.
+func nyaaID(base string, season int, year string) string {
 	id := "nyaa/" + url.QueryEscape(base)
+	q := url.Values{}
 	if season >= 2 {
-		id += "?s=" + strconv.Itoa(season)
+		q.Set("s", strconv.Itoa(season))
+	}
+	if year != "" {
+		q.Set("y", year)
+	}
+	if len(q) > 0 {
+		id += "?" + q.Encode()
 	}
 	return id
 }
 
-func parseNyaaID(id string) (base string, season int, err error) {
+func parseNyaaID(id string) (base string, season int, year string, err error) {
 	rest, ok := strings.CutPrefix(id, "nyaa/")
 	if !ok || rest == "" {
-		return "", 0, fmt.Errorf("nyaa: invalid series ID %q", id)
+		return "", 0, "", fmt.Errorf("nyaa: invalid series ID %q", id)
 	}
-	if b, s, found := strings.Cut(rest, "?s="); found {
+	if b, q, found := strings.Cut(rest, "?"); found {
 		rest = b
-		season, _ = strconv.Atoi(s)
+		v, _ := url.ParseQuery(q)
+		season, _ = strconv.Atoi(v.Get("s"))
+		year = v.Get("y")
 	}
 	base, err = url.QueryUnescape(rest)
 	if err != nil || strings.TrimSpace(base) == "" {
-		return "", 0, fmt.Errorf("nyaa: invalid series ID %q", id)
+		return "", 0, "", fmt.Errorf("nyaa: invalid series ID %q", id)
 	}
-	return base, season, nil
+	return base, season, year, nil
 }
 
 func nyaaResults(series []*nyaaSeries) []media.SearchResult {
@@ -412,7 +455,7 @@ func nyaaResults(series []*nyaaSeries) []media.SearchResult {
 			eps[r.Episode] = true
 		}
 		out = append(out, media.SearchResult{
-			ID:       nyaaID(s.Base, s.Season),
+			ID:       nyaaID(s.Base, s.Season, s.Year),
 			Title:    s.Title,
 			Year:     s.Year,
 			Type:     media.TV,
@@ -439,8 +482,12 @@ func (n *Nyaa) Search(query string) ([]media.SearchResult, error) {
 }
 
 // seriesReleases re-runs the search for a series ID and keeps its releases.
+//
+// A dated ID names one adaptation exactly. An undated one (an older ref, or a
+// series whose releases carry no year) takes the undated series when there is
+// one, else the title's first dated series.
 func (n *Nyaa) seriesReleases(id string) (*nyaaSeries, error) {
-	base, season, err := parseNyaaID(id)
+	base, season, year, err := parseNyaaID(id)
 	if err != nil {
 		return nil, err
 	}
@@ -448,12 +495,19 @@ func (n *Nyaa) seriesReleases(id string) (*nyaaSeries, error) {
 	if err != nil {
 		return nil, err
 	}
-	want := nyaaKey(base, season)
 	series, _ := groupNyaa(items)
+	want := nyaaGroupKey(base, season, year)
+	var anyYear *nyaaSeries
 	for _, s := range series {
 		if s.Key == want {
 			return s, nil
 		}
+		if year == "" && anyYear == nil && nyaaKey(s.Base, s.Season) == want {
+			anyYear = s
+		}
+	}
+	if anyYear != nil {
+		return anyYear, nil
 	}
 	return nil, fmt.Errorf("nyaa: no episodes found for %s", id)
 }
@@ -486,12 +540,12 @@ func (n *Nyaa) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
 }
 
 // nyaaEpisodeRef parses an episode ID. Native IDs are "<n>"; the fallback
-// resolver sends "<showID>:<season>:<episode>" (season returned non-zero);
-// "" means episode 1.
+// resolver sends "<showID>:<season>:<episode>" (season returned non-zero).
+// An empty ID is a movie request, which Nyaa's series cannot serve.
 func nyaaEpisodeRef(episodeID string) (season, episode int, err error) {
 	episodeID = strings.TrimSpace(episodeID)
 	if episodeID == "" {
-		return 0, 1, nil
+		return 0, 0, fmt.Errorf("nyaa: TV only, no episode requested")
 	}
 	bad := fmt.Errorf("nyaa: invalid episode ID %q", episodeID)
 	if i := strings.LastIndex(episodeID, ":"); i >= 0 {
@@ -515,18 +569,26 @@ func nyaaEpisodeRef(episodeID string) (season, episode int, err error) {
 // episodeReleases returns the torrents for one episode, highest resolution
 // first and best-seeded within a resolution. Unseeded torrents are dropped
 // when a seeded one exists. A fallback-form episode ID naming season N >= 2
-// against an unmarked series ID is redirected to that series' "?s=N" ID.
+// against an unmarked series ID is redirected to that series' "?s=N" ID; one
+// naming a season other than a marked ID's is refused, so the resolver can
+// try another candidate rather than play the wrong season. Season 1 is the
+// synthetic season every Nyaa series reports (GetSeasons) and always fits.
 func (n *Nyaa) episodeReleases(id, episodeID string) ([]nyaaRelease, error) {
 	season, ep, err := nyaaEpisodeRef(episodeID)
 	if err != nil {
 		return nil, err
 	}
-	if season >= 2 && !strings.Contains(id, "?s=") {
-		base, _, err := parseNyaaID(id)
+	if season >= 2 {
+		base, idSeason, year, err := parseNyaaID(id)
 		if err != nil {
 			return nil, err
 		}
-		id = nyaaID(base, season)
+		switch {
+		case idSeason == 0:
+			id = nyaaID(base, season, year)
+		case idSeason != season:
+			return nil, fmt.Errorf("nyaa: %s is season %d, not season %d", id, idSeason, season)
+		}
 	}
 	s, err := n.seriesReleases(id)
 	if err != nil {
@@ -588,7 +650,8 @@ func (n *Nyaa) GetServers(id string, episodeID string) ([]media.Server, error) {
 }
 
 // nyaaPickTorrent chooses by explicit server name (or index) first, then the
-// requested quality, then the first entry, which is the highest available.
+// requested quality, then the highest known quality below it, then the first
+// entry, which is the highest available.
 func nyaaPickTorrent(rels []nyaaRelease, server, quality string) nyaaRelease {
 	for i, r := range rels {
 		if server != "" && (strings.EqualFold(server, nyaaServerName(r)) || server == strconv.Itoa(i)) {
@@ -597,10 +660,17 @@ func nyaaPickTorrent(rels []nyaaRelease, server, quality string) nyaaRelease {
 	}
 	if want := strings.ToLower(strings.TrimSpace(quality)); want != "" && want != "best" {
 		if h, err := strconv.Atoi(strings.TrimSuffix(want, "p")); err == nil {
-			for _, r := range rels {
+			lower, lowerH := -1, 0
+			for i, r := range rels {
 				if r.Height == h {
 					return r
 				}
+				if r.Height < h && r.Height > lowerH {
+					lower, lowerH = i, r.Height
+				}
+			}
+			if lower >= 0 {
+				return rels[lower]
 			}
 		}
 	}

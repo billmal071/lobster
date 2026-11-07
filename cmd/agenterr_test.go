@@ -51,6 +51,8 @@ func runCLIWithConfig(t *testing.T, configTOML string, args ...string) cliRun {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
+	t.Setenv("APPDATA", filepath.Join(dir, "config"))    // config.configDir, windows
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "data")) // config.dataDir, windows
 	if configTOML != "" {
 		cfgDir := filepath.Join(dir, "config", "lobster")
 		if err := os.MkdirAll(cfgDir, 0o755); err != nil {

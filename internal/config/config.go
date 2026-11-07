@@ -24,6 +24,11 @@ import (
 // ever second-guessing a base the user did pick.
 const BaseAuto = "auto"
 
+// BaseVaPlayer names the streaming source a retired base is downgraded to
+// when torrent_fallback is off (Load). "auto" would route every movie to YTS
+// (cmd/typeroute.go), a swarm the file never opted into.
+const BaseVaPlayer = "vaplayer"
+
 // Config holds all application configuration.
 type Config struct {
 	// Base names the content source. The default is the sentinel "auto",
@@ -290,12 +295,18 @@ func Load() (*Config, error) {
 	// here failed every command, including the `lobster doctor` that says
 	// what to switch to, and `--base` could not override a value Load had
 	// already rejected (the flag is applied after Load, cmd.applyConfig).
-	// The flag keeps the loud error; the file gets one warning and "auto".
+	// The flag keeps the loud error; the file gets one warning and a working
+	// base: "auto" when torrent_fallback is on, otherwise "vaplayer", since
+	// "auto" routes movies to YTS and the file never opted into a swarm.
 	// With api_url set the base is never read, so it is left alone.
 	if cfg.APIURL == "" {
 		if name, reason, ok := RetiredBase(cfg.Base); ok {
-			Warn("config: base %q names %s, which no longer works (%s); using %q instead — `lobster doctor` lists the sources that do", cfg.Base, name, reason, BaseAuto)
-			cfg.Base = BaseAuto
+			to := BaseVaPlayer
+			if cfg.TorrentFallback {
+				to = BaseAuto
+			}
+			Warn("config: base %q names %s, which no longer works (%s); using %q instead — `lobster doctor` lists the sources that do", cfg.Base, name, reason, to)
+			cfg.Base = to
 		}
 	}
 
@@ -380,7 +391,8 @@ func IsTorrentBase(base string) bool {
 // provider code stays under internal/provider; what is gone is every path
 // that could select them (cmd.newProvider, cmd.fallbackProviders, the doctor
 // table, the TUI). A base naming one is not silently routed elsewhere: a
-// config file's value is downgraded to "auto" with a warning (Load), an
+// config file's value is downgraded to "vaplayer" — "auto" under
+// torrent_fallback — with a warning (Load), an
 // explicit --base is an error (cmd.applyConfig), and a ref stamped with one
 // is refused (cmd.applyRefBase).
 //

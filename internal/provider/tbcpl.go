@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"lobster/internal/httputil"
+	"lobster/internal/lang"
 	"lobster/internal/media"
 )
 
@@ -523,7 +524,9 @@ func (t *TBCPL) serverCandidates(ctx context.Context, path string) []tbcplVidzee
 		srcs = append(srcs, tbcplVidzeeSource{Lang: lang, Link: slug, Name: slug})
 	}
 
-	addDub(pref)
+	// Through the alias table, so an ISO preference ("ta") names the dub
+	// server Vidzee has ("v6:Tamil"), not one it does not ("v6:Ta").
+	addDub(lang.Canonical(pref))
 	for _, srv := range tbcplDirectServers {
 		srcs = append(srcs, tbcplVidzeeSource{Lang: "Auto", Link: srv.Slug, Name: srv.Name})
 	}

@@ -52,7 +52,9 @@ func TestPreferQualityServers(t *testing.T) {
 		{"720 moves 720p first", "720", "720p bluray (900.47 MB, 33 seeds)"},
 		{"best keeps highest first", "best", "2160p bluray (5.98 GB, 47 seeds)"},
 		{"empty keeps highest first", "", "2160p bluray (5.98 GB, 47 seeds)"},
-		{"unstocked quality keeps order", "480", "2160p bluray (5.98 GB, 47 seeds)"},
+		{"nothing at or below keeps order", "480", "2160p bluray (5.98 GB, 47 seeds)"},
+		{"unstocked quality moves the closest lower first", "900", "720p bluray (900.47 MB, 33 seeds)"},
+		{"unstocked 1440 moves 1080p first, not 2160p", "1440", "1080p bluray (1.75 GB, 100 seeds)"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

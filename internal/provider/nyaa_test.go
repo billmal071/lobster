@@ -201,7 +201,7 @@ const nyaaFrierenFixture = `<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:
 
 const (
 	nyaaS3ID      = "nyaa/One-Punch+Man?s=3"
-	nyaaEraiID    = "nyaa/One+Punch+Man"
+	nyaaEraiID    = "nyaa/One+Punch+Man?y=2025"
 	nyaaFrierenID = "nyaa/Frieren+Beyond+Journeys+End?s=2"
 )
 
@@ -258,6 +258,9 @@ func TestNyaaParseTitle(t *testing.T) {
 		{"[Feibanyama] Black Clover S02E01 [BILIBILI WebRip 4320p H265 Veryslow AAC Multi-Subs]", "Feibanyama", "Black Clover", 2, 1, 4320, "", false},
 		{"[HnY] Beyblade X 138 - The Kingdom's Way.mkv", "HnY", "Beyblade X", 0, 138, 0, "", false},
 		{"Welsh And Shedar  01", "", "Welsh And Shedar", 0, 1, 0, "", false},
+		// A trailing year is a film's release date, not episode 2016.
+		{"[Group] Some Film 2016 [1080p][AAC]", "Group", "", 0, 0, 1080, "", false},
+		{"Beyblade X 2024 - The Kingdom's Way", "", "Beyblade X", 0, 2024, 0, "", false},
 		{"Sayonara.Lara.2026.S01E11.MULTI.Audio.Sub.1080p.BDRip.CUSTOM.x264.PCM-KuroNeko VOSTFR Goodbye Lara", "", "Sayonara Lara", 1, 11, 1080, "2026", false},
 		{"[AnoZu] One Piece S23E03 1080p CR WEB-DL Dual-Audio DDP 2.0 H.264", "AnoZu", "One Piece", 23, 3, 1080, "", false},
 		// "EP<n>" with no separator.
@@ -342,7 +345,7 @@ func TestNyaaEpisodeRef(t *testing.T) {
 	}{
 		{"12", 0, 12, true},
 		{" 7 ", 0, 7, true},
-		{"", 0, 1, true},
+		{"", 0, 0, false},
 		{"nyaa/Frieren+Beyond+Journeys+End?s=2:1:2", 1, 2, true},
 		{"nyaa/One+Piece:23:3", 23, 3, true},
 		{"nyaa/Frieren%3A+Beyond+Journey%27s+End:2:10", 2, 10, true},
@@ -437,24 +440,96 @@ func TestNyaaIDRoundTrip(t *testing.T) {
 	for _, c := range []struct {
 		base   string
 		season int
+		year   string
 		id     string
 	}{
-		{"One-Punch Man", 3, nyaaS3ID},
-		{"One Punch Man", 0, nyaaEraiID},
-		{"Frieren: Beyond Journey's End", 2, "nyaa/Frieren%3A+Beyond+Journey%27s+End?s=2"},
+		{"One-Punch Man", 3, "", nyaaS3ID},
+		{"One Punch Man", 0, "2025", nyaaEraiID},
+		{"One Punch Man", 0, "", "nyaa/One+Punch+Man"},
+		{"Ranma", 2, "2024", "nyaa/Ranma?s=2&y=2024"},
+		{"Frieren: Beyond Journey's End", 2, "", "nyaa/Frieren%3A+Beyond+Journey%27s+End?s=2"},
 	} {
-		if got := nyaaID(c.base, c.season); got != c.id {
-			t.Errorf("nyaaID(%q, %d) = %q, want %q", c.base, c.season, got, c.id)
+		if got := nyaaID(c.base, c.season, c.year); got != c.id {
+			t.Errorf("nyaaID(%q, %d, %q) = %q, want %q", c.base, c.season, c.year, got, c.id)
 		}
-		base, season, err := parseNyaaID(c.id)
-		if err != nil || base != c.base || season != c.season {
-			t.Errorf("parseNyaaID(%q) = %q, %d, %v", c.id, base, season, err)
+		base, season, year, err := parseNyaaID(c.id)
+		if err != nil || base != c.base || season != c.season || year != c.year {
+			t.Errorf("parseNyaaID(%q) = %q, %d, %q, %v", c.id, base, season, year, err)
 		}
 	}
 	for _, bad := range []string{"", "nyaa/", "yts/123", "One Punch Man"} {
-		if _, _, err := parseNyaaID(bad); err == nil {
+		if _, _, _, err := parseNyaaID(bad); err == nil {
 			t.Errorf("parseNyaaID(%q) accepted", bad)
 		}
+	}
+}
+
+// Same-title adaptations from different years are different series: their
+// episodes must not be merged, or playback can pick the other adaptation's
+// torrent. Undated releases join a title's sole dated series — the common
+// case of one group tagging the year and another not — but are not dealt to
+// either of two.
+func TestNyaaGroupKeepsAdaptationsApartByYear(t *testing.T) {
+	rel := func(series, year string, ep int, hash string) nyaaRelease {
+		return nyaaRelease{Series: series, Year: year, Episode: ep, Hash: hash, Seeders: 1}
+	}
+	series, _ := groupNyaa([]nyaaRelease{
+		rel("Ranma", "1989", 1, "a"),
+		rel("Ranma", "2024", 1, "b"),
+		rel("Ranma", "", 2, "c"),
+		rel("Frieren", "2023", 1, "d"),
+		rel("Frieren", "", 2, "e"),
+	})
+	got := map[string][]string{}
+	for _, s := range series {
+		var hashes []string
+		for _, r := range s.Releases {
+			hashes = append(hashes, r.Hash)
+		}
+		got[nyaaID(s.Base, s.Season, s.Year)] = hashes
+	}
+	want := map[string][]string{
+		"nyaa/Ranma?y=1989":   {"a"},
+		"nyaa/Ranma?y=2024":   {"b"},
+		"nyaa/Ranma":          {"c"},
+		"nyaa/Frieren?y=2023": {"d", "e"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("series = %v, want %v", got, want)
+	}
+	for id, hashes := range want {
+		if strings.Join(got[id], ",") != strings.Join(hashes, ",") {
+			t.Errorf("%s = %v, want %v", id, got[id], hashes)
+		}
+	}
+}
+
+// An ID that names an adaptation by year fetches only that one; an undated
+// ID — an older ref — still resolves to a dated series when it is the only
+// one of its title, and a movie request (no episode) is refused.
+func TestNyaaWatchHonoursYearAndRefusesMovies(t *testing.T) {
+	nyaaStub(t)
+	n := NewNyaa()
+	const erai = "magnet:?xt=urn:btih:703c7535611e706984e640fa1c54d4c2b7727428&"
+	for _, id := range []string{nyaaEraiID, "nyaa/One+Punch+Man"} {
+		st, err := n.Watch(id, "12", "Default", "1080")
+		if err != nil {
+			t.Fatalf("Watch(%q): %v", id, err)
+		}
+		if !strings.HasPrefix(st.URL, erai) {
+			t.Errorf("Watch(%q) picked %s", id, st.URL)
+		}
+	}
+	if _, err := n.Watch("nyaa/One+Punch+Man?y=1999", "12", "Default", "1080"); err == nil {
+		t.Error("an adaptation the feed does not carry was served")
+	}
+	if _, err := n.Watch(nyaaS3ID, "", "", ""); err == nil || !strings.Contains(err.Error(), "TV only") {
+		t.Errorf("movie request err = %v, want a TV-only refusal", err)
+	}
+	// A fallback episode ID naming season 2 against the season-3 series must
+	// not return a season-3 magnet.
+	if _, err := n.Watch(nyaaS3ID, nyaaS3ID+":2:12", "Default", "1080"); err == nil {
+		t.Error("season 2 against a season-3 ID was served")
 	}
 }
 
@@ -569,6 +644,24 @@ func TestNyaaWatchPicksQualityThenFallsBack(t *testing.T) {
 	st, _ := n.Watch(nyaaS3ID, "12", "", "720")
 	if st.Quality != "720p" {
 		t.Errorf("Quality = %q, want 720p", st.Quality)
+	}
+}
+
+// With no release at the requested height, the closest one below it is
+// chosen before anything above it; nothing below falls back to the best.
+func TestNyaaPickTorrentClosestLower(t *testing.T) {
+	rels := []nyaaRelease{{Height: 2160, Hash: "uhd"}, {Height: 720, Hash: "hd"}, {Height: 480, Hash: "sd"}}
+	if got := nyaaPickTorrent(rels, "", "1080"); got.Hash != "hd" {
+		t.Errorf("1080 picked %s, want hd (720p, closest lower)", got.Hash)
+	}
+	if got := nyaaPickTorrent(rels, "", "600p"); got.Hash != "sd" {
+		t.Errorf("600p picked %s, want sd", got.Hash)
+	}
+	if got := nyaaPickTorrent(rels, "", "360"); got.Hash != "uhd" {
+		t.Errorf("360 picked %s, want uhd (nothing below, best)", got.Hash)
+	}
+	if got := nyaaPickTorrent(rels, "1", "2160"); got.Hash != "hd" {
+		t.Errorf("explicit index picked %s, want hd", got.Hash)
 	}
 }
 

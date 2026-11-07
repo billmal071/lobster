@@ -205,9 +205,10 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 	// because a scraper broke is not, which is why this stays off until asked.
 	//
 	// Opting out of swarming altogether is a source, not this flag:
-	// `base = "vaplayer"` — or any explicit non-YTS base, or an api_url,
+	// `base = "vaplayer"` — or any explicit non-torrent base, or an api_url,
 	// which overrides base entirely — with torrent_fallback off never
-	// reaches a magnet.
+	// reaches a magnet. An explicit yts, nyaa or eztv base still does: the
+	// user named the torrent source outright.
 	if _, ok := primary.(*provider.YTS); !ok {
 		if cfg != nil && cfg.TorrentFallback {
 			fallbacks = append(fallbacks, provider.NewYTS())
@@ -222,7 +223,38 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 // content carries the ID and year of the work the user actually selected so the
 // resolver can tell a franchise entry apart from its sequels.
 func tryFallbackStream(primary provider.Provider, content media.SearchResult, season, episode int) (*media.Stream, error) {
-	r := resolver.New(agentFallbackProviders(primary), sharedHealth(), debugf)
+	return tryFallbackStreamFrom(agentFallbackProviders(primary), content, season, episode)
+}
+
+// servesMagnets reports whether p's Watch answers with a magnet URI, which
+// only the local torrent server can open.
+func servesMagnets(p provider.Provider) bool {
+	switch p.(type) {
+	case *provider.YTS, *provider.EZTV, *provider.Nyaa:
+		return true
+	}
+	_, ok := p.(magnetSource)
+	return ok
+}
+
+// magnetSource marks a provider whose streams are magnets (test doubles).
+type magnetSource interface{ ServesMagnets() }
+
+// withoutMagnetSources drops the torrent providers from a chain, for a
+// consumer that cannot open a magnet (the download queue).
+func withoutMagnetSources(ps []provider.Provider) []provider.Provider {
+	out := make([]provider.Provider, 0, len(ps))
+	for _, p := range ps {
+		if !servesMagnets(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// tryFallbackStreamFrom is tryFallbackStream over an explicit chain.
+func tryFallbackStreamFrom(providers []provider.Provider, content media.SearchResult, season, episode int) (*media.Stream, error) {
+	r := resolver.New(providers, sharedHealth(), debugf)
 	req := resolver.Request{
 		ID:        content.ID,
 		Title:     content.Title,
@@ -331,9 +363,12 @@ func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 			mt = media.TV
 		}
 
-		// Use fallback providers to resolve a stream for downloads.
+		// Use fallback providers to resolve a stream for downloads. The
+		// torrent sources are left out of the race: the queue cannot open a
+		// magnet (streamToResultChecked), so one winning would fail the
+		// download while a scraper that could have served it was abandoned.
 		content := media.SearchResult{ID: req.MediaID, Title: req.Title, Year: req.Year, Type: mt}
-		fbStream, err := tryFallbackStream(primary, content, req.Season, req.Episode)
+		fbStream, err := tryFallbackStreamFrom(withoutMagnetSources(agentFallbackProviders(primary)), content, req.Season, req.Episode)
 		if err != nil {
 			return nil, fmt.Errorf("all providers failed: %w", err)
 		}

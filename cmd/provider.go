@@ -30,7 +30,8 @@ var resolveDomain = provider.ResolveDomain
 // back to VaPlayer, the same source autoBase names.
 //
 // A base naming a retired source never reaches here: config.Load downgrades
-// the file's value to auto, applyConfig rejects the flag, and applyRefBase
+// the file's value (to vaplayer, or auto under torrent_fallback), applyConfig
+// rejects the flag, and applyRefBase
 // (cmd/play.go) refuses a ref's stamped base (config.RetiredBase).
 //
 // For providers that use a base domain, the domain is checked for health

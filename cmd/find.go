@@ -277,11 +277,22 @@ func refBaseFor(r media.SearchResult, primaryBase, configured string) string {
 	if r.Provider == "" {
 		return ""
 	}
-	if r.Provider == primaryBase && strings.Contains(configured, r.Provider) &&
+	if r.Provider == primaryBase && baseSpellsToken(configured, r.Provider) &&
 		baseNamedThePrimary(configured, r.Provider) {
 		return configured
 	}
 	return r.Provider
+}
+
+// baseSpellsToken reports whether a configured base is a spelling of the
+// provider token: by containment, or — for FlixHQWS, whose mirrors are
+// accepted as any "flixhq…ws" (config.IsFlixHQWSBase) — by that same test,
+// so "flixhq-ws.example" is kept rather than collapsed to "flixhq.ws".
+func baseSpellsToken(configured, token string) bool {
+	if strings.Contains(configured, token) {
+		return true
+	}
+	return config.IsFlixHQWSBase(token) && config.IsFlixHQWSBase(configured)
 }
 
 func init() {

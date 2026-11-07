@@ -140,18 +140,19 @@ func TestARetiredBaseFlagIsRejectedLoudly(t *testing.T) {
 }
 
 // A config file naming a retired source must not fail every command: the
-// value is downgraded to auto with one warning (config.Load), so `doctor` and
-// `version` still run, and --base can still pick a working source over it.
+// value is downgraded to vaplayer (auto only under torrent_fallback) with one
+// warning (config.Load), so `doctor` and `version` still run, and --base can
+// still pick a working source over it.
 func TestARetiredConfigBaseWarnsAndDoesNotLockTheUserOut(t *testing.T) {
 	warnings := captureConfigWarn(t)
 	r := runCLIWithConfig(t, "base = \"soap2day\"\n", "version")
 	if r.err != nil {
 		t.Fatalf("`version` under base = soap2day failed: %v", r.err)
 	}
-	if cfg.Base != config.BaseAuto {
-		t.Errorf("base = %q after Load, want %q", cfg.Base, config.BaseAuto)
+	if cfg.Base != config.BaseVaPlayer {
+		t.Errorf("base = %q after Load, want %q", cfg.Base, config.BaseVaPlayer)
 	}
-	if len(*warnings) != 1 || !strings.Contains((*warnings)[0], "Soap2Day") || !strings.Contains((*warnings)[0], "lobster doctor") {
+	if len(*warnings) != 1 || !strings.Contains((*warnings)[0], "Soap2Day") || !strings.Contains((*warnings)[0], "lobster doctor") || !strings.Contains((*warnings)[0], `"vaplayer"`) {
 		t.Errorf("warnings = %q, want one line naming Soap2Day and `lobster doctor`", *warnings)
 	}
 

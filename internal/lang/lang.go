@@ -63,6 +63,24 @@ func Aliases(pref string) []string {
 	return []string{pref}
 }
 
+// Canonical returns the language name behind a preference, so "ta", "tam"
+// and "tamil" all read as "tamil". A spelling the table does not know is
+// returned normalized, for the same reason Aliases keeps it.
+func Canonical(pref string) string {
+	pref = normalize(pref)
+	if _, ok := aliases[pref]; ok {
+		return pref
+	}
+	for name, codes := range aliases {
+		for _, c := range codes {
+			if c == pref {
+				return name
+			}
+		}
+	}
+	return pref
+}
+
 // Matches reports whether a source's language tag names pref. The tag is
 // compared on its primary subtag, so "en-US" counts as English.
 func Matches(tag, pref string) bool {

@@ -335,6 +335,19 @@ func TestTBCPLWatchTriesPreferredDubWhenNotAdvertised(t *testing.T) {
 	if strings.Join(links, ",") != want {
 		t.Errorf("candidates = %v, want %s", links, want)
 	}
+
+	// An ISO preference names the same dub server as the language word:
+	// "ta" is v6:Tamil, not v6:Ta, and still goes first, with Hindi — the
+	// one advertised dub — keeping its place after the neutral servers.
+	p.SetAudioLanguage("ta")
+	links = links[:0]
+	for _, s := range p.serverCandidates(context.Background(), "movie/550") {
+		links = append(links, s.Link)
+	}
+	want = "v6:Tamil,dcloud,tik,v6:Hindi,v6:English"
+	if strings.Join(links, ",") != want {
+		t.Errorf("candidates for ta = %v, want %s", links, want)
+	}
 }
 
 // Upstream is case-sensitive after "v6:" ("v6:english" is 400 Unknown

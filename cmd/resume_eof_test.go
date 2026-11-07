@@ -20,6 +20,8 @@ func TestResumePositionTreatsEndOfFileAsFinished(t *testing.T) {
 		{"just before the tail resumes", media.HistoryEntry{Position: 7800, Duration: 8017}, 7800},
 		{"unknown duration resumes", media.HistoryEntry{Position: 3123, Duration: 0}, 3123},
 		{"short clip stopped near end", media.HistoryEntry{Position: 55, Duration: 60}, 0},
+		{"short clip stopped early resumes", media.HistoryEntry{Position: 1, Duration: 60}, 1},
+		{"short clip mid-way resumes", media.HistoryEntry{Position: 30, Duration: 60}, 30},
 		{"nothing stored", media.HistoryEntry{}, 0},
 	}
 	for _, tc := range cases {

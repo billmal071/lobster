@@ -524,7 +524,8 @@ func (e *EZTV) GetServers(id string, episodeID string) ([]media.Server, error) {
 	return servers, nil
 }
 
-// pickEZTVTorrent chooses by server name or index, then requested quality, then the best available.
+// pickEZTVTorrent chooses by server name or index, then the requested quality,
+// then the highest known quality below it, then the best available.
 func pickEZTVTorrent(torrents []eztvTorrent, server, quality string) eztvTorrent {
 	for i, t := range torrents {
 		if server != "" && (strings.EqualFold(server, eztvServerName(t)) || server == strconv.Itoa(i)) {
@@ -533,10 +534,18 @@ func pickEZTVTorrent(torrents []eztvTorrent, server, quality string) eztvTorrent
 	}
 	if want := strings.ToLower(strings.TrimSpace(quality)); want != "" && want != "best" {
 		if h, err := strconv.Atoi(strings.TrimSuffix(want, "p")); err == nil {
-			for _, t := range torrents {
-				if eztvQualityHeight(t.releaseName()) == h {
+			lower, lowerH := -1, 0
+			for i, t := range torrents {
+				th := eztvQualityHeight(t.releaseName())
+				if th == h {
 					return t
 				}
+				if th < h && th > lowerH {
+					lower, lowerH = i, th
+				}
+			}
+			if lower >= 0 {
+				return torrents[lower]
 			}
 		}
 	}

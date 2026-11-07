@@ -230,6 +230,15 @@ func TestEZTVPickTorrent(t *testing.T) {
 	if got := pickEZTVTorrent(torrents, "", "2160p"); got.Hash != "f6" {
 		t.Errorf("unstocked quality should fall back to best, got %s", got.Hash)
 	}
+	// No 900p release: the closest quality below it (720p) beats the 1080p
+	// one above it.
+	if got := pickEZTVTorrent(torrents, "", "900"); got.Hash != "e5" {
+		t.Errorf("900 = %s, want e5 (closest lower, most-seeded 720p)", got.Hash)
+	}
+	// Nothing at or below 300p: fall back to the best.
+	if got := pickEZTVTorrent(torrents, "", "300"); got.Hash != "f6" {
+		t.Errorf("300 = %s, want f6 (nothing below, best)", got.Hash)
+	}
 	// An explicit server name wins over the quality setting, by name or index.
 	if got := pickEZTVTorrent(torrents, "480p x264-mSD (591 MB, 7 seeds)", "1080"); got.Hash != "c3" {
 		t.Errorf("explicit name = %s, want c3", got.Hash)

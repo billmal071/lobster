@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"lobster/internal/config"
 	"lobster/internal/download"
 	"lobster/internal/media"
 	"lobster/internal/provider"
@@ -151,15 +152,40 @@ func batchDownload(chainPrimary provider.Provider, selected media.SearchResult, 
 
 // downloadSingleEpisode resolves and downloads one episode via fallback
 // providers. chainPrimary is the provider to build that chain around — see
-// batchDownload.
+// batchDownload. A magnet is served through the local torrent server first,
+// as the single-episode path does (playStream).
 func downloadSingleEpisode(chainPrimary provider.Provider, selected media.SearchResult, ep media.Episode, seasonNum int, outputDir, title string) error {
-	debugf("resolving stream via fallback providers for %s", title)
-	stream, err := tryFallbackStream(chainPrimary, selected, seasonNum, ep.Number)
+	stream, err := resolveBatchStream(chainPrimary, selected, ep, seasonNum)
 	if err != nil {
-		return fmt.Errorf("all providers failed: %w", err)
+		return err
 	}
+	stream, closeTorrent, err := serveTorrent(stream)
+	if err != nil {
+		return err
+	}
+	defer closeTorrent()
 	_, dlErr := download.Download(stream, title, outputDir, "")
 	return dlErr
+}
+
+// resolveBatchStream asks the fallback chain for an episode's stream. An
+// explicitly chosen torrent base (nyaa, eztv) is asked first: the chain is
+// built by excluding its primary, which would otherwise skip the one source
+// the user named and the one proven to carry the episode list.
+func resolveBatchStream(chainPrimary provider.Provider, selected media.SearchResult, ep media.Episode, seasonNum int) (*media.Stream, error) {
+	if sp, ok := chainPrimary.(provider.StreamProvider); ok && cfg != nil && cfg.APIURL == "" && config.IsTorrentBase(cfg.Base) {
+		stream, err := sp.Watch(selected.ID, ep.ID, "", cfgQuality())
+		if err == nil && stream != nil && stream.URL != "" {
+			return stream, nil
+		}
+		debugf("selected torrent source failed for %s episode %s: %v", selected.ID, ep.ID, err)
+	}
+	debugf("resolving stream via fallback providers for %s S%dE%d", selected.Title, seasonNum, ep.Number)
+	stream, err := tryFallbackStream(chainPrimary, selected, seasonNum, ep.Number)
+	if err != nil {
+		return nil, fmt.Errorf("all providers failed: %w", err)
+	}
+	return stream, nil
 }
 
 // orderServers returns servers with the preferred one first, rest as fallbacks.
@@ -179,8 +205,9 @@ func orderServers(servers []media.Server, preferred string) []media.Server {
 }
 
 // preferQualityServers moves servers whose name starts with the requested
-// quality token ("1080p ...") ahead of the rest, keeping relative order.
-// "best", an empty quality, or an unstocked quality leaves the list untouched.
+// quality token ("1080p ...") ahead of the rest, keeping relative order. An
+// unstocked quality promotes the highest stocked one below it instead;
+// "best", an empty quality, or nothing at or below leaves the list untouched.
 func preferQualityServers(servers []media.Server, quality string) []media.Server {
 	want := strings.ToLower(strings.TrimSpace(quality))
 	if want == "" || want == "best" {
@@ -190,7 +217,21 @@ func preferQualityServers(servers []media.Server, quality string) []media.Server
 	if err != nil {
 		return servers
 	}
-	token := strconv.Itoa(height) + "p"
+	target := 0
+	for _, s := range servers {
+		h := serverQualityHeight(s.Name)
+		if h == height {
+			target = h
+			break
+		}
+		if h < height && h > target {
+			target = h
+		}
+	}
+	if target == 0 {
+		return servers
+	}
+	token := strconv.Itoa(target) + "p"
 	var matched, rest []media.Server
 	for _, s := range servers {
 		name := strings.ToLower(s.Name)
@@ -200,10 +241,21 @@ func preferQualityServers(servers []media.Server, quality string) []media.Server
 			rest = append(rest, s)
 		}
 	}
-	if len(matched) == 0 {
-		return servers
-	}
 	return append(matched, rest...)
+}
+
+// serverQualityHeight reads the "<n>p" token a torrent server name starts
+// with (YTS, EZTV, Nyaa), or 0 for a name that carries none.
+func serverQualityHeight(name string) int {
+	token, _, _ := strings.Cut(strings.ToLower(name), " ")
+	if !strings.HasSuffix(token, "p") {
+		return 0
+	}
+	h, err := strconv.Atoi(strings.TrimSuffix(token, "p"))
+	if err != nil || h <= 0 {
+		return 0
+	}
+	return h
 }
 
 // orderServersWithCache orders servers: cached name first, then preferred, then rest.

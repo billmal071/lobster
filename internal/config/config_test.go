@@ -538,9 +538,11 @@ func captureWarn(t *testing.T) *[]string {
 // A config file naming a retired source must not lock the user out of every
 // command — `lobster doctor` is the one that tells them what to switch to, and
 // `--base` cannot override a value Load already refused. So Load downgrades it
-// to "auto" with a warning that names the source, and only an explicit --base
-// flag (cmd.applyConfig) is still an error.
-func TestLoadDowngradesARetiredBaseToAutoWithAWarning(t *testing.T) {
+// with a warning that names the source, and only an explicit --base flag
+// (cmd.applyConfig) is still an error. The downgrade target is "vaplayer", not
+// "auto": "auto" routes movies to YTS, and a file with torrent_fallback off
+// never opted into a swarm.
+func TestLoadDowngradesARetiredBaseToVaPlayerWithAWarning(t *testing.T) {
 	writeConfig(t, "base = \"soap2day\"\n")
 	warnings := captureWarn(t)
 
@@ -548,16 +550,34 @@ func TestLoadDowngradesARetiredBaseToAutoWithAWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() with base = soap2day = %v, want nil: a retired base in the file must not fail every command", err)
 	}
-	if cfg.Base != BaseAuto {
-		t.Fatalf("Load() left base %q, want %q", cfg.Base, BaseAuto)
+	if cfg.Base != BaseVaPlayer {
+		t.Fatalf("Load() left base %q, want %q", cfg.Base, BaseVaPlayer)
 	}
 	if len(*warnings) != 1 {
 		t.Fatalf("Load() warned %d times, want exactly one line: %q", len(*warnings), *warnings)
 	}
-	for _, want := range []string{"Soap2Day", "lobster doctor", "auto"} {
+	for _, want := range []string{"Soap2Day", "lobster doctor", "vaplayer"} {
 		if !strings.Contains((*warnings)[0], want) {
 			t.Errorf("warning %q does not mention %q", (*warnings)[0], want)
 		}
+	}
+}
+
+// With torrent_fallback on the user has accepted swarms, so "auto" — the
+// documented default, YTS routing included — is the right downgrade.
+func TestLoadDowngradesARetiredBaseToAutoUnderTorrentFallback(t *testing.T) {
+	writeConfig(t, "base = \"soap2day\"\ntorrent_fallback = true\n")
+	warnings := captureWarn(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	if cfg.Base != BaseAuto {
+		t.Fatalf("Load() left base %q, want %q", cfg.Base, BaseAuto)
+	}
+	if len(*warnings) != 1 || !strings.Contains((*warnings)[0], `"auto"`) {
+		t.Fatalf("warnings = %q, want one line naming auto", *warnings)
 	}
 }
 
