@@ -8,7 +8,7 @@ import (
 
 // preferAudioLang returns srcs reordered so sources tagged with the preferred
 // language come first, keeping the provider's own order within each group.
-// Nothing is dropped: a preferred source that fails to decrypt still falls
+// Nothing is dropped: a preferred source that fails upstream still falls
 // through to the others.
 func preferAudioLang(srcs []tbcplVidzeeSource, pref string) []tbcplVidzeeSource {
 	if pref == "" || len(srcs) < 2 {

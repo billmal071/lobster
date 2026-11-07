@@ -30,6 +30,24 @@ func TestLoadFetchesAndCaches(t *testing.T) {
 	}
 }
 
+// The cache lives under the config dir, which a fresh install has not created.
+func TestLoadCreatesTheCacheDirectory(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(sampleJSON))
+	}))
+	defer srv.Close()
+	oldBase := baseURL
+	baseURL = srv.URL + "/links.json"
+	defer func() { baseURL = oldBase }()
+
+	cache := filepath.Join(t.TempDir(), "lobster", "tbcpl-cache.json")
+	cl := NewClient(cache, time.Hour, func(string, ...any) {})
+	cl.Load(context.Background(), "")
+	if _, err := os.Stat(cache); err != nil {
+		t.Fatalf("cache not written when its directory was missing: %v", err)
+	}
+}
+
 func TestLoadFallsBackToSnapshotOffline(t *testing.T) {
 	oldBase := baseURL
 	baseURL = "http://127.0.0.1:0/links.json" // unreachable
