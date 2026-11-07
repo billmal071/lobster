@@ -350,3 +350,64 @@ func TestEZTVEpisodeRef(t *testing.T) {
 		}
 	}
 }
+
+func eztvPagedServer(t *testing.T, hits *int32, countKey bool, failFrom int, fullPages int) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(hits, 1)
+		var page int
+		_, _ = fmt.Sscan(r.URL.Query().Get("page"), &page)
+		if failFrom > 0 && page >= failFrom {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		n := eztvPageSize
+		if page > fullPages {
+			n = 5
+		}
+		var torrents []map[string]any
+		for i := 0; i < n; i++ {
+			torrents = append(torrents, map[string]any{
+				"id": i, "filename": "S.S01E01.720p.mkv", "magnet_url": "magnet:?xt=urn:btih:x",
+				"season": "1", "episode": "1", "seeds": 1, "size_bytes": 1,
+			})
+		}
+		body := map[string]any{"page": page, "torrents": torrents}
+		if countKey {
+			body["torrents_count"] = 999
+		}
+		_ = json.NewEncoder(w).Encode(body)
+	}))
+	t.Cleanup(srv.Close)
+	old := eztvBase
+	eztvBase = srv.URL
+	t.Cleanup(func() { eztvBase = old })
+}
+
+func TestEZTVPaginationContinuesWhenTorrentsCountIsMissing(t *testing.T) {
+	var hits int32
+	eztvPagedServer(t, &hits, false, 0, 2)
+	all, err := NewEZTV().torrents("eztv/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2*eztvPageSize+5 {
+		t.Errorf("got %d torrents, want %d: a full page with no count must lead to the next page", len(all), 2*eztvPageSize+5)
+	}
+}
+
+func TestEZTVDoesNotCacheACataloguePartiallyFetched(t *testing.T) {
+	var hits int32
+	eztvPagedServer(t, &hits, true, 2, 5)
+	e := NewEZTV()
+	if _, err := e.torrents("eztv/1"); err != nil {
+		t.Fatal(err)
+	}
+	before := atomic.LoadInt32(&hits)
+	if _, err := e.torrents("eztv/1"); err != nil {
+		t.Fatal(err)
+	}
+	if atomic.LoadInt32(&hits) == before {
+		t.Error("a catalogue cut short by a failed page was cached and served again")
+	}
+}

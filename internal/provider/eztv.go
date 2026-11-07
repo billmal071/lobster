@@ -149,12 +149,14 @@ func (e *EZTV) torrents(id string) ([]eztvTorrent, error) {
 	}
 
 	var all []eztvTorrent
+	partial := false
 	for page := 1; page <= eztvMaxPages; page++ {
 		resp, err := e.fetchPage(imdb, page)
 		if err != nil {
 			// Keep earlier pages: a partial catalogue beats failing outright
-			// because page 3 timed out.
+			// because page 3 timed out. It is served but not cached.
 			if len(all) > 0 {
+				partial = true
 				break
 			}
 			return nil, err
@@ -162,16 +164,18 @@ func (e *EZTV) torrents(id string) ([]eztvTorrent, error) {
 		all = append(all, resp.Torrents...)
 		// A page past the end carries no torrents key at all, so a short or
 		// empty page ends the walk as surely as reaching the count does.
-		if len(resp.Torrents) < eztvPageSize || len(all) >= resp.TorrentsCount {
+		if len(resp.Torrents) < eztvPageSize || (resp.TorrentsCount > 0 && len(all) >= resp.TorrentsCount) {
 			break
 		}
 	}
 	if len(all) == 0 {
 		return nil, fmt.Errorf("eztv: no torrents for %s", id)
 	}
-	e.mu.Lock()
-	e.shows[imdb] = eztvCachedShow{torrents: all, fetched: time.Now()}
-	e.mu.Unlock()
+	if !partial {
+		e.mu.Lock()
+		e.shows[imdb] = eztvCachedShow{torrents: all, fetched: time.Now()}
+		e.mu.Unlock()
+	}
 	return all, nil
 }
 

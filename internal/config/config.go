@@ -62,9 +62,9 @@ type Config struct {
 	// AllowAdultAnime lifted AllAnime's adult filter on search. Inert since
 	// AllAnime's retirement (retiredBases); kept so existing config files parse.
 	AllowAdultAnime bool `toml:"allow_adult_anime"`
-	// TorrentFallback lets the resolver fall back to YTS when the streaming
-	// providers fail. Off by default and deliberately so: YTS resolves to a
-	// magnet, so falling back to it joins a BitTorrent swarm and exposes the
+	// TorrentFallback lets the resolver fall back to the torrent sources (YTS,
+	// EZTV, Nyaa) when the streaming providers fail. Off by default and
+	// deliberately so: they resolve to a magnet, so falling back to one joins a BitTorrent swarm and exposes the
 	// user's IP to its peers. That is worth doing on request, not silently
 	// because a scraper broke.
 	//
@@ -394,7 +394,7 @@ func IsTorrentBase(base string) bool {
 // config file's value is downgraded to "vaplayer" — "auto" under
 // torrent_fallback — with a warning (Load), an
 // explicit --base is an error (cmd.applyConfig), and a ref stamped with one
-// is refused (cmd.applyRefBase).
+// is ignored with a warning (cmd.applyRefBase).
 //
 // Matching is by substring, the same way cmd.newProvider selects a provider,
 // so `base = "soap2days"` is caught like `base = "soap2day"` was accepted.

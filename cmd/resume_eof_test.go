@@ -16,6 +16,7 @@ func TestResumePositionTreatsEndOfFileAsFinished(t *testing.T) {
 		{"last second of film", media.HistoryEntry{Position: 8016, Duration: 8017}, 0},
 		{"at duration", media.HistoryEntry{Position: 8017, Duration: 8017}, 0},
 		{"inside the closing tail", media.HistoryEntry{Position: 7990, Duration: 8017}, 0},
+		{"past the 98 percent mark but outside the closing seconds", media.HistoryEntry{Position: 7900, Duration: 8017}, 0},
 		{"mid-film resumes", media.HistoryEntry{Position: 3123, Duration: 8000}, 3123},
 		{"just before the tail resumes", media.HistoryEntry{Position: 7800, Duration: 8017}, 7800},
 		{"unknown duration resumes", media.HistoryEntry{Position: 3123, Duration: 0}, 3123},

@@ -92,7 +92,7 @@ func init() {
 // here is not an option (argv would be replayed, and the player check has
 // already run), so the run says what it is doing instead. Only for a command
 // that can actually play: episodes shares this function and never streams.
-func applyRefBase(cmd *cobra.Command, r playRef) error {
+func applyRefBase(cmd *cobra.Command, r playRef) {
 	// A ref is the third input for base, and the only one that never passes
 	// through config.Validate: decodeRef checks Type strictly and Base not at
 	// all, and this assignment happens inside RunE, long after the last
@@ -108,8 +108,8 @@ func applyRefBase(cmd *cobra.Command, r playRef) error {
 	// older soap2day refs carry TMDB IDs VaPlayer reads. Ignore the stamp,
 	// stay on the configured base, and say so once. The play envelope has no
 	// warnings field, so this is stderr in --json mode too.
-	if err := config.RetiredBaseError(base); err != nil {
-		warnf("ref: %v; continuing with the configured source", err)
+	if name, reason, ok := config.RetiredBase(base); ok {
+		warnf("ref: base %q names %s, which no longer works (%s); continuing with the configured source", base, name, reason)
 		base = ""
 	}
 	if base != "" && cfg != nil && !cmd.Flags().Changed("base") {
@@ -119,7 +119,6 @@ func applyRefBase(cmd *cobra.Command, r playRef) error {
 			torrentstream.WarnLateStorageRisk(mayStreamTorrent(cfg), warnf)
 		}
 	}
-	return nil
 }
 
 // validateSeasonEpisode rejects a requested season or episode that the primary
@@ -270,9 +269,7 @@ func playRun(cmd *cobra.Command, args []string) error {
 	// dispatch: the base decides which provider is asked, and a rejection
 	// after the fork would be written into a log the caller has no reason to
 	// read while the parent had already reported success.
-	if err := applyRefBase(cmd, r); err != nil {
-		return err
-	}
+	applyRefBase(cmd, r)
 
 	var p provider.Provider
 	if sel.Type == media.TV {

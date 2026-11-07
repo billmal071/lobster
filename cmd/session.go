@@ -185,12 +185,16 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 	}
 
 	debugf("resolving stream via fallback providers for %s", sess.Title())
-	stream, err := tryFallbackStream(
-		// The chain is built by excluding its argument, and sess.Provider is
-		// not always the configured primary: the episode-list recovery moves
-		// it to whichever chain member could list the season. Excluding that
-		// one would remove the only provider known to have this show.
-		sess.ChainBase(),
+	// The chain is built by excluding its argument, and sess.Provider is
+	// not always the configured primary: the episode-list recovery moves
+	// it to whichever chain member could list the season. Excluding that
+	// one would remove the only provider known to have this show.
+	chain := agentFallbackProviders(sess.ChainBase())
+	if flagJSON {
+		chain = withoutMagnetSources(chain)
+	}
+	stream, err := tryFallbackStreamFrom(
+		chain,
 		sess.Content,
 		sess.CurrentSeason().Number,
 		sess.Current().Number,

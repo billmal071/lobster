@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -252,20 +254,70 @@ func withoutMagnetSources(ps []provider.Provider) []provider.Provider {
 	return out
 }
 
-// tryFallbackStreamFrom is tryFallbackStream over an explicit chain.
+// onlyMagnetSources keeps just the torrent providers of a chain.
+func onlyMagnetSources(ps []provider.Provider) []provider.Provider {
+	out := make([]provider.Provider, 0, len(ps))
+	for _, p := range ps {
+		if servesMagnets(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+var nyaaSeasonSuffix = regexp.MustCompile(`(?i)\s+Season\s+\d{1,2}$`)
+
+// fallbackTitle is the title other providers are searched for. Nyaa titles a
+// sequel "Show Season N", which no TMDB-backed catalogue lists; the season
+// travels separately.
+func fallbackTitle(c media.SearchResult) string {
+	if strings.HasPrefix(c.ID, "nyaa/") {
+		return nyaaSeasonSuffix.ReplaceAllString(c.Title, "")
+	}
+	return c.Title
+}
+
+// fallbackBudget bounds both tiers of tryFallbackStreamFrom together.
+const fallbackBudget = 90 * time.Second
+
+// tryFallbackStreamFrom is tryFallbackStream over an explicit chain. The
+// streaming providers are raced first and the torrent providers only when
+// every one of them fails: a magnet validates instantly, so racing them
+// together lets a torrent beat a working scraper that is still being checked.
 func tryFallbackStreamFrom(providers []provider.Provider, content media.SearchResult, season, episode int) (*media.Stream, error) {
-	r := resolver.New(providers, sharedHealth(), debugf)
 	req := resolver.Request{
 		ID:        content.ID,
-		Title:     content.Title,
+		Title:     fallbackTitle(content),
 		Year:      content.Year,
 		MediaType: content.Type,
 		Season:    season,
 		Episode:   episode,
 		Quality:   cfgQuality(),
 	}
-	stream, report, err := r.Resolve(context.Background(), req)
+	ctx, cancel := context.WithTimeout(context.Background(), fallbackBudget)
+	defer cancel()
+
+	plain, magnets := withoutMagnetSources(providers), onlyMagnetSources(providers)
+	if len(plain) == 0 || len(magnets) == 0 {
+		return resolveTier(ctx, providers, req, nil)
+	}
+	stream, err := resolveTier(ctx, plain, req, nil)
+	if err == nil || ctx.Err() != nil {
+		return stream, err
+	}
+	var first *resolveFailure
+	errors.As(err, &first)
+	return resolveTier(ctx, magnets, req, first)
+}
+
+func resolveTier(ctx context.Context, providers []provider.Provider, req resolver.Request, earlier *resolveFailure) (*media.Stream, error) {
+	r := resolver.New(providers, sharedHealth(), debugf)
+	stream, report, err := r.Resolve(ctx, req)
 	if err != nil {
+		if earlier != nil && earlier.report != nil {
+			report.Attempts = append(earlier.report.Attempts, report.Attempts...)
+			err = fmt.Errorf("all providers failed: %s", report.Summary())
+		}
 		debugf("resolve failed: %s", report.Summary())
 		return nil, &resolveFailure{report: report, err: err}
 	}

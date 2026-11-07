@@ -3,6 +3,7 @@ package provider
 import (
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -129,7 +130,7 @@ func (n *Nyaa) fetch(feedURL string) ([]nyaaRelease, error) {
 		return nil, fmt.Errorf("nyaa: unexpected status %d", resp.StatusCode)
 	}
 	var feed nyaaFeed
-	if err := xml.NewDecoder(resp.Body).Decode(&feed); err != nil {
+	if err := xml.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&feed); err != nil {
 		return nil, fmt.Errorf("parsing nyaa feed: %w", err)
 	}
 	items := make([]nyaaRelease, 0, len(feed.Items))
@@ -521,9 +522,17 @@ func (n *Nyaa) seriesReleases(id string) (*nyaaSeries, error) {
 	return nil, fmt.Errorf("nyaa: no episodes found for %s", id)
 }
 
-// GetSeasons reports a single season; a sequel is its own series in Search.
+// GetSeasons reports the one season the series ID names (1 when unmarked); a
+// sequel is its own series in Search.
 func (n *Nyaa) GetSeasons(id string) ([]media.Season, error) {
-	return []media.Season{{Number: 1, ID: "1"}}, nil
+	_, season, _, err := parseNyaaID(id)
+	if err != nil {
+		return nil, err
+	}
+	if season == 0 {
+		season = 1
+	}
+	return []media.Season{{Number: season, ID: strconv.Itoa(season)}}, nil
 }
 
 // GetEpisodes lists the distinct episode numbers the feed currently carries.

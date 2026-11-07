@@ -319,9 +319,7 @@ func TestApplyRefBaseIgnoresARetiredRefBaseWithAWarning(t *testing.T) {
 	out := captureAgentOut(t)
 	warnings := captureWarnings(t)
 
-	if err := applyRefBase(refCmd(t), playRef{Base: "soap2day"}); err != nil {
-		t.Fatalf("applyRefBase(ref base soap2day) = %v, want nil: the run continues on the configured source", err)
-	}
+	applyRefBase(refCmd(t), playRef{Base: "soap2day"})
 	if cfg.Base != "vaplayer" {
 		t.Errorf("base = %q after a retired ref base, want the configured vaplayer", cfg.Base)
 	}
@@ -333,5 +331,8 @@ func TestApplyRefBaseIgnoresARetiredRefBaseWithAWarning(t *testing.T) {
 	}
 	if !strings.Contains((*warnings)[0], "Soap2Day") {
 		t.Errorf("warning = %q, want it to name the retired source", (*warnings)[0])
+	}
+	if strings.Contains((*warnings)[0], "choose another source") {
+		t.Errorf("warning = %q, tells the user to choose a source while saying the run continues on the configured one", (*warnings)[0])
 	}
 }

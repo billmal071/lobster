@@ -576,10 +576,10 @@ func TestNyaaGetEpisodesDistinctAscending(t *testing.T) {
 	nyaaStub(t)
 	n := NewNyaa()
 	seasons, err := n.GetSeasons(nyaaS3ID)
-	if err != nil || len(seasons) != 1 || seasons[0].Number != 1 || seasons[0].ID != "1" {
+	if err != nil || len(seasons) != 1 || seasons[0].Number != 3 || seasons[0].ID != "3" {
 		t.Fatalf("GetSeasons = %+v, %v", seasons, err)
 	}
-	eps, err := n.GetEpisodes(nyaaS3ID, "1")
+	eps, err := n.GetEpisodes(nyaaS3ID, "3")
 	if err != nil {
 		t.Fatal(err)
 	}

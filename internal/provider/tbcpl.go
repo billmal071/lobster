@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"lobster/internal/httputil"
 	"lobster/internal/lang"
@@ -544,7 +546,8 @@ func tbcplDubLanguage(lang string) string {
 	if lang == "" {
 		return ""
 	}
-	return strings.ToUpper(lang[:1]) + lang[1:]
+	r, size := utf8.DecodeRuneInString(lang)
+	return string(unicode.ToUpper(r)) + lang[size:]
 }
 
 func (t *TBCPL) fetchVidzeeLanguages(ctx context.Context, path string) []string {

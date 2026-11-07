@@ -407,3 +407,11 @@ func newTestTBCPL(t *testing.T, handler http.HandlerFunc) (*TBCPL, *httptest.Ser
 	p.vidzeeAPIURL = ts.URL
 	return p, ts, ts.Close
 }
+
+func TestTBCPLDubLanguageCapitalisesTheFirstRune(t *testing.T) {
+	for in, want := range map[string]string{"english": "English", " ÉSPAÑOL ": "Éspañol", "élan": "Élan", "": ""} {
+		if got := tbcplDubLanguage(in); got != want {
+			t.Errorf("tbcplDubLanguage(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

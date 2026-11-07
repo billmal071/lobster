@@ -2,10 +2,12 @@ package cmd
 
 import (
 	"errors"
+	"lobster/internal/playlist"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"lobster/internal/config"
 	"lobster/internal/dlmanager"
@@ -176,5 +178,137 @@ func TestOpenBatchStreamFallsBackWhenTorrentSetupFails(t *testing.T) {
 	defer closeFn()
 	if stream.URL != cdn.URL+"/ep.m3u8" {
 		t.Fatalf("stream = %+v, want the fallback scraper's stream", stream)
+	}
+}
+
+func TestTryFallbackStreamPrefersASlowScraperOverAFastMagnet(t *testing.T) {
+	prev := cfg
+	cfg = &config.Config{Base: "vaplayer", Quality: "1080", TorrentFallback: true}
+	t.Cleanup(func() { cfg = prev })
+
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		w.WriteHeader(http.StatusPartialContent)
+	}))
+	t.Cleanup(cdn.Close)
+	results := []media.SearchResult{{ID: "tv/1396", Title: "Show", Year: "2008", Type: media.TV}}
+	scraper := &magnetProvider{
+		stubStreamProvider: stubStreamProvider{stream: &media.Stream{URL: cdn.URL + "/ep.m3u8"}},
+		results:            results,
+	}
+	torrent := &torrentDouble{magnetProvider{
+		stubStreamProvider: stubStreamProvider{stream: &media.Stream{URL: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Show"}},
+		results:            results,
+	}}
+	withRecordingFallbackChain(t, torrent, scraper)
+
+	content := media.SearchResult{ID: "tv/1396", Title: "Show", Year: "2008", Type: media.TV}
+	stream, err := tryFallbackStream(&stubProvider{}, content, 1, 2)
+	if err != nil {
+		t.Fatalf("tryFallbackStream: %v", err)
+	}
+	if stream.URL != cdn.URL+"/ep.m3u8" {
+		t.Fatalf("stream = %q, want the scraper's stream: a torrent must only win when every scraper fails", stream.URL)
+	}
+}
+
+func TestTryFallbackStreamFallsBackToMagnetWhenEveryScraperFails(t *testing.T) {
+	prev := cfg
+	cfg = &config.Config{Base: "vaplayer", Quality: "1080", TorrentFallback: true}
+	t.Cleanup(func() { cfg = prev })
+
+	const magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Show"
+	scraper := &stubProvider{searchErr: errors.New("scraper down")}
+	torrent := &torrentDouble{magnetProvider{
+		stubStreamProvider: stubStreamProvider{stream: &media.Stream{URL: magnet}},
+		results:            []media.SearchResult{{ID: "tv/1396", Title: "Show", Year: "2008", Type: media.TV}},
+	}}
+	withRecordingFallbackChain(t, torrent, scraper)
+
+	content := media.SearchResult{ID: "tv/1396", Title: "Show", Year: "2008", Type: media.TV}
+	stream, err := tryFallbackStream(&stubProvider{}, content, 1, 2)
+	if err != nil {
+		t.Fatalf("tryFallbackStream: %v", err)
+	}
+	if stream.URL != magnet {
+		t.Fatalf("stream = %q, want the magnet", stream.URL)
+	}
+}
+
+func TestOnlyMagnetSourcesKeepsTorrentProviders(t *testing.T) {
+	chain := []provider.Provider{provider.NewEZTV(), provider.NewVaPlayer(), provider.NewNyaa(), provider.NewYTS()}
+	got := onlyMagnetSources(chain)
+	if len(got) != 3 || hasProvider[*provider.VaPlayer](got) {
+		t.Fatalf("onlyMagnetSources = %v, want the three torrent providers", providerNames(got))
+	}
+}
+
+func TestResolveStreamSkipsTheTorrentTierUnderJSON(t *testing.T) {
+	prev, prevJSON := cfg, flagJSON
+	cfg = &config.Config{Base: "vaplayer", Quality: "1080", TorrentFallback: true}
+	flagJSON = true
+	t.Cleanup(func() { cfg, flagJSON = prev, prevJSON })
+
+	scraper := &stubProvider{searchErr: errors.New("scraper down")}
+	torrent := &torrentDouble{magnetProvider{
+		stubStreamProvider: stubStreamProvider{stream: &media.Stream{URL: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Show"}},
+		results:            []media.SearchResult{{ID: "tv/1396", Title: "Show", Year: "2008", Type: media.TV}},
+	}}
+	withRecordingFallbackChain(t, scraper, torrent)
+
+	sess := playlist.New(&stubProvider{}, media.SearchResult{ID: "tv/1396", Title: "Show", Year: "2008", Type: media.TV},
+		[]media.Season{{Number: 1, ID: "s1"}}, []media.Episode{{Number: 2, ID: "e2"}}, 0, 0)
+	stream, _, err := resolveStream(sess, map[string]bool{})
+	if err == nil {
+		t.Fatalf("resolveStream = %+v, want a failure: --json cannot express a torrent, so the torrent tier is not tried", stream)
+	}
+	var rf *resolveFailure
+	if errors.As(err, &rf) && rf.report != nil {
+		for _, a := range rf.report.Attempts {
+			if strings.Contains(a.Provider, "torrentDouble") || a.Stage == "resolve" {
+				t.Fatalf("the torrent provider was probed under --json: %+v", a)
+			}
+		}
+	}
+}
+
+type recordingSP struct {
+	magnetProvider
+	searched  string
+	episodeID string
+}
+
+func (p *recordingSP) Search(q string) ([]media.SearchResult, error) {
+	p.searched = q
+	return p.results, nil
+}
+
+func (p *recordingSP) Watch(_, episodeID, _, _ string) (*media.Stream, error) {
+	p.episodeID = episodeID
+	return p.stream, nil
+}
+
+func TestFallbackForANyaaSeasonResultAsksForThatSeasonByBaseTitle(t *testing.T) {
+	prev := cfg
+	cfg = &config.Config{Base: "nyaa", Quality: "1080"}
+	t.Cleanup(func() { cfg = prev })
+
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusPartialContent) }))
+	t.Cleanup(cdn.Close)
+	rec := &recordingSP{magnetProvider: magnetProvider{
+		stubStreamProvider: stubStreamProvider{stream: &media.Stream{URL: cdn.URL + "/ep.m3u8"}},
+		results:            []media.SearchResult{{ID: "tv/77", Title: "One Punch Man", Year: "2015", Type: media.TV}},
+	}}
+	withRecordingFallbackChain(t, rec)
+
+	content := media.SearchResult{ID: "nyaa/One%20Punch%20Man?s=3", Title: "One Punch Man Season 3", Year: "2015", Type: media.TV}
+	if _, err := tryFallbackStreamFrom([]provider.Provider{rec}, content, 3, 4); err != nil {
+		t.Fatalf("tryFallbackStreamFrom: %v", err)
+	}
+	if rec.searched != "One Punch Man" {
+		t.Errorf("searched %q, want the base title", rec.searched)
+	}
+	if rec.episodeID != "77:3:4" {
+		t.Errorf("episode ID = %q, want 77:3:4", rec.episodeID)
 	}
 }

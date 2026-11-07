@@ -80,6 +80,7 @@ func TestValidateStreamRejectsMagnetWithoutInfoHash(t *testing.T) {
 		"magnet:?dn=Foo",
 		"magnet:?xt=urn:btih:xyz&dn=Foo",
 		"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef0123456&dn=Foo", // 39 hex
+		"magnet:?xt=urn:btih:ABCDEFGHIJKLMNOPQRSTUVWXYZ234561&dn=Foo",        // 32 chars, '1' is not base32
 		"magnet:?xt=urn:sha1:0123456789abcdef0123456789abcdef01234567",
 	} {
 		if err := validateStream(nil, &media.Stream{URL: bad}); err == nil {
