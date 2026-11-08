@@ -85,6 +85,30 @@ func TestFindEmitsResultsWithoutPrompting(t *testing.T) {
 	}
 }
 
+// A configured FlixHQWS mirror is accepted by any "flixhq…ws" spelling
+// (config.IsFlixHQWSBase), so a primary row's ref must carry that spelling
+// back: collapsing "flixhq-ws.example" to "flixhq.ws" would replay against
+// the default domain instead of the mirror the user chose.
+func TestRefBaseForKeepsNonDottedFlixHQWSMirror(t *testing.T) {
+	row := media.SearchResult{ID: "movie/1", Title: "X", Provider: "flixhq.ws"}
+	for configured, want := range map[string]string{
+		"flixhq-ws.example": "flixhq-ws.example",
+		"flixhqws":          "flixhqws",
+		"flixhq.ws.xx":      "flixhq.ws.xx",
+		"flixhq.ws":         "flixhq.ws",
+		"vaplayer":          "flixhq.ws",
+	} {
+		if got := refBaseFor(row, "flixhq.ws", configured); got != want {
+			t.Errorf("refBaseFor(flixhq.ws row, configured %q) = %q, want %q", configured, got, want)
+		}
+	}
+	// A fallback's row never takes the configured spelling.
+	other := media.SearchResult{ID: "tv/1", Title: "X", Provider: "tbcpl"}
+	if got := refBaseFor(other, "flixhq.ws", "flixhq-ws.example"); got != "tbcpl" {
+		t.Errorf("fallback row restamped as %q", got)
+	}
+}
+
 // No results is a distinct, recoverable outcome and must not be conflated with
 // "every provider is down": exit 2 tells the agent to suggest a spelling, exit
 // 3 tells it to run `lobster doctor`.

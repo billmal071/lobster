@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"lobster/internal/config"
@@ -18,30 +19,31 @@ func withBase(t *testing.T, b string) {
 
 // "auto" is the default Base, so whatever newProvider returns for it is the
 // primary every plain `lobster <query>` uses to search and, for a series, to
-// enumerate seasons. Falling through newProvider's chain to MovieBox is not
-// good enough: measured 2026-09-09, MovieBox answered `episodes --season 1`
-// for Marvel's Agents of S.H.I.E.L.D. with 10 fabricated placeholder episodes
-// against a true 22, while Soap2Day returned the correct 22 and 20 search
-// results for "the matrix".
+// enumerate seasons. It has to be a source that is alive and enumerates
+// seasons truthfully: VaPlayer since 2026-11-07 (Soap2Day, the previous pick,
+// lost its backend and is retired — config.RetiredBase).
 func TestNewProviderMapsAutoBaseToALiveGeneralSource(t *testing.T) {
 	withBase(t, "auto")
 
 	p := newProvider()
-	if _, ok := p.(*provider.Soap2Day); !ok {
-		t.Fatalf("newProvider() under base=auto = %T, want *provider.Soap2Day", p)
+	if _, ok := p.(*provider.VaPlayer); !ok {
+		t.Fatalf("newProvider() under base=auto = %T, want *provider.VaPlayer", p)
 	}
 }
 
 // An explicit base is still honoured verbatim — "auto" adds a case, it does
 // not replace the mapping.
 func TestNewProviderStillHonoursAnExplicitBase(t *testing.T) {
+	prevResolve := resolveDomain
+	resolveDomain = func(configured, _ string, _ map[string][]string) string { return configured }
+	t.Cleanup(func() { resolveDomain = prevResolve })
 	for base, want := range map[string]string{
 		"yts":        "*provider.YTS",
 		"vaplayer":   "*provider.VaPlayer",
-		"moviebox":   "*provider.MovieBox",
 		"flixhq.ws":  "*provider.FlixHQWS",
-		"soap2day":   "*provider.Soap2Day",
+		"tbcpl":      "*provider.TBCPL",
 		"1shows.org": "*provider.TBCPL",
+		"animeonsen": "*provider.AnimeOnsen",
 	} {
 		withBase(t, base)
 		if got := fmt.Sprintf("%T", newProvider()); got != want {
@@ -55,8 +57,9 @@ func TestNewProviderStillHonoursAnExplicitBase(t *testing.T) {
 // newProvider by substring (cmd/provider.go) — so an un-normalised value can be
 // auto for one and unrecognised for the others. `base = "AUTO"` did exactly
 // that: it re-execed for a torrent that would never be reached, skipped the
-// per-type route, and fell through newProvider's chain to MovieBox, the
-// provider that answers a 22-episode season with 10 fabricated rows.
+// per-type route, and fell through newProvider's chain to MovieBox (then the
+// fall-through), the provider that answered a 22-episode season with 10
+// fabricated rows.
 //
 // config.Validate is the single place both of those inputs pass through (the
 // file at Load, the flag at applyConfig's re-validation), so normalising there
@@ -86,25 +89,90 @@ func TestALoudlySpelledAutoIsAutoForEveryReaderOfBase(t *testing.T) {
 	if !baseIsAuto() {
 		t.Errorf("baseIsAuto(base=%q) = false; a loudly spelled auto is still no preference, so movies must route to YTS", c.Base)
 	}
-	if p := newProvider(); func() bool { _, ok := p.(*provider.Soap2Day); return !ok }() {
-		t.Errorf("newProvider(base=%q) = %T, want *provider.Soap2Day; the fall-through is MovieBox, which fabricates episode lists", c.Base, p)
+	if p := newProvider(); func() bool { _, ok := p.(*provider.VaPlayer); return !ok }() {
+		t.Errorf("newProvider(base=%q) = %T, want *provider.VaPlayer (autoBase)", c.Base, p)
 	}
 }
 
 // newProvider matches by substring and has no "unknown base" arm, so a typo
-// does not fail — it falls through to MovieBox, which reports a 22-episode
-// season as 10 fabricated rows. GUIDE.md's "Content sources" table warns about
-// exactly this, so pin the behaviour the warning describes.
-func TestAnUnrecognisedBaseFallsThroughToMovieBox(t *testing.T) {
-	// Chosen not to contain any recognised name as a substring: "soap2days"
-	// and "flixhq.xx" would both still match, because the test is Contains,
-	// not equality.
+// does not fail — it falls through to VaPlayer, the same source autoBase
+// names. GUIDE.md's "Content sources" table warns about exactly this, so pin
+// the behaviour the warning describes. (A typo that still contains a retired
+// source's name — "soap2days" — is a different case: config.RetiredBase
+// matches it, see TestRetiredBaseSpellings in internal/config.)
+func TestAnUnrecognisedBaseFallsThroughToVaPlayer(t *testing.T) {
+	// Chosen not to contain any recognised name as a substring: "flixhq.xx"
+	// would still match FlixHQ's retired token, because the test is
+	// Contains, not equality.
 	for _, base := range []string{"sopa2day", "flixq.to", "nonesuch"} {
 		withBase(t, base)
-		if _, ok := newProvider().(*provider.MovieBox); !ok {
-			t.Fatalf("newProvider(base=%q) = %T, want *provider.MovieBox", base, newProvider())
+		if _, ok := newProvider().(*provider.VaPlayer); !ok {
+			t.Fatalf("newProvider(base=%q) = %T, want *provider.VaPlayer", base, newProvider())
 		}
 	}
+}
+
+// An explicit --base naming a retired source is rejected by applyConfig
+// rather than falling through to another source. The message has to name the
+// source and point at `lobster doctor`, because an old script is the thing
+// that fails here. It is the flag alone that fails: the same value in the
+// config file is downgraded to auto by config.Load (asserted below), since
+// refusing it there locked the user out of every command, `doctor` included.
+func TestARetiredBaseFlagIsRejectedLoudly(t *testing.T) {
+	for _, base := range []string{"soap2day", "moviebox", "vidnest", "kimcartoon", "allanime", "anipub", "flixhq.to", "flixhq", "SOAP2DAY", "soap2days"} {
+		t.Run(base, func(t *testing.T) {
+			r := runCLI(t, "--base", base, "version")
+			if r.err == nil {
+				t.Fatalf("`--base %s version` succeeded, want an error naming the retired source", base)
+			}
+			for _, want := range []string{"no longer works", "lobster doctor"} {
+				if !strings.Contains(r.err.Error(), want) {
+					t.Errorf("`--base %s version` = %q, want it to contain %q", base, r.err, want)
+				}
+			}
+		})
+	}
+	// flixhq.ws is a different provider from flixhq.to and still works.
+	r := runCLI(t, "--base", "flixhq.ws", "version")
+	if r.err != nil {
+		t.Fatalf("`--base flixhq.ws version` = %v, want nil: FlixHQWS is not retired", r.err)
+	}
+}
+
+// A config file naming a retired source must not fail every command: the
+// value is downgraded to vaplayer (auto only under torrent_fallback) with one
+// warning (config.Load), so `doctor` and `version` still run, and --base can
+// still pick a working source over it.
+func TestARetiredConfigBaseWarnsAndDoesNotLockTheUserOut(t *testing.T) {
+	warnings := captureConfigWarn(t)
+	r := runCLIWithConfig(t, "base = \"soap2day\"\n", "version")
+	if r.err != nil {
+		t.Fatalf("`version` under base = soap2day failed: %v", r.err)
+	}
+	if cfg.Base != config.BaseVaPlayer {
+		t.Errorf("base = %q after Load, want %q", cfg.Base, config.BaseVaPlayer)
+	}
+	if len(*warnings) != 1 || !strings.Contains((*warnings)[0], "Soap2Day") || !strings.Contains((*warnings)[0], "lobster doctor") || !strings.Contains((*warnings)[0], `"vaplayer"`) {
+		t.Errorf("warnings = %q, want one line naming Soap2Day and `lobster doctor`", *warnings)
+	}
+
+	r = runCLIWithConfig(t, "base = \"soap2day\"\n", "--base", "vaplayer", "version")
+	if r.err != nil {
+		t.Fatalf("`--base vaplayer version` under base = soap2day failed: %v", r.err)
+	}
+	if cfg.Base != "vaplayer" {
+		t.Errorf("base = %q, want the flag's vaplayer to win over the file", cfg.Base)
+	}
+}
+
+// captureConfigWarn redirects config.Warn into a slice for one test.
+func captureConfigWarn(t *testing.T) *[]string {
+	t.Helper()
+	got := new([]string)
+	prev := config.Warn
+	config.Warn = func(format string, a ...any) { *got = append(*got, fmt.Sprintf(format, a...)) }
+	t.Cleanup(func() { config.Warn = prev })
+	return got
 }
 
 // Two readers decide "is this base YTS": newProvider, which builds the
@@ -131,7 +199,7 @@ func TestEveryReaderOfBaseAgreesAboutYTS(t *testing.T) {
 		// domain-checked providers (provider.ResolveDomain, called
 		// unstubbed from cmd/provider.go), so those rows assert the two
 		// predicates only. Building one here made this test take 9.6s and
-		// probe flixhq.to and kimcartoon for real.
+		// probe flixhq.ws for real.
 		probesNetwork bool
 	}{
 		{base: "yts", wantYTS: true},
@@ -139,17 +207,11 @@ func TestEveryReaderOfBaseAgreesAboutYTS(t *testing.T) {
 		{base: "  yts  ", wantYTS: true},
 		{base: "yts.mx", wantYTS: true},
 		{base: "  YTS.MX  ", wantYTS: true},
-		{base: "soap2day"},
 		{base: "vaplayer"},
-		{base: "flixhq.to", probesNetwork: true},
 		{base: "flixhq.ws", probesNetwork: true},
 		{base: "tbcpl"},
 		{base: "1shows.org"},
-		{base: "kimcartoon", probesNetwork: true},
 		{base: "animeonsen"},
-		{base: "allanime"},
-		{base: "moviebox"},
-		{base: "vidnest"},
 		// Not a base anyone types; the point is that a value merely reading
 		// like a typo of a YTS domain is still treated as YTS by both, rather
 		// than by one of them.

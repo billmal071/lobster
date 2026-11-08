@@ -15,14 +15,23 @@ Lobster selects the content provider via the `base` setting in `config.toml` or 
    ```
 
 2. **Available providers**  
-   - `flixhq.ws` (default) — browsing, trending, metadata
-   - `soap2day` — streaming via TMDB + moviesapi
+   - `auto` (default) — VaPlayer for search and series; films routed to YTS
+   - `vaplayer` — general-purpose, API-based
+   - `flixhq.ws` — scraper; browsing, trending, metadata
    - `tbcpl` / `1shows.org` — streaming via Vidzee
-   - `moviebox` — MovieBox V3 mobile API
-   - `flixhq.to` — legacy FlixHQ scraper
-   - `kimcartoon.com.co` — cartoons/anime
+   - `animeonsen` — anime
+   - `yts` — films over BitTorrent
+   - `eztv` — TV series over BitTorrent, keyed by IMDb id
+   - `nyaa` — anime over BitTorrent (English-translated category; the feed
+     exposes only the 75 newest torrents per query)
 
-   All other providers are automatically used as fallbacks when the primary fails.
+   Retired (`--base` rejects them; a config file's value becomes `auto` with a
+   warning): `soap2day`, `moviebox`, `vidnest`, `flixhq.to`, `kimcartoon`,
+   `allanime`, `anipub`.
+
+   All other providers are automatically used as fallbacks when the primary
+   fails; the torrent sources (`yts`, `eztv`, `nyaa`) only when
+   `torrent_fallback = true`, because a magnet exposes your IP to the swarm.
 
 ## 2. Test Provider via CLI
 
@@ -31,17 +40,19 @@ Use the `--base` flag to force a specific provider:
 ### Example commands
 
 ```bash
-# Test with FlixHQ.ws (default)
+# Test with FlixHQ.ws
 lobster --base flixhq.ws trending
 
-# Test with Soap2Day
-lobster --base soap2day "Inception"
+# Test with VaPlayer. If VaPlayer fails, a fallback can still play the title,
+# so playback alone does not show VaPlayer works: check the fallback message
+# or run with -x before recording VaPlayer streaming as successful.
+lobster --base vaplayer "Inception"
 
 # Test with TBCPL
 lobster --base tbcpl "Inception"
 
-# Test with KimCartoon
-lobster --base kimcartoon.com.co "SpongeBob"
+# Test with AnimeOnsen
+lobster --base animeonsen "One Punch Man"
 ```
 
 ### Expected output
@@ -100,10 +111,10 @@ Provider tests use httptest servers with mocked responses and don't hit real API
 A: Run with `-x` (debug mode). It prints the selected provider and all fallback attempts.
 
 **Q: Can I test multiple providers in one session?**  
-A: Use the TUI (run `lobster` with no args) — categories like Movies, Series, Cartoons use different providers. Or switch with `--base` on the CLI.
+A: Switch with `--base` on the CLI; each command is an independent check of that source. The TUI (run `lobster` with no args) is not an independent check per category: under the default config Movies and Series both search VaPlayer and only Anime searches AnimeOnsen, and Movies and Series searches can add rows from fallback providers when the primary returns few results (the Anime tab never does).
 
 **Q: What if a provider is down?**  
-A: Lobster automatically falls back to the next provider in the chain: Soap2Day → MovieBox → TBCPL → FlixHQWS → FlixHQ → KimCartoon.
+A: Lobster builds a fallback chain from every source except the primary: VaPlayer, TBCPL, Consumet (when `api_url` is set), FlixHQWS, AnimeOnsen, TBCPLEmbed (when the catalog feed is on), and, only when `torrent_fallback` is on, EZTV, Nyaa and YTS. The probes are health-ranked and raced, not tried strictly in sequence, and the torrent sources are tried only after every HTTP source has failed. When `api_url` is set, Consumet is the primary rather than a fallback, and `base` is ignored. Under the default config VaPlayer is the primary for series and for any film YTS has no match for, so its fallbacks start at TBCPL; with `base = "auto"` a film is routed to YTS at play time instead (not with `--json`, or `--download`, which keep VaPlayer).
 
 ---
 

@@ -174,6 +174,7 @@ func TestUpdateProgress(t *testing.T) {
 	}
 }
 
+// TestUpdateStreamInfo checks that UpdateStreamInfo stores the stream URL, type and referer.
 func TestUpdateStreamInfo(t *testing.T) {
 	s := openTestStore(t)
 	d := sampleDownload()
@@ -182,7 +183,7 @@ func TestUpdateStreamInfo(t *testing.T) {
 	d.Status = "pending"
 	id, _ := s.InsertDownload(d)
 
-	if err := s.UpdateStreamInfo(id, "https://cdn.example.com/video.mp4", "http", "https://ref.com"); err != nil {
+	if err := s.UpdateStreamInfo(id, "https://cdn.example.com/video.mp4", "http", "https://ref.com", ""); err != nil {
 		t.Fatalf("update stream info: %v", err)
 	}
 
@@ -438,5 +439,25 @@ func TestNextQueued(t *testing.T) {
 	}
 	if got.Title != "First Queued" {
 		t.Errorf("title: got %q, want %q", got.Title, "First Queued")
+	}
+}
+
+// TestUpdateStreamInfoPersistsUserAgent checks that the User-Agent given to UpdateStreamInfo is returned by GetDownload and ListDownloads.
+func TestUpdateStreamInfoPersistsUserAgent(t *testing.T) {
+	s := openTestStore(t)
+	d := sampleDownload()
+	d.Status = "pending"
+	id, _ := s.InsertDownload(d)
+
+	if err := s.UpdateStreamInfo(id, "https://cdn.example.com/v.m3u8", "hls", "https://ref.com", "CdnOnly/9"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetDownload(id)
+	if got.UserAgent != "CdnOnly/9" {
+		t.Errorf("user_agent: got %q", got.UserAgent)
+	}
+	list, _ := s.ListDownloads()
+	if len(list) != 1 || list[0].UserAgent != "CdnOnly/9" {
+		t.Errorf("ListDownloads user_agent: %+v", list)
 	}
 }

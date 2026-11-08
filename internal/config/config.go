@@ -24,6 +24,11 @@ import (
 // ever second-guessing a base the user did pick.
 const BaseAuto = "auto"
 
+// BaseVaPlayer names the streaming source a retired base is downgraded to
+// when torrent_fallback is off (Load). "auto" would route every movie to YTS
+// (cmd/typeroute.go), a swarm the file never opted into.
+const BaseVaPlayer = "vaplayer"
+
 // Config holds all application configuration.
 type Config struct {
 	// Base names the content source. The default is the sentinel "auto",
@@ -54,30 +59,12 @@ type Config struct {
 	TBCPLFeed              bool                `toml:"tbcpl_feed"`
 	TBCPLRegion            string              `toml:"tbcpl_region"`
 	TBCPLIncludeUntrusted  bool                `toml:"tbcpl_include_untrusted"`
-	// AllowAdultAnime lifts AllAnime's adult filter on search.
-	//
-	// It is a setting rather than a constant because the filter is not only
-	// about adult titles. AllAnime's catalogue hides some ordinary shows
-	// behind it — "Ushiro no Shoumen Kamui-san" is invisible with it off and
-	// the first hit with it on — so leaving it hardcoded off makes those
-	// titles unreachable, and hardcoding it on changes what an unrelated
-	// search returns. Measured over a 40-row cap: "naruto", "school",
-	// "sister" and "nurse" were byte-identical either way, while "love"
-	// gained two genuine hentai entries. So the leak is real but confined to
-	// suggestive queries, which is a trade for the user to make and not for
-	// lobster to make silently.
-	//
-	// Off by default. It restores *discovery* only: AllAnime's sources
-	// endpoint is still crypto-gated behind a bot challenge, so a title found
-	// this way is played from the fallback chain, not from AllAnime.
-	//
-	// (AllAnime's other filter, allowUnknown, does nothing for this and is
-	// left off: all four combinations were probed and only allowAdult
-	// changed the answer.)
+	// AllowAdultAnime lifted AllAnime's adult filter on search. Inert since
+	// AllAnime's retirement (retiredBases); kept so existing config files parse.
 	AllowAdultAnime bool `toml:"allow_adult_anime"`
-	// TorrentFallback lets the resolver fall back to YTS when the streaming
-	// providers fail. Off by default and deliberately so: YTS resolves to a
-	// magnet, so falling back to it joins a BitTorrent swarm and exposes the
+	// TorrentFallback lets the resolver fall back to the torrent sources (YTS,
+	// EZTV, Nyaa) when the streaming providers fail. Off by default and
+	// deliberately so: they resolve to a magnet, so falling back to one joins a BitTorrent swarm and exposes the
 	// user's IP to its peers. That is worth doing on request, not silently
 	// because a scraper broke.
 	//
@@ -304,7 +291,32 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
+	// A retired base in the file is downgraded, not refused: refusing it
+	// here failed every command, including the `lobster doctor` that says
+	// what to switch to, and `--base` could not override a value Load had
+	// already rejected (the flag is applied after Load, cmd.applyConfig).
+	// The flag keeps the loud error; the file gets one warning and a working
+	// base: "auto" when torrent_fallback is on, otherwise "vaplayer", since
+	// "auto" routes movies to YTS and the file never opted into a swarm.
+	// With api_url set the base is never read, so it is left alone.
+	if cfg.APIURL == "" {
+		if name, reason, ok := RetiredBase(cfg.Base); ok {
+			to := BaseVaPlayer
+			if cfg.TorrentFallback {
+				to = BaseAuto
+			}
+			Warn("config: base %q names %s, which no longer works (%s); using %q instead — `lobster doctor` lists the sources that do", cfg.Base, name, reason, to)
+			cfg.Base = to
+		}
+	}
+
 	return cfg, nil
+}
+
+// Warn is where Load's one-line notices go. A package var so a test can
+// observe them without capturing os.Stderr.
+var Warn = func(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, "lobster: "+format+"\n", a...)
 }
 
 // NormalizeBase returns the canonical spelling of a base value.
@@ -358,6 +370,81 @@ func NormalizeBase(base string) string {
 // directly and is asked before some of them are validated.
 func IsYTSBase(base string) bool {
 	return strings.Contains(NormalizeBase(base), "yts")
+}
+
+// IsTorrentBase reports whether a base value names any source that resolves
+// to a magnet rather than an HTTP stream: YTS (films), Nyaa (anime) or EZTV
+// (TV series). It is the predicate cmd.mayStreamTorrent reads, so a run whose
+// primary can only ever answer with a magnet is put on the storage backend
+// that cannot SIGBUS — the same guarantee IsYTSBase gives YTS alone.
+//
+// Substring, like IsYTSBase and for the same reason: cmd.newProvider selects
+// each of these by substring, and the two readers must agree. None of the
+// other documented bases contains "nyaa" or "eztv".
+func IsTorrentBase(base string) bool {
+	b := NormalizeBase(base)
+	return IsYTSBase(b) || strings.Contains(b, "nyaa") || strings.Contains(b, "eztv")
+}
+
+// retiredBases lists the sources lobster no longer wires in, each verified
+// dead upstream on 2026-11-07 with no fix available on lobster's side. Their
+// provider code stays under internal/provider; what is gone is every path
+// that could select them (cmd.newProvider, cmd.fallbackProviders, the doctor
+// table, the TUI). A base naming one is not silently routed elsewhere: a
+// config file's value is downgraded to "vaplayer" — "auto" under
+// torrent_fallback — with a warning (Load), an
+// explicit --base is an error (cmd.applyConfig), and a ref stamped with one
+// is ignored with a warning (cmd.applyRefBase).
+//
+// Matching is by substring, the same way cmd.newProvider selects a provider,
+// so `base = "soap2days"` is caught like `base = "soap2day"` was accepted.
+// "flixhq" is the one token that needs care: flixhq.ws is a different,
+// working provider, so any spelling with "ws" after "flixhq" ("flixhq.ws",
+// "flixhqws", "flixhq-ws") is never retired.
+var retiredBases = []struct{ token, name, reason string }{
+	{"soap2day", "Soap2Day", "its moviesapi.to backend was retired"},
+	{"moviebox", "MovieBox", "its API now requires app attestation"},
+	{"vidnest", "VidNest", "its API moved to a nonce-and-encryption protocol"},
+	{"kimcartoon", "KimCartoon", "the site re-platformed onto an encrypted anime-only backend"},
+	{"allanime", "AllAnime", "its sources endpoint is crypto-gated"},
+	{"anipub", "AniPub", "the domain was dropped and now serves spam"},
+	{"flixhq", "FlixHQ (flixhq.to)", "its origin has been down since August 2026"},
+}
+
+// IsFlixHQWSBase reports whether base names FlixHQWS: any spelling with "ws"
+// after "flixhq". Shared by RetiredBase and cmd.newProvider so a spelling the
+// one accepts is a spelling the other selects.
+func IsFlixHQWSBase(base string) bool {
+	b := NormalizeBase(base)
+	i := strings.Index(b, "flixhq")
+	return i >= 0 && strings.Contains(b[i:], "ws")
+}
+
+// RetiredBase reports whether base names a retired source, and if so which
+// one and why. The input is normalized here for the same reason IsYTSBase
+// normalizes its own: callers see Base at different points.
+func RetiredBase(base string) (name, reason string, ok bool) {
+	b := NormalizeBase(base)
+	if IsFlixHQWSBase(b) {
+		return "", "", false
+	}
+	for _, r := range retiredBases {
+		if strings.Contains(b, r.token) {
+			return r.name, r.reason, true
+		}
+	}
+	return "", "", false
+}
+
+// RetiredBaseError is the error for a retired base named explicitly, worded
+// once here so --base (cmd.applyConfig) and a ref's stamped base
+// (cmd.applyRefBase) say the same thing.
+func RetiredBaseError(base string) error {
+	name, reason, ok := RetiredBase(base)
+	if !ok {
+		return nil
+	}
+	return fmt.Errorf("base %q names %s, which no longer works (%s); choose another source — `lobster doctor` lists the ones that do", NormalizeBase(base), name, reason)
 }
 
 // Validate checks config values are within acceptable bounds.

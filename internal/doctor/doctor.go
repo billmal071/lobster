@@ -9,22 +9,26 @@
 package doctor
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"lobster/internal/media"
 	"lobster/internal/provider"
 )
 
 // Stages of the resolution pipeline, in the order they run.
 const (
-	StageSearch  = "search"
-	StageServers = "servers"
-	StageEmbed   = "embed"
-	StageWatch   = "watch"
-	StageOK      = "ok"
+	StageSearch   = "search"
+	StageSeasons  = "seasons"
+	StageEpisodes = "episodes"
+	StageServers  = "servers"
+	StageEmbed    = "embed"
+	StageWatch    = "watch"
+	StageOK       = "ok"
 )
 
 // Result is one provider's diagnosis.
@@ -62,18 +66,49 @@ func Check(name string, p provider.Provider, query string) Result {
 	}
 	pick := results[0]
 
+	// A series has to be probed through its episode path: a provider whose
+	// catalogue is TV only (EZTV, Nyaa) has nothing to Watch without an
+	// episode ID, and a movie-shaped probe would report it broken at watch
+	// for a stage it never runs. The first episode of the first season is
+	// what a user would reach first.
+	episodeID := ""
+	if pick.Type == media.TV {
+		seasons, err := p.GetSeasons(pick.ID)
+		if err != nil && !(errors.Is(err, provider.ErrIncompleteEpisodeList) && len(seasons) > 0) {
+			return finish(StageSeasons, err.Error(), false)
+		}
+		if len(seasons) == 0 {
+			return finish(StageSeasons, "no seasons listed", false)
+		}
+		episodes, err := p.GetEpisodes(pick.ID, seasons[0].ID)
+		// A probing enumerator (AnimeOnsen) returns the prefix it measured
+		// alongside ErrIncompleteEpisodeList; the first episode is in it, and
+		// that is all this probe needs.
+		if err != nil && !(errors.Is(err, provider.ErrIncompleteEpisodeList) && len(episodes) > 0) {
+			return finish(StageEpisodes, err.Error(), false)
+		}
+		if len(episodes) == 0 {
+			return finish(StageEpisodes, "no episodes listed for the first season", false)
+		}
+		episodeID = episodes[0].ID
+	}
+
 	if sp, ok := p.(provider.StreamProvider); ok {
-		stream, err := sp.Watch(pick.ID, "", "Default", "1080")
+		stream, err := sp.Watch(pick.ID, episodeID, "Default", "1080")
 		if err != nil {
 			return finish(StageWatch, err.Error(), false)
 		}
 		if stream == nil || stream.URL == "" {
 			return finish(StageWatch, "no stream URL returned", false)
 		}
-		return finish(StageOK, fmt.Sprintf("%d results, stream resolved", len(results)), true)
+		resolved := "stream resolved"
+		if strings.HasPrefix(strings.ToLower(stream.URL), "magnet:") {
+			resolved = "magnet resolved"
+		}
+		return finish(StageOK, fmt.Sprintf("%d results, %s", len(results), resolved), true)
 	}
 
-	servers, err := p.GetServers(pick.ID, "")
+	servers, err := p.GetServers(pick.ID, episodeID)
 	if err != nil {
 		return finish(StageServers, err.Error(), false)
 	}

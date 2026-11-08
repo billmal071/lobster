@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -108,10 +111,6 @@ func sharedHealth() *resolver.HealthStore {
 	return sharedHealthStore
 }
 
-// flixhqDomain resolves a healthy FlixHQ mirror, memoized per session.
-// Package var so tests can stub the probe.
-var flixhqDomain = provider.FirstHealthyDomainCached
-
 func cfgQuality() string {
 	if cfg != nil && cfg.Quality != "" {
 		return cfg.Quality
@@ -130,26 +129,17 @@ func fallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 }
 
 // fallbackProviders returns all available fallback providers, excluding the primary.
-// Both StreamProviders (Soap2Day, MovieBox, TBCPL) and regular Providers
-// (FlixHQWS, KimCartoon) are included so the app tries every source before
-// giving up. Consumet joins them only when api_url is configured.
+// Both StreamProviders (VaPlayer, TBCPL) and regular Providers (FlixHQWS) are
+// included so the app tries every source before giving up. Consumet joins
+// them only when api_url is configured.
+//
+// Retired sources (config.retiredBases) are not here: each one in the chain
+// cost a probe timeout per resolve for an answer that could only be a failure.
 func fallbackProviders(primary provider.Provider) []provider.Provider {
 	var fallbacks []provider.Provider
 
 	if _, ok := primary.(*provider.VaPlayer); !ok {
 		fallbacks = append(fallbacks, provider.NewVaPlayer())
-	}
-
-	if _, ok := primary.(*provider.VidNest); !ok {
-		fallbacks = append(fallbacks, provider.NewVidNest())
-	}
-
-	if _, ok := primary.(*provider.Soap2Day); !ok {
-		fallbacks = append(fallbacks, provider.NewSoap2Day())
-	}
-
-	if _, ok := primary.(*provider.MovieBox); !ok {
-		fallbacks = append(fallbacks, provider.NewMovieBox())
 	}
 
 	if _, ok := primary.(*provider.TBCPL); !ok {
@@ -170,48 +160,29 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 		}
 	}
 
+	// EZTV before the remaining scrapers for a series (complete encodes, not a
+	// player's HLS), gated like YTS below: its magnet puts the user in a swarm.
+	if _, ok := primary.(*provider.EZTV); !ok {
+		if cfg != nil && cfg.TorrentFallback {
+			fallbacks = append(fallbacks, provider.NewEZTV())
+		}
+	}
+
 	if _, ok := primary.(*provider.FlixHQWS); !ok {
 		fallbacks = append(fallbacks, provider.NewFlixHQWS("flixhq.ws"))
 	}
 
-	// The flixhq.to engine family (flixhq.to, sflix.to, myflixerz.to, ...) has
-	// been origin-down since ~Aug 2026, so the scraper joins the chain only when
-	// a health probe finds a live mirror. The probe runs in parallel across all
-	// candidates and is cached for the session, so while everything is dead this
-	// costs one probe timeout per run — and the provider revives automatically
-	// the moment any mirror answers again.
-	if _, ok := primary.(*provider.FlixHQ); !ok {
-		var overrides map[string][]string
-		if cfg != nil {
-			overrides = cfg.DomainOverrides
-		}
-		if d := flixhqDomain("flixhq", overrides); d != "" {
-			fallbacks = append(fallbacks, provider.NewFlixHQ(d))
-		}
-	}
-
-	if _, ok := primary.(*provider.KimCartoon); !ok {
-		fallbacks = append(fallbacks, provider.NewKimCartoon("kimcartoon.com.co"))
-	}
-
-	// Last so movie/TV scrapers keep priority; these catch anime the others
-	// lack. AniPub is the anime path. AllAnime is retired: its API now sits behind a
-	// Cloudflare bot challenge on top of the crypto-gated sources endpoint
-	// (AA_CRYPTO_MISSING, mid-2026), so it can neither search nor stream. The
-	// provider code stays for the day either gate lifts.
-
-	// AnimeOnsen goes ahead of AniPub because it is the one that can still
-	// return a playable URL. megaplay (AniPub's backend) is alive and
-	// well-stocked, but its stream/getSources no longer carries a `sources`
-	// key: the URL now sits inside an encrypted `enc` blob, which is on the
-	// wrong side of the project's content boundary to open. AniPub stays in
-	// the chain for its subtitle tracks and for the day that changes back.
+	// Last so movie/TV scrapers keep priority; this catches anime the others
+	// lack. AnimeOnsen is the only anime source left standing.
 	if _, ok := primary.(*provider.AnimeOnsen); !ok {
 		fallbacks = append(fallbacks, provider.NewAnimeOnsen())
 	}
 
-	if _, ok := primary.(*provider.AniPub); !ok {
-		fallbacks = append(fallbacks, provider.NewAniPub())
+	// Nyaa after AnimeOnsen: anime torrents for what it lacks, gated the same way.
+	if _, ok := primary.(*provider.Nyaa); !ok {
+		if cfg != nil && cfg.TorrentFallback {
+			fallbacks = append(fallbacks, provider.NewNyaa())
+		}
 	}
 
 	if cat := tbcplCatalog(); cat != nil {
@@ -237,9 +208,10 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 	// because a scraper broke is not, which is why this stays off until asked.
 	//
 	// Opting out of swarming altogether is a source, not this flag:
-	// `base = "soap2day"` — or any explicit non-YTS base, or an api_url,
+	// `base = "vaplayer"` — or any explicit non-torrent base, or an api_url,
 	// which overrides base entirely — with torrent_fallback off never
-	// reaches a magnet.
+	// reaches a magnet. An explicit yts, nyaa or eztv base still does: the
+	// user named the torrent source outright.
 	if _, ok := primary.(*provider.YTS); !ok {
 		if cfg != nil && cfg.TorrentFallback {
 			fallbacks = append(fallbacks, provider.NewYTS())
@@ -254,18 +226,122 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 // content carries the ID and year of the work the user actually selected so the
 // resolver can tell a franchise entry apart from its sequels.
 func tryFallbackStream(primary provider.Provider, content media.SearchResult, season, episode int) (*media.Stream, error) {
-	r := resolver.New(agentFallbackProviders(primary), sharedHealth(), debugf)
+	return tryFallbackStreamFrom(agentFallbackProviders(primary), content, season, episode)
+}
+
+// servesMagnets reports whether p's Watch answers with a magnet URI, which
+// only the local torrent server can open.
+func servesMagnets(p provider.Provider) bool {
+	switch p.(type) {
+	case *provider.YTS, *provider.EZTV, *provider.Nyaa:
+		return true
+	}
+	_, ok := p.(magnetSource)
+	return ok
+}
+
+// magnetSource marks a provider whose streams are magnets (test doubles).
+type magnetSource interface{ ServesMagnets() }
+
+// withoutMagnetSources drops the torrent providers from a chain, for a
+// consumer that cannot open a magnet (the download queue).
+func withoutMagnetSources(ps []provider.Provider) []provider.Provider {
+	out := make([]provider.Provider, 0, len(ps))
+	for _, p := range ps {
+		if !servesMagnets(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// withoutProvider returns ps without any provider of the same concrete type as drop.
+func withoutProvider(ps []provider.Provider, drop provider.Provider) []provider.Provider {
+	out := make([]provider.Provider, 0, len(ps))
+	for _, p := range ps {
+		if reflect.TypeOf(p) != reflect.TypeOf(drop) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// onlyMagnetSources keeps just the torrent providers of a chain.
+func onlyMagnetSources(ps []provider.Provider) []provider.Provider {
+	out := make([]provider.Provider, 0, len(ps))
+	for _, p := range ps {
+		if servesMagnets(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+var nyaaSeasonSuffix = regexp.MustCompile(`(?i)\s+Season\s+\d{1,2}$`)
+
+// fallbackTitle is the title other providers are searched for. Nyaa titles a
+// sequel "Show Season N", which no TMDB-backed catalogue lists; the season
+// travels separately.
+func fallbackTitle(c media.SearchResult) string {
+	if strings.HasPrefix(c.ID, "nyaa/") {
+		return nyaaSeasonSuffix.ReplaceAllString(c.Title, "")
+	}
+	return c.Title
+}
+
+// fallbackBudget bounds both tiers of tryFallbackStreamFrom together.
+const fallbackBudget = 90 * time.Second
+
+// tryFallbackStreamFrom is tryFallbackStream over an explicit chain. The
+// streaming providers are raced first and the torrent providers only when
+// every one of them fails: a magnet validates instantly, so racing them
+// together lets a torrent beat a working scraper that is still being checked.
+func tryFallbackStreamFrom(providers []provider.Provider, content media.SearchResult, season, episode int) (*media.Stream, error) {
+	return tryFallbackStreamAccepting(providers, content, season, episode, nil)
+}
+
+// tryFallbackStreamAccepting is tryFallbackStreamFrom with accept vetting each
+// stream a provider yields: a refused stream moves that provider on to its
+// next server or confident-match candidate first, and a provider left with no
+// accepted stream is reported as an accept refusal, after which the race
+// moves on to the next provider. The streaming providers run first and the
+// torrent providers only after all of them fail.
+func tryFallbackStreamAccepting(providers []provider.Provider, content media.SearchResult, season, episode int, accept func(*media.Stream) error) (*media.Stream, error) {
 	req := resolver.Request{
+		Accept:    accept,
 		ID:        content.ID,
-		Title:     content.Title,
+		Title:     fallbackTitle(content),
 		Year:      content.Year,
 		MediaType: content.Type,
 		Season:    season,
 		Episode:   episode,
 		Quality:   cfgQuality(),
 	}
-	stream, report, err := r.Resolve(context.Background(), req)
+	ctx, cancel := context.WithTimeout(context.Background(), fallbackBudget)
+	defer cancel()
+
+	plain, magnets := withoutMagnetSources(providers), onlyMagnetSources(providers)
+	if len(plain) == 0 || len(magnets) == 0 {
+		return resolveTier(ctx, providers, req, nil)
+	}
+	stream, err := resolveTier(ctx, plain, req, nil)
+	if err == nil || ctx.Err() != nil {
+		return stream, err
+	}
+	var first *resolveFailure
+	errors.As(err, &first)
+	return resolveTier(ctx, magnets, req, first)
+}
+
+// resolveTier races providers for req. A failure is wrapped in a resolveFailure, which carries earlier's attempts too when a previous tier failed.
+func resolveTier(ctx context.Context, providers []provider.Provider, req resolver.Request, earlier *resolveFailure) (*media.Stream, error) {
+	r := resolver.New(providers, sharedHealth(), debugf)
+	stream, report, err := r.Resolve(ctx, req)
 	if err != nil {
+		if earlier != nil && earlier.report != nil {
+			report.Attempts = append(earlier.report.Attempts, report.Attempts...)
+			err = fmt.Errorf("all providers failed: %s", report.Summary())
+		}
 		debugf("resolve failed: %s", report.Summary())
 		return nil, &resolveFailure{report: report, err: err}
 	}
@@ -354,8 +430,11 @@ func (e *resolveFailure) providersTried() int {
 	return len(seen)
 }
 
-// makeStreamResolver builds a StreamResolver that tries the primary provider
-// and all fallbacks to resolve a stream URL for downloads.
+// makeStreamResolver builds a StreamResolver for the download queue. It races
+// the primary provider together with the fallback chain, leaves the torrent
+// sources out, and skips any stream the queue cannot download. The primary
+// takes part because a queued item resolves here only when it holds no saved
+// URL, and the primary may be the one source that can supply one.
 func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 	return func(req dlmanager.ResolveRequest) (*dlmanager.StreamResult, error) {
 		mt := media.Movie
@@ -363,9 +442,13 @@ func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 			mt = media.TV
 		}
 
-		// Use fallback providers to resolve a stream for downloads.
+		// Use fallback providers to resolve a stream for downloads. The
+		// torrent sources are left out of the race: the queue cannot open a
+		// magnet (streamToResultChecked), so one winning would fail the
+		// download while a scraper that could have served it was abandoned.
 		content := media.SearchResult{ID: req.MediaID, Title: req.Title, Year: req.Year, Type: mt}
-		fbStream, err := tryFallbackStream(primary, content, req.Season, req.Episode)
+		chain := append([]provider.Provider{primary}, withoutProvider(agentFallbackProviders(primary), primary)...)
+		fbStream, err := tryFallbackStreamAccepting(withoutMagnetSources(chain), content, req.Season, req.Episode, queueAccepts)
 		if err != nil {
 			return nil, fmt.Errorf("all providers failed: %w", err)
 		}
@@ -387,6 +470,11 @@ func isDASHManifest(rawURL string) bool {
 	return strings.HasSuffix(strings.ToLower(path), ".mpd")
 }
 
+func queueAccepts(s *media.Stream) error {
+	_, err := streamToResultChecked(s)
+	return err
+}
+
 // streamToResult converts a media.Stream to a dlmanager.StreamResult.
 func streamToResult(s *media.Stream) *dlmanager.StreamResult {
 	streamType := "http"
@@ -397,6 +485,7 @@ func streamToResult(s *media.Stream) *dlmanager.StreamResult {
 		URL:        s.URL,
 		StreamType: streamType,
 		Referer:    s.Referer,
+		UserAgent:  s.UserAgent,
 	}
 }
 
@@ -420,6 +509,9 @@ func streamToResult(s *media.Stream) *dlmanager.StreamResult {
 func streamToResultChecked(s *media.Stream) (*dlmanager.StreamResult, error) {
 	if torrentstream.IsMagnet(s.URL) {
 		return nil, fmt.Errorf("this source is a torrent, which cannot be downloaded this way: play it instead, or pick another source")
+	}
+	if s.Deobfuscate {
+		return nil, fmt.Errorf("this source's segments are disguised and need the local de-obfuscating proxy, which the download queue does not run: play it instead, or download it with -d")
 	}
 	if isDASHManifest(s.URL) {
 		return nil, fmt.Errorf("this source is an MPEG-DASH stream, which the download queue cannot assemble: play it instead, or download it with -d, which goes through ffmpeg")

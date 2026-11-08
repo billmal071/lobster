@@ -37,6 +37,10 @@ const SyntheticProvider = "(resolver)"
 // appends when its overall deadline expires.
 const StageOverallTimeout = "overall-timeout"
 
+// StageAccept is the Stage of an attempt whose stream the caller's Accept
+// hook refused; it says nothing about the provider's health.
+const StageAccept = "accept"
+
 // IsProviderProbe reports whether a records a real provider being asked for a
 // stream. Callers that count or rank providers must skip the attempts where it
 // is false; callers that render the attempts for a reader should keep them,

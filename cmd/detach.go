@@ -181,6 +181,7 @@ func detachedBrowserHandoff(alive bool, exitErr error) bool {
 	return errors.As(exitErr, &ee) && ee.ExitCode() == exitBrowserHandoff
 }
 
+// detachedExitCode returns the exit status carried by exitErr, or -1 when it is not a process exit error.
 func detachedExitCode(exitErr error) int {
 	var ee *exec.ExitError
 	if errors.As(exitErr, &ee) {
@@ -239,6 +240,7 @@ func waitBrowserOutcome(c *exec.Cmd, modeFile string, timeout time.Duration) (mo
 	}
 }
 
+// readDetachPlaybackMode reads the playback mode the supervised child recorded at path: "browser", "player", or "" when the file is missing or says anything else.
 func readDetachPlaybackMode(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {

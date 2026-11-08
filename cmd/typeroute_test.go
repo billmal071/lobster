@@ -151,7 +151,7 @@ func TestRouteByTypeMovesASeriesOffAYTSPrimary(t *testing.T) {
 	if _, isYTS := got.(*provider.YTS); isYTS {
 		t.Fatalf("routeByType left a series on *provider.YTS, which cannot enumerate seasons")
 	}
-	if _, ok := got.(*provider.Soap2Day); !ok {
+	if _, ok := got.(*provider.VaPlayer); !ok {
 		t.Fatalf("routeByType moved a series to %T, want the auto base's general source", got)
 	}
 }

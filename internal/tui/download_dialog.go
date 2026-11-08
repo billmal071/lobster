@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -83,7 +84,7 @@ func (d *downloadDialog) start(item media.SearchResult, p provider.Provider, mgr
 	id := item.ID
 	return func() tea.Msg {
 		seasons, err := prov.GetSeasons(id)
-		if err != nil {
+		if err != nil && !(errors.Is(err, provider.ErrIncompleteEpisodeList) && len(seasons) > 0) {
 			return dlSeasonsMsg{err: err}
 		}
 		return dlSeasonsMsg{seasons: seasons}

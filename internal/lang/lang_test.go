@@ -2,6 +2,18 @@ package lang
 
 import "testing"
 
+func TestCanonicalResolvesISOCodes(t *testing.T) {
+	for in, want := range map[string]string{
+		"ta": "tamil", "tam": "tamil", "Tamil": "tamil", " TA ": "tamil",
+		"hi": "hindi", "fra": "french", "fre": "french",
+		"english": "english", "klingon": "klingon", "": "",
+	} {
+		if got := Canonical(in); got != want {
+			t.Errorf("Canonical(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // The player and the provider each had their own table, and they drifted: -a
 // russian set mpv's --alang but left Vidzee's Hindi-first source order alone,
 // because only one of the two maps knew "rus". One table, or it happens again.

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"lobster/internal/playlist"
 	"lobster/internal/provider"
 	"lobster/internal/subtitle"
+	"lobster/internal/torrentstream"
 	"lobster/internal/ui"
 )
 
@@ -167,49 +169,118 @@ func episodeListMenu(sess *playlist.Session) error {
 }
 
 // resolveStream resolves a stream for the current episode. A primary provider
-// that implements StreamProvider (e.g. AllAnime) is tried first with the
-// session's native episode ID; otherwise (e.g. FlixHQ, used for metadata only)
-// resolution goes through the resilient fallback path.
+// that implements StreamProvider (e.g. VaPlayer, TBCPL) is tried first with
+// the session's native episode ID; otherwise (e.g. FlixHQWS, used for metadata
+// only) resolution goes through the resilient fallback path.
 func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media.Stream, string, error) {
+	return resolveStreamHolding(sess, excludeNames, new(*media.Stream))
+}
+
+// resolveStreamHolding is resolveStream with a slot that keeps the primary's
+// magnet between calls: a later Primary Watch that fails still leaves the one
+// an earlier call received to fall back on.
+func resolveStreamHolding(sess *playlist.Session, excludeNames map[string]bool, held **media.Stream) (*media.Stream, string, error) {
 	// Primary StreamProvider gets first crack with the native episode ID from the
-	// session — lets providers like AllAnime (opaque IDs "showId|1.5|sub") reach
-	// their own Watch verbatim, bypassing tmdbID:season:episode reconstruction.
+	// session — lets a provider with its own ID scheme (TBCPL, VaPlayer) reach
+	// its own Watch verbatim, bypassing tmdbID:season:episode reconstruction.
 	// Skip it once it's been excluded (its last stream failed playback), so a
 	// dead Primary stream can't trap playCurrentEpisode in an infinite retry.
+	var primaryMagnet *media.Stream
 	if sp, ok := sess.Provider.(provider.StreamProvider); ok && !excludeNames["Primary"] {
 		ep := sess.Current()
 		if stream, err := sp.Watch(sess.ProviderKey(), ep.ID, "Default", cfg.Quality); err == nil && stream != nil {
-			return stream, "Primary", nil
-		}
-		// AllAnime can't reliably stream FINISHED series (its CDN goes 500/404),
-		// so fall back to AniPub by title + episode number (AniPub has its own
-		// IDs; match by title). Airing shows resolve above and never reach here.
-		if aa, isAnime := sess.Provider.(*provider.AllAnime); isAnime && !excludeNames["AniPub"] {
-			if stream, err := provider.NewAniPub().ResolveByTitle(
-				sess.Content.Title, sess.Current().Number, aa.Translation() == "dub",
-			); err == nil && stream != nil {
-				debugf("AniPub fallback resolved %s ep %d", sess.Content.Title, sess.Current().Number)
-				return stream, "AniPub", nil
+			holdMagnet := flagJSON || recoveredTorrentSource(sess)
+			if !holdMagnet || !torrentstream.IsMagnet(stream.URL) {
+				return stream, "Primary", nil
 			}
+			primaryMagnet = stream
+			*held = stream
 		}
+	}
+	if primaryMagnet == nil && *held != nil && !excludeNames["Primary"] {
+		primaryMagnet = *held
+	}
+
+	if excludeNames["Fallback"] {
+		if primaryMagnet != nil {
+			return primaryMagnet, "Primary", nil
+		}
+		return nil, "", fmt.Errorf("no other source for %s", sess.Title())
 	}
 
 	debugf("resolving stream via fallback providers for %s", sess.Title())
-	stream, err := tryFallbackStream(
-		// The chain is built by excluding its argument, and sess.Provider is
-		// not always the configured primary: the episode-list recovery moves
-		// it to whichever chain member could list the season. Excluding that
-		// one would remove the only provider known to have this show.
-		sess.ChainBase(),
+	// The chain is built by excluding its argument, and sess.Provider is
+	// not always the configured primary: the episode-list recovery moves
+	// it to whichever chain member could list the season. Excluding that
+	// one would remove the only provider known to have this show.
+	chain := agentFallbackProviders(sess.ChainBase())
+	if excludeNames["Primary"] {
+		chain = withoutProvider(chain, sess.Provider)
+	}
+	if flagJSON {
+		chain = withoutMagnetSources(chain)
+	} else if primaryMagnet != nil {
+		chain = withoutProvider(chain, sess.Provider)
+	}
+	stream, err := tryFallbackStreamFrom(
+		chain,
 		sess.Content,
 		sess.CurrentSeason().Number,
 		sess.Current().Number,
 	)
 	if err != nil {
+		if primaryMagnet != nil {
+			if flagJSON {
+				return nil, "", errors.Join(jsonMagnetRefusal(sess.Title(), sess.Content.Type, sess.CurrentSeason().Number, sess.Current().Number),
+					fmt.Errorf("all providers failed for %s: %w", sess.Title(), err))
+			}
+			return primaryMagnet, "Primary", nil
+		}
 		debugf("all fallbacks failed: %v", err)
 		return nil, "", fmt.Errorf("all providers failed for %s: %w", sess.Title(), err)
 	}
 	return stream, "Fallback", nil
+}
+
+// jsonMagnetRefusalError is the failure for a title that resolved to a torrent
+// under --json; play.go finds it with errors.As to emit its message.
+type jsonMagnetRefusalError struct{ msg string }
+
+func (e *jsonMagnetRefusalError) Error() string { return e.msg }
+
+// jsonMagnetRefusal is the error for a title that resolved only to a torrent
+// while --json is set. It advises playing without --json, or fetching the
+// title with the interactive CLI from the torrent source that carries its
+// kind: YTS for a film, EZTV for an episode (picked by season and episode at
+// the CLI's prompts), or Nyaa for anime, which lists a sequel as its own
+// "Title Season N" entry rather than as a season of "Title".
+func jsonMagnetRefusal(title string, mediaType media.MediaType, season, episode int) error {
+	fetch := `lobster --base yts "title" --download <dir>`
+	if mediaType == media.TV {
+		pick := ""
+		if season > 0 && episode > 0 {
+			pick = fmt.Sprintf(", then pick season %d episode %d", season, episode)
+		}
+		fetch = `lobster --base eztv "title" --download <dir>` + pick +
+			`, or --base nyaa for anime, where a sequel is its own "Title Season N" entry`
+	}
+	return &jsonMagnetRefusalError{msg: fmt.Sprintf("%s resolved to a torrent, which --json cannot express as a playable URL; "+
+		"play it without --json, or fetch it first with the interactive CLI (%s; 'play' has no --download)", title, fetch)}
+}
+
+// recoveredTorrentSource reports whether the session's provider is a torrent
+// source the episode-list recovery chose, as opposed to one the user selected.
+func recoveredTorrentSource(sess *playlist.Session) bool {
+	return sess.ChainPrimary != nil && sess.ChainPrimary != sess.Provider && servesMagnets(sess.Provider)
+}
+
+// heldMagnetRemains reports whether a recovered torrent source may still have
+// a magnet to try: resolveStream holds one back for such a session, and
+// neither the primary nor the fallback has been excluded yet. It does not know
+// a magnet was actually held; when none was, the extra attempt costs at most
+// one more Watch before the original error is returned.
+func heldMagnetRemains(sess *playlist.Session, excludeNames map[string]bool) bool {
+	return !flagJSON && recoveredTorrentSource(sess) && !excludeNames["Primary"] && !excludeNames["Fallback"]
 }
 
 // playCurrentEpisode resolves the stream and plays the current episode.
@@ -224,6 +295,12 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		if err != nil {
 			return err
 		}
+		// Same refusal as playStream's JSON branch (cmd/search.go): a magnet
+		// is not a URL a JSON consumer can open, and a loopback URL would die
+		// with this process.
+		if torrentstream.IsMagnet(stream.URL) {
+			return jsonMagnetRefusal(title, sess.Content.Type, sess.CurrentSeason().Number, sess.Current().Number)
+		}
 		return outputJSON(stream, title)
 	}
 
@@ -233,6 +310,11 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		if err != nil {
 			return err
 		}
+		stream, closeTorrent, err := serveTorrent(stream)
+		if err != nil {
+			return err
+		}
+		defer closeTorrent()
 		return downloadEpisode(stream, sess, title)
 	}
 
@@ -264,22 +346,53 @@ func playCurrentEpisode(sess *playlist.Session) error {
 			if e.ID == sess.Content.ID &&
 				e.Season == sess.CurrentSeason().Number &&
 				e.Episode == sess.Current().Number {
-				startPos = e.Position
-				debugf("resuming from position: %.0fs", startPos)
+				startPos = resumePosition(e)
+				if startPos == 0 && e.Position > 0 {
+					debugf("stored position %.0fs is at the end of a %.0fs file; starting over", e.Position, e.Duration)
+				} else {
+					debugf("resuming from position: %.0fs", startPos)
+				}
 				break
 			}
 		}
 	}
 
+	var fallbackErr error
+	var heldMagnet *media.Stream
 	for {
-		stream, serverName, err := resolveStream(sess, excludeNames)
+		stream, serverName, err := resolveStreamHolding(sess, excludeNames, &heldMagnet)
 		if err != nil {
+			if fallbackErr != nil {
+				return fallbackErr
+			}
 			return err
 		}
 
 		subFiles, cleanupSubs := resolveSubtitles(stream, sess.Content.Title, sess.CurrentSeason().Number, sess.Current().Number)
 
+		// A magnet (Nyaa, EZTV, or YTS via torrent_fallback) has to go
+		// through the local torrent server before a player can open it.
+		stream, closeTorrent, err := serveTorrent(stream)
+		if err != nil {
+			cleanupSubs()
+			// A dead swarm is a failed source like any other: exclude it and
+			// try the next one, exactly as a Play failure below does.
+			if serverName == "Fallback" {
+				if !heldMagnetRemains(sess, excludeNames) {
+					return err
+				}
+				fallbackErr = err
+				excludeNames["Fallback"] = true
+				continue
+			}
+			excludeNames[serverName] = true
+			cachedServerName = ""
+			fmt.Fprintf(os.Stderr, "Torrent source failed, trying another source...\n")
+			debugf("torrent error: %v (server %s excluded)", err, serverName)
+			continue
+		}
 		result, playErr := p.Play(stream, title, startPos, subFiles)
+		closeTorrent()
 		cleanupSubs()
 		if playErr == nil {
 			sess.LastPosition = result.Position
@@ -291,13 +404,18 @@ func playCurrentEpisode(sess *playlist.Session) error {
 
 		// Playback failed — if user watched some of it, resume from there
 		if result.Position > 0 {
-			startPos = result.Position
-			debugf("playback stopped at %.0fs, will resume from there", result.Position)
+			startPos = resumePosition(media.HistoryEntry{Position: result.Position, Duration: result.Duration})
+			debugf("playback stopped at %.0fs, will resume from %.0fs", result.Position, startPos)
 		}
 
 		// If the fallback stream also failed, don't retry endlessly
 		if serverName == "Fallback" {
-			return fmt.Errorf("playback failed: %w", playErr)
+			fallbackErr = fmt.Errorf("playback failed: %w", playErr)
+			if !heldMagnetRemains(sess, excludeNames) {
+				return fallbackErr
+			}
+			excludeNames["Fallback"] = true
+			continue
 		}
 
 		// Exclude this server and try the next one

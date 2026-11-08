@@ -92,29 +92,29 @@ func TestFindStampsEachRowWithTheProviderThatProducedIt(t *testing.T) {
 
 // The caller's own spelling of a base survives when the row really did come
 // from the primary. A base is matched by substring (newProvider), so
-// "flixhq.xx" names a specific mirror; collapsing that row to the generic
-// "flixhq" would send a later play to the default domain instead, which is a
-// different source than the one that answered.
+// "flixhq.ws.xx" names a specific mirror; collapsing that row to the generic
+// "flixhq.ws" would send a later play to the default domain instead, which is
+// a different source than the one that answered.
 func TestFindKeepsTheConfiguredSpellingForRowsFromThePrimary(t *testing.T) {
 	hostileEnv(t)
 
 	prevCfg := cfg
-	cfg = &config.Config{Base: "flixhq.xx"}
+	cfg = &config.Config{Base: "flixhq.ws.xx"}
 	t.Cleanup(func() { cfg = prevCfg })
 
 	prevProv := agentProvider
-	agentProvider = func() provider.Provider { return provider.NewFlixHQ("flixhq.xx") }
+	agentProvider = func() provider.Provider { return provider.NewFlixHQWS("flixhq.ws.xx") }
 	t.Cleanup(func() { agentProvider = prevProv })
 
 	refs := decodeFindRefs(t, []media.SearchResult{
-		{ID: "movie/1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "flixhq"},
-		{ID: "movie/2", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "vidnest"},
+		{ID: "movie/1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "flixhq.ws"},
+		{ID: "movie/2", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "tbcpl"},
 	})
-	if refs[0].Base != "flixhq.xx" {
-		t.Errorf("ref for the primary's row has base %q, want %q", refs[0].Base, "flixhq.xx")
+	if refs[0].Base != "flixhq.ws.xx" {
+		t.Errorf("ref for the primary's row has base %q, want %q", refs[0].Base, "flixhq.ws.xx")
 	}
-	if refs[1].Base != "vidnest" {
-		t.Errorf("ref for the fallback row has base %q, want %q", refs[1].Base, "vidnest")
+	if refs[1].Base != "tbcpl" {
+		t.Errorf("ref for the fallback row has base %q, want %q", refs[1].Base, "tbcpl")
 	}
 }
 

@@ -59,7 +59,7 @@ can mix sources, and three entries say how that went:
   source, and do not present the whole list as that source's.
 - `{"code": "base_unknown", "base": "sopa2day", "results_from_base": 0,
   "results_total": 20}` — what they asked for names no source; an unrecognised
-  base is not rejected, it quietly falls through to MovieBox. Tell them the
+  base is not rejected, it quietly falls through to VaPlayer. Tell them the
   name was not recognised and ask which source they meant, rather than
   presenting the results as theirs.
 
@@ -67,7 +67,7 @@ Do not tell the user a row came from their base unless it did; each `ref`
 names its own source where that source has a base token, so prefer the rows
 whose base matches when they asked for one.
 
-`episodes` uses the same array for three entries of its own:
+`episodes` uses the same array for four entries of its own:
 
 - `{"code": "episode_list_incomplete", "provider": "animeonsen",
   "episodes_listed": 8}` — the episodes listed were all confirmed, and the
@@ -80,8 +80,11 @@ whose base matches when they asked for one.
   tell the user an episode past it definitely does not exist, and offer to try
   playing it if they ask for one. This is the normal outcome for sources that
   enumerate by probing, so do not present it to the user as a problem.
-- `{"code": "episode_list_from_fallback", "base": "animeonsen",
-  "provider": "anipub", "episodes_listed": 10}` — the base the user asked for
+- `{"code": "season_list_incomplete", "provider": "eztv"}` — the source could
+  not fetch its whole release list, so `seasons` may be missing some. Do not
+  tell the user a season does not exist because it is not listed.
+- `{"code": "episode_list_from_fallback", "base": "flixhq.ws",
+  "provider": "tbcpl", "episodes_listed": 10}` — the base the user asked for
   could not list this season and a fallback answered instead. Say which source
   the list came from, and do not promise the episodes will play: a fallback can
   list episodes it cannot stream. Try the base again before treating its count
@@ -233,6 +236,13 @@ One row is not a provider: `{"provider": "(resolver)", "stage":
 chain was exhausted, so providers after that point were never asked at all. The
 `N providers tried` count in the message excludes it; anything still running
 when it fired also carries its own `batch-timeout` row.
+
+When the title did resolve, but only to a torrent, `play --json` refuses it
+(a magnet is not a URL a JSON consumer can open). The code is still
+`providers_failed` with exit 3, but the `message` is the refusal itself, which
+tells you to play it without `--json`, and the error carries
+`"torrent_refused": true`. `error.providers` may be present beside it and lists
+the streaming sources that failed first. Do not report this as an outage.
 
 Exit 3 from `play --detach` is a narrower case: the background process was
 started and then died within a second. The message names the log file. Read

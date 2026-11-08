@@ -83,11 +83,6 @@ func TestMain(m *testing.M) {
 	// the check a no-op, and classic is what the re-exec would have selected.
 	os.Setenv("TORRENT_STORAGE_DEFAULT_FILE_IO", "classic")
 
-	// Stub flixhqDomain to prevent live network probes in tests.
-	// Tests that need a healthy or dead result override this with t.Cleanup restore.
-	prev := flixhqDomain
-	flixhqDomain = func(string, map[string][]string) string { return "" }
-	defer func() { flixhqDomain = prev }()
 	m.Run()
 }
 
@@ -130,38 +125,58 @@ func TestFallbackProvidersOmitsConsumetWithNilConfig(t *testing.T) {
 	}
 }
 
-// FlixHQ (the flixhq.to-engine scraper) is gated on a live health probe: it
-// joins the chain only when some mirror in knownDomains/overrides answers, so
-// a dead provider costs one parallel probe per session instead of a full
-// request timeout on every search.
-func TestFallbackProvidersIncludesFlixHQWhenDomainHealthy(t *testing.T) {
-	prev := flixhqDomain
-	flixhqDomain = func(name string, overrides map[string][]string) string { return "flixhq.to" }
-	t.Cleanup(func() { flixhqDomain = prev })
+// The chain is exactly the sources verified working on 2026-11-07, in
+// priority order: VaPlayer, TBCPL, FlixHQWS, AnimeOnsen. (TBCPLEmbed joins
+// when the catalog feed is on, Consumet when api_url is set, YTS when
+// torrent_fallback is set — none of which this fixture enables.)
+func TestFallbackProvidersIsExactlyTheWorkingSources(t *testing.T) {
+	prev := cfg
+	cfg = &config.Config{}
+	t.Cleanup(func() { cfg = prev })
 
-	if !hasProvider[*provider.FlixHQ](fallbackProviders(nil)) {
-		t.Fatal("FlixHQ missing from chain despite a healthy domain")
+	want := []string{"*provider.VaPlayer", "*provider.TBCPL", "*provider.FlixHQWS", "*provider.AnimeOnsen"}
+	got := providerNames(fallbackProviders(nil))
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("fallbackProviders(nil) = %v, want %v", got, want)
 	}
 }
 
-func TestFallbackProvidersOmitsFlixHQWhenAllDomainsDead(t *testing.T) {
-	prev := flixhqDomain
-	flixhqDomain = func(name string, overrides map[string][]string) string { return "" }
-	t.Cleanup(func() { flixhqDomain = prev })
+// The primary is excluded from its own chain, so under the default
+// (autoBase = VaPlayer) the resolver's chain starts at TBCPL.
+func TestFallbackProvidersExcludesTheVaPlayerPrimary(t *testing.T) {
+	prev := cfg
+	cfg = &config.Config{}
+	t.Cleanup(func() { cfg = prev })
+
+	want := []string{"*provider.TBCPL", "*provider.FlixHQWS", "*provider.AnimeOnsen"}
+	got := providerNames(fallbackProviders(provider.NewVaPlayer()))
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("fallbackProviders(VaPlayer) = %v, want %v", got, want)
+	}
+}
+
+// The retired sources (config.retiredBases) must stay out of the chain: each
+// one costs a probe timeout per resolve for an answer that can only be a failure.
+func TestFallbackProvidersNeverIncludesARetiredSource(t *testing.T) {
+	prev := cfg
+	cfg = &config.Config{TorrentFallback: true, APIURL: "https://api.consumet.example"}
+	t.Cleanup(func() { cfg = prev })
 
 	got := fallbackProviders(nil)
-	if hasProvider[*provider.FlixHQ](got) {
-		t.Fatal("FlixHQ present in chain although no domain is healthy")
+	for name, present := range map[string]bool{
+		"Soap2Day":   hasProvider[*provider.Soap2Day](got),
+		"MovieBox":   hasProvider[*provider.MovieBox](got),
+		"VidNest":    hasProvider[*provider.VidNest](got),
+		"FlixHQ":     hasProvider[*provider.FlixHQ](got),
+		"KimCartoon": hasProvider[*provider.KimCartoon](got),
+		"AllAnime":   hasProvider[*provider.AllAnime](got),
+		"AniPub":     hasProvider[*provider.AniPub](got),
+	} {
+		if present {
+			t.Errorf("%s is retired and must not be in the fallback chain: %v", name, providerNames(got))
+		}
 	}
 	if !hasProvider[*provider.FlixHQWS](got) {
-		t.Fatal("FlixHQWS should stay in the chain even when the flixhq gate is closed")
-	}
-}
-
-// AllAnime is retired: its API sits behind a Cloudflare bot challenge and its
-// watch path has been crypto-gated since mid-2026. AniPub covers anime.
-func TestFallbackProvidersNeverIncludesAllAnime(t *testing.T) {
-	if hasProvider[*provider.AllAnime](fallbackProviders(nil)) {
-		t.Fatal("AllAnime should be retired from the fallback chain")
+		t.Errorf("FlixHQWS is a different, working provider and must stay: %v", providerNames(got))
 	}
 }

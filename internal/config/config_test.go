@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -74,7 +75,7 @@ func TestLoadFromTOML(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "config.toml")
 
 	content := `
-base = "moviebox"
+base = "vaplayer"
 player = "vlc"
 provider = "Default"
 quality = "720"
@@ -101,8 +102,8 @@ history = false
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	if cfg.Base != "moviebox" {
-		t.Errorf("base = %q, want moviebox", cfg.Base)
+	if cfg.Base != "vaplayer" {
+		t.Errorf("base = %q, want vaplayer", cfg.Base)
 	}
 	if cfg.Player != "vlc" {
 		t.Errorf("player = %q, want vlc", cfg.Player)
@@ -143,7 +144,7 @@ func TestLoadAPIURL(t *testing.T) {
 	}
 
 	content := `
-base = "flixhq.to"
+base = "flixhq.ws"
 player = "mpv"
 provider = "Vidcloud"
 quality = "1080"
@@ -370,7 +371,7 @@ func TestValidateNormalizesBase(t *testing.T) {
 		{"  auto  ", BaseAuto},
 		{"YTS", "yts"},
 		{"FlixHQ.WS", "flixhq.ws"},
-		{"soap2day", "soap2day"},
+		{"VaPlayer", "vaplayer"},
 	} {
 		c := Default()
 		c.Base = tc.in
@@ -502,5 +503,130 @@ func TestLiveTVSourcesXtreamURLReachesABareIPv6Server(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusOK || string(body) != "#EXTM3U\n" {
 		t.Fatalf("got %d %q, want 200 %q", resp.StatusCode, body, "#EXTM3U\n")
+	}
+}
+
+// writeConfig puts content where Load will find it and points the config dir
+// at it for the rest of the test.
+func writeConfig(t *testing.T, content string) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Setenv("APPDATA", tmpDir)
+	} else {
+		t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	}
+	lobsterDir := filepath.Join(tmpDir, "lobster")
+	if err := os.MkdirAll(lobsterDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lobsterDir, "config.toml"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// captureWarn redirects Warn into a slice for one test.
+func captureWarn(t *testing.T) *[]string {
+	t.Helper()
+	got := new([]string)
+	prev := Warn
+	Warn = func(format string, a ...any) { *got = append(*got, fmt.Sprintf(format, a...)) }
+	t.Cleanup(func() { Warn = prev })
+	return got
+}
+
+// A config file naming a retired source must not lock the user out of every
+// command — `lobster doctor` is the one that tells them what to switch to, and
+// `--base` cannot override a value Load already refused. So Load downgrades it
+// with a warning that names the source, and only an explicit --base flag
+// (cmd.applyConfig) is still an error. The downgrade target is "vaplayer", not
+// "auto": "auto" routes movies to YTS, and a file with torrent_fallback off
+// never opted into a swarm.
+func TestLoadDowngradesARetiredBaseToVaPlayerWithAWarning(t *testing.T) {
+	writeConfig(t, "base = \"soap2day\"\n")
+	warnings := captureWarn(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with base = soap2day = %v, want nil: a retired base in the file must not fail every command", err)
+	}
+	if cfg.Base != BaseVaPlayer {
+		t.Fatalf("Load() left base %q, want %q", cfg.Base, BaseVaPlayer)
+	}
+	if len(*warnings) != 1 {
+		t.Fatalf("Load() warned %d times, want exactly one line: %q", len(*warnings), *warnings)
+	}
+	for _, want := range []string{"Soap2Day", "lobster doctor", "vaplayer"} {
+		if !strings.Contains((*warnings)[0], want) {
+			t.Errorf("warning %q does not mention %q", (*warnings)[0], want)
+		}
+	}
+}
+
+// With torrent_fallback on the user has accepted swarms, so "auto" — the
+// documented default, YTS routing included — is the right downgrade.
+func TestLoadDowngradesARetiredBaseToAutoUnderTorrentFallback(t *testing.T) {
+	writeConfig(t, "base = \"soap2day\"\ntorrent_fallback = true\n")
+	warnings := captureWarn(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	if cfg.Base != BaseAuto {
+		t.Fatalf("Load() left base %q, want %q", cfg.Base, BaseAuto)
+	}
+	if len(*warnings) != 1 || !strings.Contains((*warnings)[0], `"auto"`) {
+		t.Fatalf("warnings = %q, want one line naming auto", *warnings)
+	}
+}
+
+// With api_url set, base is never read (cmd.newProvider builds Consumet
+// instead), so a retired value there is not worth a warning either.
+func TestLoadIgnoresARetiredBaseWhenAPIURLIsSet(t *testing.T) {
+	writeConfig(t, "base = \"moviebox\"\napi_url = \"https://api.consumet.example\"\n")
+	warnings := captureWarn(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	if cfg.Base != "moviebox" {
+		t.Errorf("Load() changed base to %q; with api_url set it is inert and should be left alone", cfg.Base)
+	}
+	if len(*warnings) != 0 {
+		t.Errorf("Load() warned about an inert base: %q", *warnings)
+	}
+}
+
+// Validate no longer rejects a retired base: Load downgrades the file's value
+// and cmd.applyConfig rejects the flag, and both need Validate to pass.
+func TestValidateAcceptsARetiredBase(t *testing.T) {
+	c := Default()
+	c.Base = "soap2day"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("Validate(base=soap2day) = %v, want nil", err)
+	}
+}
+
+// Only flixhq.to is retired; flixhq.ws is a different, working provider and
+// every spelling that says "ws" after "flixhq" means it.
+func TestRetiredBaseSpellings(t *testing.T) {
+	for base, retired := range map[string]bool{
+		"flixhq":     true,
+		"flixhq.to":  true,
+		"FLIXHQ.TO":  true,
+		"flixhq.ws":  false,
+		"flixhqws":   false,
+		"flixhq-ws":  false,
+		"FlixHQ.WS":  false,
+		"soap2days":  true,
+		"vaplayer":   false,
+		"auto":       false,
+		"kimcartoon": true,
+	} {
+		if _, _, got := RetiredBase(base); got != retired {
+			t.Errorf("RetiredBase(%q) = %v, want %v", base, got, retired)
+		}
 	}
 }

@@ -233,16 +233,16 @@ func TestFindCountsOnlyTheRowsTheCallerReceived(t *testing.T) {
 // A base token that selects nothing at all.
 //
 // newProvider has no unknown-base arm: `--base sopa2day` falls through to
-// MovieBox, so primaryBase becomes "moviebox" and every MovieBox row matches
+// VaPlayer, so primaryBase becomes "vaplayer" and every VaPlayer row matches
 // it. Counting those rows as the requested base's would make the typo look
 // like a source that answered in full, and the caller would be told nothing —
-// while every ref in the same response honestly says "moviebox". The input
+// while every ref in the same response honestly says "vaplayer". The input
 // here is exactly that shape: the configured token names no provider, and the
 // rows all come from the fall-through.
 func TestFindWarnsWhenTheBaseNamesNoProviderAtAll(t *testing.T) {
-	warnings, _ := runFindForWarnings(t, "sopa2day", provider.NewMovieBox(), []media.SearchResult{
-		{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "moviebox"},
-		{ID: "2", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "moviebox"},
+	warnings, _ := runFindForWarnings(t, "sopa2day", provider.NewVaPlayer(), []media.SearchResult{
+		{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "vaplayer"},
+		{ID: "2", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "vaplayer"},
 	})
 	if len(warnings) != 1 {
 		t.Fatalf("got %d warnings, want 1: %+v; --base sopa2day selected no provider, so nothing the caller received came from the base they asked for", len(warnings), warnings)
@@ -278,37 +278,38 @@ func TestFindDoesNotCallALegitimateAliasAnUnknownBase(t *testing.T) {
 	}
 }
 
-// The fall-through provider named on purpose. "moviebox" selects MovieBox
+// The fall-through provider named on purpose. "vaplayer" selects VaPlayer
 // through the default arm rather than by falling through it, so it is a base
 // that was used, not one that named nothing.
-func TestFindTreatsAnExplicitMovieBoxBaseAsNamed(t *testing.T) {
-	warnings, envelope := runFindForWarnings(t, "moviebox", provider.NewMovieBox(), []media.SearchResult{
-		{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "moviebox"},
+func TestFindTreatsAnExplicitVaPlayerBaseAsNamed(t *testing.T) {
+	warnings, envelope := runFindForWarnings(t, "vaplayer", provider.NewVaPlayer(), []media.SearchResult{
+		{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "vaplayer"},
 	})
 	if _, ok := envelope["warnings"]; ok {
-		t.Fatalf("got warnings %+v, want none: --base moviebox asked for MovieBox and MovieBox produced every row", warnings)
+		t.Fatalf("got warnings %+v, want none: --base vaplayer asked for VaPlayer and VaPlayer produced every row", warnings)
 	}
 }
 
-// The substring trap. "notmoviebox" names no provider — newProvider has no
-// moviebox arm at all, so it reaches MovieBox through the same default branch
-// "sopa2day" does — yet it *contains* "moviebox". A containment test therefore
-// reads it as an explicit MovieBox base, which costs twice over: the caller is
-// told nothing about a token that selected nothing, and every ref in the
-// response is stamped "notmoviebox", naming a source that does not exist.
+// The substring trap. "notvaplayer" names no provider — newProvider has no
+// vaplayer arm of its own, so it reaches VaPlayer through the same default
+// branch "sopa2day" does — yet it *contains* "vaplayer". A containment test
+// therefore reads it as an explicit VaPlayer base, which costs twice over:
+// the caller is told nothing about a token that selected nothing, and every
+// ref in the response is stamped "notvaplayer", naming a source that does not
+// exist.
 //
 // Only the fall-through token itself may be matched exactly; containment is
-// what makes "notmoviebox" indistinguishable from "moviebox".
+// what makes "notvaplayer" indistinguishable from "vaplayer".
 func TestFindDoesNotMistakeASubstringOfTheFallThroughForThatBase(t *testing.T) {
-	warnings, envelope := runFindForWarnings(t, "notmoviebox", provider.NewMovieBox(), []media.SearchResult{
-		{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "moviebox"},
-		{ID: "2", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "moviebox"},
+	warnings, envelope := runFindForWarnings(t, "notvaplayer", provider.NewVaPlayer(), []media.SearchResult{
+		{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "vaplayer"},
+		{ID: "2", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "vaplayer"},
 	})
 	if len(warnings) != 1 || warnings[0].Code != "base_unknown" {
-		t.Fatalf("got warnings %+v, want one base_unknown; --base notmoviebox selected no provider, it merely contains the fall-through's token", warnings)
+		t.Fatalf("got warnings %+v, want one base_unknown; --base notvaplayer selected no provider, it merely contains the fall-through's token", warnings)
 	}
-	if warnings[0].Base != "notmoviebox" {
-		t.Errorf("warning base = %q, want %q", warnings[0].Base, "notmoviebox")
+	if warnings[0].Base != "notvaplayer" {
+		t.Errorf("warning base = %q, want %q", warnings[0].Base, "notvaplayer")
 	}
 
 	var results []struct {
@@ -325,8 +326,8 @@ func TestFindDoesNotMistakeASubstringOfTheFallThroughForThatBase(t *testing.T) {
 		if err != nil {
 			t.Fatalf("decodeRef(results[%d]): %v", i, err)
 		}
-		if decoded.Base != "moviebox" {
-			t.Errorf("ref for row %d has base %q, want %q; MovieBox produced the row and \"notmoviebox\" names nothing, so stamping it would send a replay looking for a source that does not exist", i, decoded.Base, "moviebox")
+		if decoded.Base != "vaplayer" {
+			t.Errorf("ref for row %d has base %q, want %q; VaPlayer produced the row and \"notvaplayer\" names nothing, so stamping it would send a replay looking for a source that does not exist", i, decoded.Base, "vaplayer")
 		}
 	}
 }

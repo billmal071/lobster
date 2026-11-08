@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -36,6 +37,13 @@ var rootPersistentFlagNames = []string{
 // calls findRun/playRun cannot see them at all.
 func runCLI(t *testing.T, args ...string) cliRun {
 	t.Helper()
+	return runCLIWithConfig(t, "", args...)
+}
+
+// runCLIWithConfig is runCLI with configTOML written where config.Load will
+// find it; "" means no config file at all.
+func runCLIWithConfig(t *testing.T, configTOML string, args ...string) cliRun {
+	t.Helper()
 
 	// Keep config.Load away from the developer's real config file.
 	dir := t.TempDir()
@@ -43,6 +51,17 @@ func runCLI(t *testing.T, args ...string) cliRun {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
+	t.Setenv("APPDATA", filepath.Join(dir, "config"))    // config.configDir, windows
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "data")) // config.dataDir, windows
+	if configTOML != "" {
+		cfgDir := filepath.Join(dir, "config", "lobster")
+		if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(configTOML), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	snapshotFlags(t, rootCmd, rootPersistentFlagNames...)
 	snapshotFlags(t, findCmd, "type", "limit")

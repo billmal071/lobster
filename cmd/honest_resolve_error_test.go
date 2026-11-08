@@ -68,9 +68,10 @@ func withPlayerAvailable(t *testing.T) {
 // per-provider list.
 type errEnvelope struct {
 	Error struct {
-		Code      string `json:"code"`
-		Message   string `json:"message"`
-		Providers []struct {
+		Code           string `json:"code"`
+		Message        string `json:"message"`
+		TorrentRefused bool   `json:"torrent_refused"`
+		Providers      []struct {
 			Provider   string `json:"provider"`
 			Stage      string `json:"stage"`
 			Error      string `json:"error"`
@@ -303,5 +304,61 @@ func TestProvidersTriedExcludesTheResolversOwnTimeoutRow(t *testing.T) {
 	}
 	if rows[2]["provider"] != resolver.SyntheticProvider || rows[2]["stage"] != resolver.StageOverallTimeout {
 		t.Errorf("providerRows()[2] = %+v, want the %q / %q row preserved", rows[2], resolver.SyntheticProvider, resolver.StageOverallTimeout)
+	}
+}
+
+type magnetShow struct {
+	*stubProvider
+	stream *media.Stream
+}
+
+func (m *magnetShow) Watch(string, string, string, string) (*media.Stream, error) {
+	return m.stream, nil
+}
+func (*magnetShow) ServesMagnets() {}
+
+func TestPlayRefJSONOfATorrentOnlyTitleEmitsTheRefusalHint(t *testing.T) {
+	hostileEnv(t)
+	playStreamHarness(t, &stubPlayerImpl{})
+	buf := captureAgentOut(t)
+	withPlayerAvailable(t)
+
+	a, b := newDeadChain("Some Show")
+	withFallbackChain(t, a, b)
+	show := &magnetShow{
+		stubProvider: &stubProvider{
+			seasons:  []media.Season{{ID: "s1", Number: 1}},
+			episodes: []media.Episode{{ID: "e1", Number: 1, Title: "Pilot"}},
+		},
+		stream: &media.Stream{URL: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Show"},
+	}
+	prev := agentProvider
+	agentProvider = func() provider.Provider { return show }
+	t.Cleanup(func() { agentProvider = prev })
+
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+	prevEpisode, prevJSON := flagEpisode, flagJSON
+	flagEpisode, flagJSON = 1, true
+	t.Cleanup(func() { flagEpisode, flagJSON = prevEpisode, prevJSON })
+
+	err := playRun(playCmd, nil)
+	if err == nil {
+		t.Fatalf("play succeeded; it emitted %q", buf.String())
+	}
+	if got := exitCodeOf(err); got != exitProvidersFailed {
+		t.Errorf("exit = %d, want %d (providers_failed)", got, exitProvidersFailed)
+	}
+	env := decodeErrEnvelope(t, buf.String())
+	if env.Error.Code != "providers_failed" {
+		t.Errorf("error code = %q, want providers_failed", env.Error.Code)
+	}
+	if !strings.Contains(env.Error.Message, "play it without --json") {
+		t.Errorf("emitted message %q lost the torrent-refusal hint", env.Error.Message)
+	}
+	if !env.Error.TorrentRefused {
+		t.Errorf("error.torrent_refused is not set; envelope: %s", buf.String())
+	}
+	if len(env.Error.Providers) != 2 {
+		t.Errorf("error.providers has %d rows, want the 2 dead streamers; envelope: %s", len(env.Error.Providers), buf.String())
 	}
 }

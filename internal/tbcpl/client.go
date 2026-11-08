@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -130,7 +131,12 @@ func (cl *Client) readCacheIfFresh() ([]byte, bool) {
 	return data, true
 }
 
+// writeCache stores data at the cache path, creating its directory; a failure is logged and otherwise ignored.
 func (cl *Client) writeCache(data []byte) {
+	if err := os.MkdirAll(filepath.Dir(cl.cachePath), 0o755); err != nil {
+		cl.log("tbcpl: cache dir: %v", err)
+		return
+	}
 	if err := os.WriteFile(cl.cachePath, data, 0o644); err != nil {
 		cl.log("tbcpl: cache write failed: %v", err)
 	}

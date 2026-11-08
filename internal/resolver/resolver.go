@@ -95,7 +95,9 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (*media.Stream, *Re
 				remaining--
 				delete(pending, res.Provider)
 				report.add(res)
-				r.health.Record(res.Provider, res.Err == nil, res.Latency)
+				if res.Stage != StageAccept {
+					r.health.Record(res.Provider, res.Err == nil, res.Latency)
+				}
 				if res.Err == nil && res.Stream != nil {
 					_ = r.health.Save()
 					return res.Stream, report, nil // abandon the rest

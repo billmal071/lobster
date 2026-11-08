@@ -28,6 +28,7 @@ type StreamResult struct {
 	URL        string
 	StreamType string // "hls" or "http"
 	Referer    string
+	UserAgent  string
 }
 
 // ResolveRequest describes the work a queued download needs a stream for.
@@ -179,7 +180,7 @@ func (m *Manager) Cancel(id int) error {
 // Retry re-queues a failed download for another attempt.
 func (m *Manager) Retry(id int) error {
 	// Clear stream info so it gets re-resolved.
-	if err := m.store.UpdateStreamInfo(id, "", "", ""); err != nil {
+	if err := m.store.UpdateStreamInfo(id, "", "", "", ""); err != nil {
 		return err
 	}
 	if err := m.store.UpdateStatus(id, "queued", ""); err != nil {
@@ -233,6 +234,7 @@ func (m *Manager) worker() {
 	}
 }
 
+// processDownload runs one claimed download to a final state. It resolves the stream through the resolver when none is stored, saving the result with its Referer and User-Agent, dispatches on the stream type, and records completed or failed, leaving the status alone when the download was cancelled or paused.
 func (m *Manager) processDownload(dl *store.Download) {
 	dlCtx, dlCancel := context.WithCancel(m.ctx)
 	m.mu.Lock()
@@ -269,7 +271,8 @@ func (m *Manager) processDownload(dl *store.Download) {
 		dl.StreamURL = result.URL
 		dl.StreamType = result.StreamType
 		dl.Referer = result.Referer
-		m.store.UpdateStreamInfo(dl.ID, result.URL, result.StreamType, result.Referer)
+		dl.UserAgent = result.UserAgent
+		m.store.UpdateStreamInfo(dl.ID, result.URL, result.StreamType, result.Referer, result.UserAgent)
 	}
 
 	if dl.StreamURL == "" {
@@ -303,6 +306,7 @@ func (m *Manager) processDownload(dl *store.Download) {
 	m.sendProgress(ProgressUpdate{DownloadID: dl.ID, Status: "completed"})
 }
 
+// downloadHTTP downloads dl over the HTTP engine, resuming when bytes were already saved, and records byte progress and speed.
 func (m *Manager) downloadHTTP(ctx context.Context, dl *store.Download) error {
 	tracker := newSpeedTracker()
 
@@ -320,11 +324,12 @@ func (m *Manager) downloadHTTP(ctx context.Context, dl *store.Download) error {
 
 	// Check for existing partial download.
 	if dl.DoneBytes > 0 {
-		return m.httpEngine.Resume(ctx, dl.StreamURL, dl.OutputPath, dl.Referer, progressFn)
+		return m.httpEngine.Resume(ctx, dl.StreamURL, dl.OutputPath, engine.Headers{Referer: dl.Referer, UserAgent: dl.UserAgent}, progressFn)
 	}
-	return m.httpEngine.Download(ctx, dl.StreamURL, dl.OutputPath, dl.Referer, progressFn)
+	return m.httpEngine.Download(ctx, dl.StreamURL, dl.OutputPath, engine.Headers{Referer: dl.Referer, UserAgent: dl.UserAgent}, progressFn)
 }
 
+// downloadHLS downloads dl over the HLS engine, resuming from the recorded segments when some were already saved, and records segment progress and speed.
 func (m *Manager) downloadHLS(ctx context.Context, dl *store.Download) error {
 	tracker := newSpeedTracker()
 
@@ -341,9 +346,9 @@ func (m *Manager) downloadHLS(ctx context.Context, dl *store.Download) error {
 	}
 
 	if dl.DoneSegments > 0 {
-		return m.hlsEngine.ResumeWithID(ctx, dl.ID, dl.StreamURL, dl.OutputPath, dl.Referer, progressFn)
+		return m.hlsEngine.ResumeWithID(ctx, dl.ID, dl.StreamURL, dl.OutputPath, engine.Headers{Referer: dl.Referer, UserAgent: dl.UserAgent}, progressFn)
 	}
-	return m.hlsEngine.ResumeWithID(ctx, dl.ID, dl.StreamURL, dl.OutputPath, dl.Referer, progressFn)
+	return m.hlsEngine.ResumeWithID(ctx, dl.ID, dl.StreamURL, dl.OutputPath, engine.Headers{Referer: dl.Referer, UserAgent: dl.UserAgent}, progressFn)
 }
 
 func (m *Manager) sendProgress(p ProgressUpdate) {

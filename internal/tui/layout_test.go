@@ -75,3 +75,14 @@ func TestPosterVisible(t *testing.T) {
 		})
 	}
 }
+
+// Four tabs (Movies, Series, Anime, Live TV) and a fifth with downloads; the
+// footer's number-key hint has to say so.
+func TestTabRangeHintMatchesTheTabCount(t *testing.T) {
+	if got := tabRangeHint(false); got != "[1-4]" {
+		t.Errorf("tabRangeHint(false) = %q, want [1-4]", got)
+	}
+	if got := tabRangeHint(true); got != "[1-5]" {
+		t.Errorf("tabRangeHint(true) = %q, want [1-5]", got)
+	}
+}

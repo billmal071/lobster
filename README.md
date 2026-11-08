@@ -128,14 +128,24 @@ broke, which is the difference between a cheap fix and a rewrite:
 $ lobster doctor
 Provider health (query: "The Matrix")
 
-  ok   AniPub         2.912s           26 results, stream resolved
   ok   FlixHQWS       3.815s           4 results, 3 servers, embed via Vidmoly
-  FAIL FlixHQ        20.514s  search   unexpected status 522
-  FAIL MovieBox        569ms  search   unexpected status 440
-  FAIL Soap2Day       1.848s  watch    no embed ID in video URL
+  ok   TBCPL          1.912s           18 results, stream resolved
+  ok   TBCPL(1shows)  2.102s           18 results, stream resolved
+  ok   VaPlayer       1.204s           20 results, stream resolved
+  ok   YTS            0.871s           12 results, magnet resolved
+  ok   EZTV           1.530s           5 results, magnet resolved
+  ok   Nyaa           0.912s           8 results, magnet resolved
+  FAIL AnimeOnsen     4.310s  search   no results for "One Punch Man"
 
-4 of 11 providers usable.
+7 of 8 providers usable.
 ```
+
+Only sources lobster still wires in are probed. Soap2Day, MovieBox, VidNest,
+FlixHQ (`flixhq.to`), KimCartoon, AllAnime and AniPub were retired on
+2026-11-07 after each was verified dead upstream with nothing to fix on
+lobster's side. A config file still naming one is treated as `auto` with a
+warning, so `lobster doctor` keeps working; an explicit `--base` naming one is
+an error that says so.
 
 A failure at `search` usually means a moved domain or a renamed field. A failure
 at `watch` or `embed` means the player changed. Pass a title to probe with
@@ -156,7 +166,7 @@ Live TV lives in the dashboard, so start it with **no search query**:
 
 Then:
 
-1. Press **`5`** to open the **Live TV** tab.
+1. Press **`4`** to open the **Live TV** tab.
 2. Pick the **Sports** category and press **Enter**. (It currently carries **456 channels**.)
 3. Pick a channel and press **Enter** — it opens in your player.
 
@@ -279,8 +289,12 @@ never mentioned `--base`:
   source's rows.
 - `{"code": "base_unknown", "base": "sopa2day", "results_from_base": 0,
   "results_total": 20}` — the value passed to `--base` names no source at all.
-  An unrecognised base is not rejected; it falls through to MovieBox, which is
-  what the results came from. Fix the spelling rather than retrying.
+  An unrecognised base is not rejected; it falls through to VaPlayer, the
+  primary (when VaPlayer returns fewer than three results, `find` also
+  searches the fallback providers, so some rows can come from them). Fix the spelling rather than retrying. (A base
+  naming a retired source — `soap2day`, `moviebox` — is rejected outright
+  when passed as `--base`; in the config file it is downgraded to `auto` with
+  a warning.)
 
 `episodes` carries the same array for a different question — whether the
 listing is the whole season:
@@ -301,8 +315,11 @@ listing is the whole season:
   whole season. It is not a floor in the way the code above is, and the two are
   separate codes because a single code fired on most correct runs and so said
   nothing.
-- `{"code": "episode_list_from_fallback", "base": "animeonsen",
-  "provider": "anipub", "episodes_listed": 10}` — the source named by `--base`
+- `{"code": "season_list_incomplete", "provider": "eztv"}` — the source could
+  not fetch its whole release list, so `seasons` may be missing some. A season
+  absent from it is not proof the season does not exist.
+- `{"code": "episode_list_from_fallback", "base": "flixhq.ws",
+  "provider": "tbcpl", "episodes_listed": 10}` — the source named by `--base`
   (or by the ref) could not list this season, so the listing came from a
   fallback provider. `provider` has always named whoever answered; this says
   that someone else was asked first and could not, which is a different fact
@@ -378,11 +395,14 @@ download_dir = "~/Videos/lobster"
 # Provider selection (default: auto)
 # "auto" means "no preference": movies play from YTS where YTS carries them,
 # series always go to a scraping source (YTS has no TV catalogue), and
-# anything YTS does not carry falls back to soap2day. Any other value is an
+# anything YTS does not carry falls back to vaplayer. Any other value is an
 # explicit choice and is used for both content types.
-# Available: auto, moviebox, flixhq.to, flixhq.ws, soap2day, kimcartoon,
-# vaplayer, vidnest, tbcpl, 1shows.org, animeonsen, allanime, yts
-# All other providers are automatically used as fallbacks.
+# Available: auto, vaplayer, flixhq.ws, tbcpl, 1shows.org, animeonsen, yts,
+# nyaa (anime torrents), eztv (TV series torrents)
+# All other providers are automatically used as fallbacks (the torrent ones
+# only with torrent_fallback = true).
+# Retired (treated as "auto" with a warning here; an error as --base):
+# soap2day, moviebox, vidnest, flixhq.to, kimcartoon, allanime, anipub.
 # What each value covers, and which of them cannot list a series' episodes, is
 # in GUIDE.md -> "Content sources"; `lobster doctor` reports which are working
 # right now. Changing base loses in-progress resume positions, because history
@@ -390,12 +410,13 @@ download_dir = "~/Videos/lobster"
 # your resume positions".
 # base = "auto"
 
-# yts is BitTorrent, not HTTP streaming. It plays while downloading, but it
-# also makes you a participant in the swarm: your IP is visible to every peer
+# yts, nyaa and eztv are BitTorrent, not HTTP streaming. They play while
+# downloading, but also make you a participant in the swarm: your IP is visible to every peer
 # and to the monitoring firms that sit in them, which ordinary streaming never
 # does. This applies to the default install, because "auto" plays movies from
-# YTS — set base = "soap2day" (or any other explicit source, or api_url) and
-# leave torrent_fallback false to never join a swarm. Otherwise use a VPN.
+# YTS — set base = "vaplayer" (or another explicit non-torrent source, or
+# api_url) and leave torrent_fallback false to never join a swarm. Naming yts,
+# nyaa or eztv joins one even with torrent_fallback false. Otherwise use a VPN.
 # Needs a 64-bit build, or the classic storage backend, which lobster selects
 # for you on a run that may stream a torrent (GUIDE.md -> "Torrent storage
 # backend"). Pieces land in ~/Videos/.lobster/ and are removed when playback
@@ -407,16 +428,8 @@ download_dir = "~/Videos/lobster"
 # remux can be tens of gigabytes. The directory is deleted when playback ends.
 # torrent_dir = "/mnt/scratch/lobster"
 
-# Lift AllAnime's adult filter on search. Off by default.
-#
-# It is not only an adult-content switch: AllAnime's catalogue hides some
-# ordinary titles behind the same filter, and they are unreachable without
-# this. It does also surface genuine adult titles, though only on suggestive
-# queries — measured over a 40-row cap, "naruto", "school", "sister" and
-# "nurse" returned identical results either way, while "love" gained two
-# hentai entries. It restores discovery only: AllAnime's sources endpoint is
-# still crypto-gated, so a title found this way is played from the fallback
-# chain.
+# Lifted AllAnime's adult filter on search. Inert since AllAnime's retirement
+# (see base above); kept so existing config files still parse.
 # allow_adult_anime = false
 
 # Optional: use a consumet API backend instead of the built-in scraper.
@@ -424,8 +437,8 @@ download_dir = "~/Videos/lobster"
 # When set, lobster uses this API for search, streaming, etc. It overrides
 # `base` entirely, and counts as an explicit source: movies are not routed to
 # YTS. With torrent_fallback left false, such a run never joins a swarm —
-# torrent_fallback = true puts YTS back in the fallback chain whatever api_url
-# says.
+# torrent_fallback = true puts YTS, EZTV and Nyaa back in the fallback chain
+# whatever api_url says.
 # api_url = "https://your-consumet-instance.example.com"
 
 # Live TV sources. See "Live TV and Sports" above.

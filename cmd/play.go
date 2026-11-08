@@ -103,6 +103,15 @@ func applyRefBase(cmd *cobra.Command, r playRef) {
 	// It also makes `changed` mean "this run moved" rather than "the token
 	// was spelled differently".
 	base := config.NormalizeBase(r.Base)
+	// A ref stamped with a retired source (config.RetiredBase) still names
+	// the work: play re-searches by title through the chain (cmd/ref.go), and
+	// older soap2day refs carry TMDB IDs VaPlayer reads. Ignore the stamp,
+	// stay on the configured base, and say so once. The play envelope has no
+	// warnings field, so this is stderr in --json mode too.
+	if name, reason, ok := config.RetiredBase(base); ok {
+		warnf("ref: base %q names %s, which no longer works (%s); continuing with the configured source", base, name, reason)
+		base = ""
+	}
 	if base != "" && cfg != nil && !cmd.Flags().Changed("base") {
 		changed := cfg.Base != base
 		cfg.Base = base
@@ -145,7 +154,8 @@ func applyRefBase(cmd *cobra.Command, r playRef) {
 // better informed.
 func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) error {
 	seasons, err := p.GetSeasons(r.ID)
-	if err != nil || len(seasons) == 0 {
+	partial := len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList)
+	if (err != nil && !partial) || len(seasons) == 0 {
 		// Same condition resolveAndPlay branches on. Let it do its job.
 		debugf("play: cannot validate season/episode against primary (err=%v, seasons=%d); deferring to the resolver", err, len(seasons))
 		return nil
@@ -193,10 +203,15 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 		// All of it happens only on a request the command used to refuse
 		// outright — the ordinary play, where the primary lists the season,
 		// still runs none.
-		if _, _, _, ok := seasonAcrossHits(p, seasonRequest(r), seasonAnswer{
-			provider: p, id: r.ID, seasons: seasons, fromPrimary: true,
-		}, season); ok {
+		scanned, _, _, ok := seasonAcrossHits(p, seasonRequest(r), seasonAnswer{
+			provider: p, id: r.ID, seasons: seasons, fromPrimary: true, partial: partial,
+		}, season)
+		if ok {
 			debugf("play: the primary's season list lacks %d but a chain hit has it; deferring to the resolver", season)
+			return nil
+		}
+		if scanned.partial {
+			debugf("play: season %d is absent only from season lists flagged incomplete; deferring to the resolver", season)
 			return nil
 		}
 		// Formatted through errSeasonNotFound rather than inline, so this
@@ -221,6 +236,7 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 		"season %d of %q has no episode %d", season, r.Title, episode)
 }
 
+// playRun plays the --ref title with the configured source. It rejects a bad ref, a series without --season and --episode, --download, and an unavailable player before resolving anything, hands live refs to their own path, and reports a failed resolution as a JSON error envelope.
 func playRun(cmd *cobra.Command, args []string) error {
 	r, err := decodeRef(flagRef)
 	if err != nil {
@@ -297,7 +313,16 @@ func playRun(cmd *cobra.Command, args []string) error {
 		// above) call for opposite advice, and only errSeasonNotFound is the
 		// latter.
 		var resolveErr *resolveFailure
-		if errors.As(err, &resolveErr) {
+		hasReport := errors.As(err, &resolveErr)
+		var refusal *jsonMagnetRefusalError
+		if errors.As(err, &refusal) {
+			detail := map[string]any{"torrent_refused": true}
+			if hasReport {
+				detail["providers"] = resolveErr.providerRows()
+			}
+			return emitErrDetail("providers_failed", exitProvidersFailed, detail, "%s", refusal.msg)
+		}
+		if hasReport {
 			return emitErrDetail("providers_failed", exitProvidersFailed,
 				map[string]any{"providers": resolveErr.providerRows()},
 				"no source could stream %s: %d providers tried, none produced a playable stream (per-provider reasons in error.providers)",

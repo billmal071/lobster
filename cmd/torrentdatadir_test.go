@@ -21,7 +21,7 @@ func TestPlayStreamPassesTheConfiguredTorrentDir(t *testing.T) {
 	var got string
 	called := false
 	prev := newTorrentServer
-	newTorrentServer = func(opts torrentstream.Options) (*torrentstream.Server, error) {
+	newTorrentServer = func(opts torrentstream.Options) (torrentServer, error) {
 		got, called = opts.DataDir, true
 		return nil, errors.New("stubbed: no client started")
 	}
@@ -52,7 +52,7 @@ func TestPlayStreamExpandsTildeInTorrentDir(t *testing.T) {
 
 	var got string
 	prev := newTorrentServer
-	newTorrentServer = func(opts torrentstream.Options) (*torrentstream.Server, error) {
+	newTorrentServer = func(opts torrentstream.Options) (torrentServer, error) {
 		got = opts.DataDir
 		return nil, errors.New("stubbed: no client started")
 	}
@@ -87,7 +87,7 @@ func TestPlayStreamTellsTheTorrentServerWhenItNeedsTheWholeFile(t *testing.T) {
 
 			var got torrentstream.Options
 			prev := newTorrentServer
-			newTorrentServer = func(opts torrentstream.Options) (*torrentstream.Server, error) {
+			newTorrentServer = func(opts torrentstream.Options) (torrentServer, error) {
 				got = opts
 				return nil, errors.New("stubbed: no client started")
 			}

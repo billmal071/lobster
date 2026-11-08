@@ -24,33 +24,26 @@ import (
 // BitTorrent.
 func providerBase(p provider.Provider) string {
 	switch p.(type) {
-	case *provider.Soap2Day:
-		return "soap2day"
-	case *provider.KimCartoon:
-		return "kimcartoon"
 	case *provider.FlixHQWS:
 		return "flixhq.ws"
-	case *provider.FlixHQ:
-		return "flixhq"
 	case *provider.TBCPL:
 		return "tbcpl"
-	case *provider.VidNest:
-		return "vidnest"
 	case *provider.VaPlayer:
 		return "vaplayer"
 	case *provider.YTS:
 		return "yts"
-	case *provider.AllAnime:
-		return "allanime"
 	case *provider.AnimeOnsen:
 		return "animeonsen"
-	case *provider.MovieBox:
-		return "moviebox"
+	case *provider.Nyaa:
+		return "nyaa"
+	case *provider.EZTV:
+		return "eztv"
 	}
-	// AniPub, TBCPLEmbed and Consumet fall through deliberately. No base value
-	// reaches them: they are not in newProvider's chain (Consumet is selected
-	// by api_url instead), so any token would name a different provider than
-	// the one that answered.
+	// TBCPLEmbed and Consumet fall through deliberately. No base value reaches
+	// them: they are not in newProvider's chain (Consumet is selected by
+	// api_url instead), so any token would name a different provider than the
+	// one that answered. The retired providers (config.retiredBases) fall
+	// through for the same reason: newProvider no longer builds them.
 	return ""
 }
 
@@ -61,15 +54,15 @@ var searchProviderBase = providerBase
 
 // fallThroughBase is the token of the provider newProvider builds when no arm
 // matches the configured base. newProvider has no unknown-base arm: it ends in
-// an unconditional MovieBox, so `--base sopa2day` silently searches MovieBox.
+// an unconditional VaPlayer, so `--base sopa2day` silently searches VaPlayer.
 //
 // It is derived from providerBase rather than written out, so the spelling
 // cannot drift from the table above, and
 // TestFallThroughBaseIsWhatAnUnrecognisedBaseActuallySelects pins the
-// remaining half — that MovieBox is still what an unrecognised base reaches —
+// remaining half — that VaPlayer is still what an unrecognised base reaches —
 // against newProvider itself. A second switch mirroring newProvider's arms is
 // what that test exists to make unnecessary.
-var fallThroughBase = providerBase(provider.NewMovieBox())
+var fallThroughBase = providerBase(provider.NewVaPlayer())
 
 // baseNamedThePrimary reports whether the configured base token actually
 // selected the provider that answered, rather than being a value newProvider
@@ -79,16 +72,16 @@ var fallThroughBase = providerBase(provider.NewMovieBox())
 // that is not the fall-through can only have come from an arm the configured
 // value satisfied: it named that provider, however it was spelled. That is
 // what keeps "1shows.org" — a real TBCPL base whose spelling contains no
-// "tbcpl" — a named base, and "flixhq.xx" a named FlixHQ one, without
+// "tbcpl" — a named base, and "flixhq.ws.xx" a named FlixHQWS one, without
 // mirroring newProvider's aliases here.
 //
 // The fall-through is the one primary that cannot be read that way, because
 // it is where every unrecognised value lands, and there the configured value
-// has to be that exact token. Containment is not enough: "notmoviebox"
-// reaches MovieBox through the same default branch "sopa2day" does, so
+// has to be that exact token. Containment is not enough: "notvaplayer"
+// reaches VaPlayer through the same default branch "sopa2day" does, so
 // matching it by substring would call a base that selected nothing an
-// explicit MovieBox base — and would then stamp "notmoviebox", a source that
-// does not exist, onto rows MovieBox produced.
+// explicit VaPlayer base — and would then stamp "notvaplayer", a source that
+// does not exist, onto rows VaPlayer produced.
 func baseNamedThePrimary(configured, primaryBase string) bool {
 	if primaryBase != fallThroughBase {
 		return true

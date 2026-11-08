@@ -541,6 +541,7 @@ func (p *LiveTV) Search(query string) ([]media.SearchResult, error) {
 	return out, nil
 }
 
+// Watch returns the stream of the channel mediaID: a browser URL for a channel that is only an embed page, otherwise the channel URL with its Referer and User-Agent.
 func (p *LiveTV) Watch(mediaID, _, _, _ string) (*media.Stream, error) {
 	p.load()
 	if p.loadErr != nil {
