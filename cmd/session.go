@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -181,7 +182,8 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 	if sp, ok := sess.Provider.(provider.StreamProvider); ok && !excludeNames["Primary"] {
 		ep := sess.Current()
 		if stream, err := sp.Watch(sess.ProviderKey(), ep.ID, "Default", cfg.Quality); err == nil && stream != nil {
-			if !flagJSON || !torrentstream.IsMagnet(stream.URL) {
+			holdMagnet := flagJSON || recoveredTorrentSource(sess)
+			if !holdMagnet || !torrentstream.IsMagnet(stream.URL) {
 				return stream, "Primary", nil
 			}
 			primaryMagnet = stream
@@ -208,12 +210,27 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 	)
 	if err != nil {
 		if primaryMagnet != nil {
+			if flagJSON {
+				return nil, "", errors.Join(jsonMagnetRefusal(sess.Title()),
+					fmt.Errorf("all providers failed for %s: %w", sess.Title(), err))
+			}
 			return primaryMagnet, "Primary", nil
 		}
 		debugf("all fallbacks failed: %v", err)
 		return nil, "", fmt.Errorf("all providers failed for %s: %w", sess.Title(), err)
 	}
 	return stream, "Fallback", nil
+}
+
+func jsonMagnetRefusal(title string) error {
+	return fmt.Errorf("%s resolved to a torrent, which --json cannot express as a playable URL; "+
+		"play it without --json, or use --download to fetch it first", title)
+}
+
+// recoveredTorrentSource reports whether the session's provider is a torrent
+// source the episode-list recovery chose, as opposed to one the user selected.
+func recoveredTorrentSource(sess *playlist.Session) bool {
+	return sess.ChainPrimary != nil && sess.ChainPrimary != sess.Provider && servesMagnets(sess.Provider)
 }
 
 // playCurrentEpisode resolves the stream and plays the current episode.
@@ -232,8 +249,7 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		// is not a URL a JSON consumer can open, and a loopback URL would die
 		// with this process.
 		if torrentstream.IsMagnet(stream.URL) {
-			return fmt.Errorf("%s resolved to a torrent, which --json cannot express as a playable URL; "+
-				"play it without --json, or use --download to fetch it first", title)
+			return jsonMagnetRefusal(title)
 		}
 		return outputJSON(stream, title)
 	}

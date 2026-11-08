@@ -3,6 +3,7 @@ package provider
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -265,6 +266,8 @@ func TestNyaaParseTitle(t *testing.T) {
 		{"[Group] Show - 05 (2019) [1080p]", "Group", "Show", 0, 5, 1080, "", false},
 		{"[SubsPlease] 86 - 12 (1080p) [ABCD1234].mkv", "SubsPlease", "86", 0, 12, 1080, "", false},
 		{"[Group] Show 01-12 [1080p]", "Group", "", 0, 0, 1080, "", true},
+		{"[Group] Show - 05 [WEB 2019-2020] [1080p]", "Group", "Show", 0, 5, 1080, "", false},
+		{"[Group] Show - 05 [WEB 1998-2003] [1080p]", "Group", "Show", 0, 5, 1080, "", false},
 		{"Sayonara.Lara.2026.S01E11.MULTI.Audio.Sub.1080p.BDRip.CUSTOM.x264.PCM-KuroNeko VOSTFR Goodbye Lara", "", "Sayonara Lara", 1, 11, 1080, "2026", false},
 		{"[AnoZu] One Piece S23E03 1080p CR WEB-DL Dual-Audio DDP 2.0 H.264", "AnoZu", "One Piece", 23, 3, 1080, "", false},
 		// "EP<n>" with no separator.
@@ -849,5 +852,42 @@ func TestNyaaFeedOverTheSizeLimitIsReportedAsSuch(t *testing.T) {
 	_, err := NewNyaa().Search("anything")
 	if err == nil || !strings.Contains(err.Error(), "size limit") {
 		t.Fatalf("err = %v, want a size-limit error", err)
+	}
+}
+
+func nyaaFeedURLFor(q string) string {
+	return nyaaBase + "/?page=rss&c=" + nyaaCategory + "&q=" + q
+}
+
+func TestNyaaCacheStaysWithinItsBound(t *testing.T) {
+	nyaaStub(t)
+	n := NewNyaa()
+	for i := 0; i < nyaaCacheMax+20; i++ {
+		if _, err := n.fetch(nyaaFeedURLFor(strconv.Itoa(i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(n.cache); got > nyaaCacheMax {
+		t.Errorf("cache holds %d feeds, want at most %d", got, nyaaCacheMax)
+	}
+}
+
+func TestNyaaCacheEvictsExpiredFeedsOnInsert(t *testing.T) {
+	nyaaStub(t)
+	n := NewNyaa()
+	old := nyaaCacheTTL
+	nyaaCacheTTL = time.Millisecond
+	defer func() { nyaaCacheTTL = old }()
+	for i := 0; i < 3; i++ {
+		if _, err := n.fetch(nyaaFeedURLFor(strconv.Itoa(i))); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := n.fetch(nyaaFeedURLFor("last")); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(n.cache); got != 1 {
+		t.Errorf("cache holds %d feeds, want only the fresh one", got)
 	}
 }

@@ -28,6 +28,8 @@ const nyaaCategory = "1_2"
 // Search/GetEpisodes/GetServers/Watch steps of one play.
 var nyaaCacheTTL = 5 * time.Minute
 
+const nyaaCacheMax = 32
+
 // nyaaTrackers are the announce URLs Nyaa puts in its own magnet links.
 var nyaaTrackers = []string{
 	"http://nyaa.tracker.wf:7777/announce",
@@ -151,9 +153,27 @@ func (n *Nyaa) fetch(feedURL string) ([]nyaaRelease, error) {
 	}
 
 	n.mu.Lock()
+	n.evictLocked()
 	n.cache[feedURL] = nyaaCacheEntry{items: items, at: time.Now()}
 	n.mu.Unlock()
 	return items, nil
+}
+
+func (n *Nyaa) evictLocked() {
+	for k, e := range n.cache {
+		if time.Since(e.at) >= nyaaCacheTTL {
+			delete(n.cache, k)
+		}
+	}
+	for len(n.cache) >= nyaaCacheMax {
+		oldestKey, oldestAt := "", time.Time{}
+		for k, e := range n.cache {
+			if oldestKey == "" || e.at.Before(oldestAt) {
+				oldestKey, oldestAt = k, e.at
+			}
+		}
+		delete(n.cache, oldestKey)
+	}
 }
 
 // Title shapes seen on the live English-translated feed:
@@ -208,10 +228,20 @@ var (
 
 const nyaaMaxFeedBytes = 10 << 20
 
+func nyaaYearSpan(lo, hi string) bool {
+	isYear := func(v string) bool {
+		return len(v) == 4 && (strings.HasPrefix(v, "19") || strings.HasPrefix(v, "20"))
+	}
+	return isYear(lo) && isYear(hi)
+}
+
 func nyaaAscendingRange(s string) bool {
 	for _, m := range nyaaBatchRangeRe.FindAllStringSubmatch(s, -1) {
 		lo, _ := strconv.Atoi(m[1])
 		hi, _ := strconv.Atoi(m[2])
+		if nyaaYearSpan(m[1], m[2]) {
+			continue
+		}
 		if lo < hi {
 			return true
 		}
