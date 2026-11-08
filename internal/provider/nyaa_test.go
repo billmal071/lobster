@@ -241,6 +241,9 @@ func TestNyaaParseTitle(t *testing.T) {
 		year   string
 		batch  bool
 	}{
+		{"Show (2019-2020) - 12", "", "Show", 0, 12, 0, "", false},
+		{"Show (01-12)", "", "", 0, 0, 0, "", true},
+		{"One Piece (1100-1104)", "", "", 0, 0, 0, "", true},
 		{"[SubsPlease] One-Punch Man S3 - 12 (1080p) [B7B8D40B].mkv", "SubsPlease", "One-Punch Man", 3, 12, 1080, "", false},
 		{"[Erai-raws] One Punch Man (2025) - 12 [1080p CR WEBRip HEVC AAC][MultiSub][FB20C752]", "Erai-raws", "One Punch Man", 0, 12, 1080, "2025", false},
 		{"[Erai-raws] One Punch Man (2025) - 12 (REPACK) [720p CR WEB-DL AVC AAC][MultiSub][91E83E57]", "Erai-raws", "One Punch Man", 0, 12, 720, "2025", false},

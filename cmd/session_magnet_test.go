@@ -157,4 +157,7 @@ func TestPlayCurrentEpisodeJSONRefusesAMagnet(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "--json cannot express") {
 		t.Fatalf("err = %v, want a refusal naming --json", err)
 	}
+	if strings.Contains(err.Error(), "use --download") || !strings.Contains(err.Error(), `--download <dir>`) {
+		t.Fatalf("err = %v, want the working form: lobster --base yts \"title\" --download <dir>", err)
+	}
 }

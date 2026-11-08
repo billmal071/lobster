@@ -850,8 +850,7 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		// works. Guarding here rather than at each arrival covers all of
 		// them, including any added later.
 		if torrentstream.IsMagnet(stream.URL) {
-			return fmt.Errorf("%s resolved to a torrent, which --json cannot express as a playable URL; "+
-				"play it without --json, or use --download to fetch it first", title)
+			return jsonMagnetRefusal(title)
 		}
 		out := map[string]interface{}{
 			"title":     title,

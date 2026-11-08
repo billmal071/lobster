@@ -200,7 +200,7 @@ var (
 
 	nyaaBatchWordRe  = regexp.MustCompile(`(?i)\bbatch\b`)
 	nyaaBatchEpsRe   = regexp.MustCompile(`(?i)\bepisodes?\s+\d{1,4}\s*[-~]\s*\d{1,4}\b`)
-	nyaaBatchParenRe = regexp.MustCompile(`\(\s*\d{1,4}\s*[-~]\s*\d{1,4}\s*\)`)
+	nyaaBatchParenRe = regexp.MustCompile(`\(\s*(\d{1,4})\s*[-~]\s*(\d{1,4})\s*\)`)
 	// Both ends zero-padded, so "Title 2 - 05" is an episode and "01-12" a
 	// range. The trailing \b refuses "12 - 1080p". A range ascends, which
 	// is how "86 - 12" (the series 86, episode 12) is told apart.
@@ -233,6 +233,15 @@ func nyaaYearSpan(lo, hi string) bool {
 		return len(v) == 4 && (strings.HasPrefix(v, "19") || strings.HasPrefix(v, "20"))
 	}
 	return isYear(lo) && isYear(hi)
+}
+
+func nyaaParenBatch(s string) bool {
+	for _, m := range nyaaBatchParenRe.FindAllStringSubmatch(s, -1) {
+		if !nyaaYearSpan(m[1], m[2]) {
+			return true
+		}
+	}
+	return false
 }
 
 func nyaaAscendingRange(s string) bool {
@@ -278,7 +287,7 @@ func parseNyaaTitle(raw string) nyaaRelease {
 		r.Height = 2160
 	}
 	if nyaaBatchWordRe.MatchString(s) || nyaaBatchEpsRe.MatchString(s) ||
-		nyaaBatchParenRe.MatchString(s) || nyaaAscendingRange(s) ||
+		nyaaParenBatch(s) || nyaaAscendingRange(s) ||
 		nyaaBatchERangeRe.MatchString(s) {
 		r.Batch = true
 		return r

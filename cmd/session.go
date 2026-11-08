@@ -224,7 +224,8 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 
 func jsonMagnetRefusal(title string) error {
 	return fmt.Errorf("%s resolved to a torrent, which --json cannot express as a playable URL; "+
-		"play it without --json, or use --download to fetch it first", title)
+		"play it without --json, or fetch it first with the interactive CLI "+
+		`(lobster --base yts "title" --download <dir>; 'play' has no --download)`, title)
 }
 
 // recoveredTorrentSource reports whether the session's provider is a torrent
