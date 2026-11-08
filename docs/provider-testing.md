@@ -43,7 +43,9 @@ Use the `--base` flag to force a specific provider:
 # Test with FlixHQ.ws
 lobster --base flixhq.ws trending
 
-# Test with VaPlayer
+# Test with VaPlayer. If VaPlayer fails, a fallback can still play the title,
+# so playback alone does not show VaPlayer works: check the fallback message
+# or run with -x before recording VaPlayer streaming as successful.
 lobster --base vaplayer "Inception"
 
 # Test with TBCPL
@@ -109,10 +111,10 @@ Provider tests use httptest servers with mocked responses and don't hit real API
 A: Run with `-x` (debug mode). It prints the selected provider and all fallback attempts.
 
 **Q: Can I test multiple providers in one session?**  
-A: Use the TUI (run `lobster` with no args) — categories like Movies, Series, Anime use different providers. Or switch with `--base` on the CLI.
+A: Switch with `--base` on the CLI; each command is an independent check of that source. The TUI (run `lobster` with no args) is not an independent check per category: under the default config Movies and Series both search VaPlayer and only Anime searches AnimeOnsen, and any search can add rows from fallback providers when the primary returns few results.
 
 **Q: What if a provider is down?**  
-A: Lobster automatically falls back to the next provider in the chain: VaPlayer → TBCPL → Consumet (when `api_url` is set) → EZTV (when `torrent_fallback` is on) → FlixHQWS → AnimeOnsen → Nyaa (when `torrent_fallback` is on) → TBCPLEmbed (when the catalog feed is on) → YTS (when `torrent_fallback` is on). The primary is left out of its own chain, so under the default it starts at TBCPL.
+A: Lobster builds a fallback chain from every source except the primary: VaPlayer, TBCPL, Consumet (when `api_url` is set), FlixHQWS, AnimeOnsen, TBCPLEmbed (when the catalog feed is on), and, only when `torrent_fallback` is on, EZTV, Nyaa and YTS. The probes are health-ranked and raced, not tried strictly in sequence, and the torrent sources are tried only after every HTTP source has failed. When `api_url` is set, Consumet is the primary rather than a fallback, and `base` is ignored. Under the default config VaPlayer is the primary for series and for any film YTS has no match for, so its fallbacks start at TBCPL; with `base = "auto"` a film is routed to YTS at play time instead (not with `--json`, or `--download`, which keep VaPlayer).
 
 ---
 

@@ -150,6 +150,7 @@ func TestPlayCurrentEpisodeDownloadServesAMagnetWholeFile(t *testing.T) {
 func TestPlayCurrentEpisodeJSONRefusesAMagnet(t *testing.T) {
 	playStreamHarness(t, &stubPlayerImpl{})
 	withOutputFlags(t, true, "")
+	withRecordingFallbackChain(t)
 
 	prov := &stubStreamProvider{stream: &media.Stream{URL: "magnet:?xt=urn:btih:0000000000000000000000000000000000000000"}}
 	err := playCurrentEpisode(sessionForTest(prov))

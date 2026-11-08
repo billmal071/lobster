@@ -45,8 +45,9 @@ type EZTV struct {
 }
 
 type eztvCachedShow struct {
-	torrents []eztvTorrent
-	fetched  time.Time
+	torrents  []eztvTorrent
+	fetched   time.Time
+	truncated bool
 }
 
 func NewEZTV() *EZTV {
@@ -137,19 +138,27 @@ func eztvIMDB(id string) (string, error) {
 
 // torrents returns every release EZTV lists for a show, cached per show so the four-step sequence costs one fetch.
 func (e *EZTV) torrents(id string) ([]eztvTorrent, error) {
+	all, _, err := e.catalogue(id)
+	return all, err
+}
+
+// catalogue is torrents plus whether the list is complete: false when a later
+// page failed or the page limit cut the walk short.
+func (e *EZTV) catalogue(id string) ([]eztvTorrent, bool, error) {
 	imdb, err := eztvIMDB(id)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	e.mu.Lock()
 	cached, ok := e.shows[imdb]
 	e.mu.Unlock()
 	if ok && time.Since(cached.fetched) < eztvCacheTTL {
-		return cached.torrents, nil
+		return cached.torrents, !cached.truncated, nil
 	}
 
 	var all []eztvTorrent
 	partial := false
+	reachedEnd := false
 	for page := 1; page <= eztvMaxPages; page++ {
 		resp, err := e.fetchPage(imdb, page)
 		if err != nil {
@@ -159,24 +168,26 @@ func (e *EZTV) torrents(id string) ([]eztvTorrent, error) {
 				partial = true
 				break
 			}
-			return nil, err
+			return nil, false, err
 		}
 		all = append(all, resp.Torrents...)
 		// A page past the end carries no torrents key at all, so a short or
 		// empty page ends the walk as surely as reaching the count does.
 		if len(resp.Torrents) < eztvPageSize || (resp.TorrentsCount > 0 && len(all) >= resp.TorrentsCount) {
+			reachedEnd = true
 			break
 		}
 	}
 	if len(all) == 0 {
-		return nil, fmt.Errorf("eztv: no torrents for %s", id)
+		return nil, false, fmt.Errorf("eztv: no torrents for %s", id)
 	}
+	truncated := !reachedEnd
 	if !partial {
 		e.mu.Lock()
-		e.shows[imdb] = eztvCachedShow{torrents: all, fetched: time.Now()}
+		e.shows[imdb] = eztvCachedShow{torrents: all, fetched: time.Now(), truncated: truncated}
 		e.mu.Unlock()
 	}
-	return all, nil
+	return all, !partial && !truncated, nil
 }
 
 // --- Search: TMDB title → IMDb id ---
@@ -322,7 +333,7 @@ func (e *EZTV) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("eztv: invalid season ID %q", seasonID)
 	}
-	torrents, err := e.torrents(id)
+	torrents, complete, err := e.catalogue(id)
 	if err != nil {
 		return nil, err
 	}
@@ -352,6 +363,9 @@ func (e *EZTV) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
 			title = fmt.Sprintf("Episode %d", n)
 		}
 		eps = append(eps, media.Episode{Number: n, Title: title, ID: fmt.Sprintf("%dx%d", season, n)})
+	}
+	if !complete {
+		return eps, fmt.Errorf("%w: eztv could not fetch every page of the release list for %s", ErrIncompleteEpisodeList, id)
 	}
 	return eps, nil
 }

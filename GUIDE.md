@@ -318,7 +318,8 @@ download_dir = "~/Videos/lobster"
 # This is NOT the swarm opt-in, and leaving it false does not keep you out of
 # a swarm: the default `base = "auto"` already plays movies from YTS, so a
 # default install joins one for films. To never join a swarm, choose an
-# explicit source instead — `base = "vaplayer"` — and leave this false.
+# explicit non-torrent source instead — `base = "vaplayer"` — and leave this
+# false. `yts`, `nyaa` and `eztv` are swarms even with this false.
 #
 # What this setting controls is the other direction: letting a *failed* stream
 # resolution end up on a torrent — for a series, for a film YTS does not
@@ -336,6 +337,11 @@ download_dir = "~/Videos/lobster"
 # other is --json: a magnet is not a URL a JSON consumer can open, and the
 # loopback URL would die with the process that printed it, so the run fails
 # with "resolved to a torrent, which --json cannot express as a playable URL".
+# Only session playback (a series, or an episode picked in the TUI) tries an
+# HTTP source first and fails only when none can serve the title. A single
+# title resolved directly, such as `--base yts` with `play --ref --json`,
+# refuses the magnet without trying another source. Under `base = "auto"` a
+# film is not routed to YTS when --json is set.
 # Play it without --json, or use --download to fetch it first.
 torrent_fallback = false
 ```
@@ -355,9 +361,10 @@ only accepted if its title matches the ref's after normalisation. A show the
 two spell differently — `Marvel's Agents of S.H.I.E.L.D.` in the ref against
 `Agents of S.H.I.E.L.D.` on the fallback — is rejected, and `episodes` exits 2
 with `no seasons found`. `play --ref` has no such check, so it plays the very
-ref `episodes --ref` cannot list. If `episodes` says a ref has no seasons, name
-a source that carries the series (`--base tbcpl`) rather than the one the
-ref was found under.
+ref `episodes --ref` cannot list. If `episodes` says a ref has no seasons, run
+`lobster find --base tbcpl` for the title and pass the new TBCPL ref to
+`episodes`; the old ref's ID belongs to the source that found it, and TBCPL
+cannot use it.
 
 This table is about **scope** — what a source covers and what it structurally
 cannot do. It says nothing about whether a site is up today; that changes week
@@ -370,10 +377,10 @@ and where the others break"). Run it before concluding a source is broken.
 | `vaplayer` | Films and series | General-purpose, API-based. The general source `auto` maps to, and the first source the fallback chain asks. |
 | `flixhq.ws` | Films and series | Scraper-based; the default before `auto`. Checks its domain at startup and tries known alternates (plus any `domain_overrides`) when it is unreachable. Not to be confused with `flixhq.to`, a different and now retired provider. |
 | `tbcpl`, `1shows.org` | Films and series | The same provider against the same site: `tbcpl` resolves to `https://www.1shows.org`, `1shows.org` to `https://1shows.org`. Honours `audio_language` for multi-dub releases. |
-| `animeonsen` | Anime | Public API, no key and no DRM, and the only anime source in the automatic fallback chain. Two things to know before naming it. It **carries no subtitles** — the stream is Japanese audio and the source has no text track at all, so you need `subdl_api_key` or `opensubtitles_api_key` set for anything to appear. And it has **one 720p rendition**, so `quality` has nothing to choose: a run under it reports 720 whatever you asked for, rather than claiming a height the stream does not have. Its episode counts are measured by probing the CDN (the catalogue endpoints need a key lobster does not ship), so a series with a gap in its numbering lists short rather than long. |
+| `animeonsen` | Anime | Public API, no key and no DRM, and the only anime source in the automatic fallback chain, except that `torrent_fallback` adds Nyaa after it. Two things to know before naming it. It **carries no subtitles** — the stream is Japanese audio and the source has no text track at all, so you need `subdl_api_key` or `opensubtitles_api_key` set for anything to appear. And it has **one 720p rendition**, so `quality` has nothing to choose: a run under it reports 720 whatever you asked for, rather than claiming a height the stream does not have. Its episode counts are measured by probing the CDN (the catalogue endpoints need a key lobster does not ship), so a series with a gap in its numbering lists short rather than long. |
 | `yts` | Films only | No TV catalogue at all, so a series named under `--base yts` is played from the fallback chain instead — for playback, `--base yts` pins nothing for a series. `lobster episodes` under it can still fail outright, per the note above. Resolves to a **magnet**, so playback joins a BitTorrent swarm and your IP is visible to its peers; lobster serves it over loopback, so `--download` works too, but the swarm is joined either way. If no peer answers within 90 seconds the run gives up with "the swarm may be dead". |
-| `eztv` | Series only | TV series torrents, keyed by IMDb id: a title is looked up on TMDB and its IMDb id read from there, so a show TMDB does not know is not found. Seasons and episodes are real (episode IDs are `<season>x<episode>`), and `--quality` and `-q best` pick among the releases on offer. Resolves to a **magnet** like `yts`: playback joins a swarm and your IP is visible to its peers. Never reached automatically — a series stays on the scraping sources unless you name this base or set `torrent_fallback`. |
-| `nyaa` | Anime only | Anime torrents from the English-translated category, so no separate subtitle source is needed. Nyaa has no notion of a series: the feed only exposes the **75 newest torrents per query**, so older episodes of a long-running show may be missing, and a sequel season appears as its own entry ("Title Season N") rather than under the first. One season per entry; `--quality` and `-q best` pick among the release groups' resolutions. Resolves to a **magnet** like `yts`, with the same swarm and IP exposure, and is never reached automatically: name it, or set `torrent_fallback`, where it sits after `animeonsen`. |
+| `eztv` | Series only | TV series torrents, keyed by IMDb id: a title is looked up on TMDB and its IMDb id read from there, so a show TMDB does not know is not found. Seasons and episodes are real (episode IDs are `<season>x<episode>`), and `--quality` and `-q best` pick among the releases on offer; when nothing is at or below the requested quality, the best available release is picked rather than failing. Resolves to a **magnet** like `yts`: playback joins a swarm and your IP is visible to its peers. Never reached automatically — a series stays on the scraping sources unless you name this base, or set `torrent_fallback`, which tries it only after every streaming source has failed. |
+| `nyaa` | Anime only | Anime torrents from the English-translated category. Releases there can be dubbed and carry no usable subtitle track, so you may still need `subdl_api_key` or `opensubtitles_api_key`; playback continues without subtitles when none turn up. Nyaa has no notion of a series: the feed only exposes the **75 newest torrents per query**, so older episodes of a long-running show may be missing, and a sequel season appears as its own entry ("Title Season N") rather than under the first. One season per entry; `--quality` and `-q best` pick among the release groups' resolutions; when nothing is at or below the requested quality, the best available release is picked rather than failing. Resolves to a **magnet** like `yts`, with the same swarm and IP exposure, and is never reached automatically: name it, or set `torrent_fallback`, which tries it only after every streaming source, `animeonsen` included, has failed. |
 
 **Retired sources.** `soap2day`, `moviebox`, `vidnest`, `flixhq.to`,
 `kimcartoon`, `allanime` and `anipub` were each verified dead upstream on

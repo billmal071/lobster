@@ -177,10 +177,14 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 	// its own Watch verbatim, bypassing tmdbID:season:episode reconstruction.
 	// Skip it once it's been excluded (its last stream failed playback), so a
 	// dead Primary stream can't trap playCurrentEpisode in an infinite retry.
+	var primaryMagnet *media.Stream
 	if sp, ok := sess.Provider.(provider.StreamProvider); ok && !excludeNames["Primary"] {
 		ep := sess.Current()
 		if stream, err := sp.Watch(sess.ProviderKey(), ep.ID, "Default", cfg.Quality); err == nil && stream != nil {
-			return stream, "Primary", nil
+			if !flagJSON || !torrentstream.IsMagnet(stream.URL) {
+				return stream, "Primary", nil
+			}
+			primaryMagnet = stream
 		}
 	}
 
@@ -190,6 +194,9 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 	// it to whichever chain member could list the season. Excluding that
 	// one would remove the only provider known to have this show.
 	chain := agentFallbackProviders(sess.ChainBase())
+	if excludeNames["Primary"] {
+		chain = withoutProvider(chain, sess.Provider)
+	}
 	if flagJSON {
 		chain = withoutMagnetSources(chain)
 	}
@@ -200,6 +207,9 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 		sess.Current().Number,
 	)
 	if err != nil {
+		if primaryMagnet != nil {
+			return primaryMagnet, "Primary", nil
+		}
 		debugf("all fallbacks failed: %v", err)
 		return nil, "", fmt.Errorf("all providers failed for %s: %w", sess.Title(), err)
 	}

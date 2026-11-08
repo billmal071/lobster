@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -248,6 +249,16 @@ func withoutMagnetSources(ps []provider.Provider) []provider.Provider {
 	out := make([]provider.Provider, 0, len(ps))
 	for _, p := range ps {
 		if !servesMagnets(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func withoutProvider(ps []provider.Provider, drop provider.Provider) []provider.Provider {
+	out := make([]provider.Provider, 0, len(ps))
+	for _, p := range ps {
+		if reflect.TypeOf(p) != reflect.TypeOf(drop) {
 			out = append(out, p)
 		}
 	}

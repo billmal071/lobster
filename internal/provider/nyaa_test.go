@@ -263,6 +263,8 @@ func TestNyaaParseTitle(t *testing.T) {
 		{"Beyblade X 2024 - The Kingdom's Way", "", "Beyblade X", 0, 2024, 0, "", false},
 		{"[Group] Show 01 - Happy New Year 2026 [1080p]", "Group", "Show", 0, 1, 1080, "", false},
 		{"[Group] Show - 05 (2019) [1080p]", "Group", "Show", 0, 5, 1080, "", false},
+		{"[SubsPlease] 86 - 12 (1080p) [ABCD1234].mkv", "SubsPlease", "86", 0, 12, 1080, "", false},
+		{"[Group] Show 01-12 [1080p]", "Group", "", 0, 0, 1080, "", true},
 		{"Sayonara.Lara.2026.S01E11.MULTI.Audio.Sub.1080p.BDRip.CUSTOM.x264.PCM-KuroNeko VOSTFR Goodbye Lara", "", "Sayonara Lara", 1, 11, 1080, "2026", false},
 		{"[AnoZu] One Piece S23E03 1080p CR WEB-DL Dual-Audio DDP 2.0 H.264", "AnoZu", "One Piece", 23, 3, 1080, "", false},
 		// "EP<n>" with no separator.
@@ -814,5 +816,38 @@ func TestNyaaUndatedIDWithSeveralDatedAdaptationsIsAmbiguous(t *testing.T) {
 	nyaaStubWith(t, feed(nyaaFeedItem("[A] Ranma (2024) - 01 [1080p]", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")))
 	if _, err := NewNyaa().GetEpisodes("nyaa/Ranma", "1"); err != nil {
 		t.Fatalf("a single dated adaptation must still resolve: %v", err)
+	}
+}
+
+func TestNyaaBrowseRefusesMovies(t *testing.T) {
+	_, calls := nyaaStub(t)
+	n := NewNyaa()
+	if got, err := n.Trending(media.Movie); err == nil || len(got) != 0 {
+		t.Fatalf("Trending(Movie) = %+v, %v; want no results", got, err)
+	}
+	if got, err := n.Recent(media.Movie); err == nil || len(got) != 0 {
+		t.Fatalf("Recent(Movie) = %+v, %v; want no results", got, err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("a movie browse fetched the feed %d time(s)", calls.Load())
+	}
+}
+
+func TestNyaaFeedOverTheSizeLimitIsReportedAsSuch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("<rss><channel>"))
+		chunk := []byte(strings.Repeat("<!-- padding -->", 1024))
+		for sent := 0; sent <= nyaaMaxFeedBytes; sent += len(chunk) {
+			_, _ = w.Write(chunk)
+		}
+	}))
+	defer srv.Close()
+	old := nyaaBase
+	nyaaBase = srv.URL
+	defer func() { nyaaBase = old }()
+
+	_, err := NewNyaa().Search("anything")
+	if err == nil || !strings.Contains(err.Error(), "size limit") {
+		t.Fatalf("err = %v, want a size-limit error", err)
 	}
 }

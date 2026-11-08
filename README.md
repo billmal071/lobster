@@ -289,8 +289,9 @@ never mentioned `--base`:
   source's rows.
 - `{"code": "base_unknown", "base": "sopa2day", "results_from_base": 0,
   "results_total": 20}` — the value passed to `--base` names no source at all.
-  An unrecognised base is not rejected; it falls through to VaPlayer, which is
-  what the results came from. Fix the spelling rather than retrying. (A base
+  An unrecognised base is not rejected; it falls through to VaPlayer, the
+  primary (when VaPlayer returns fewer than three results, `find` also
+  searches the fallback providers, so some rows can come from them). Fix the spelling rather than retrying. (A base
   naming a retired source — `soap2day`, `moviebox` — is rejected outright
   when passed as `--base`; in the config file it is downgraded to `auto` with
   a warning.)
@@ -410,8 +411,9 @@ download_dir = "~/Videos/lobster"
 # downloading, but also make you a participant in the swarm: your IP is visible to every peer
 # and to the monitoring firms that sit in them, which ordinary streaming never
 # does. This applies to the default install, because "auto" plays movies from
-# YTS — set base = "vaplayer" (or any other explicit source, or api_url) and
-# leave torrent_fallback false to never join a swarm. Otherwise use a VPN.
+# YTS — set base = "vaplayer" (or another explicit non-torrent source, or
+# api_url) and leave torrent_fallback false to never join a swarm. Naming yts,
+# nyaa or eztv joins one even with torrent_fallback false. Otherwise use a VPN.
 # Needs a 64-bit build, or the classic storage backend, which lobster selects
 # for you on a run that may stream a torrent (GUIDE.md -> "Torrent storage
 # backend"). Pieces land in ~/Videos/.lobster/ and are removed when playback

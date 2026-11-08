@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -409,5 +410,34 @@ func TestEZTVDoesNotCacheACataloguePartiallyFetched(t *testing.T) {
 	}
 	if atomic.LoadInt32(&hits) == before {
 		t.Error("a catalogue cut short by a failed page was cached and served again")
+	}
+}
+
+func TestEZTVGetEpisodesFlagsACataloguePartiallyFetched(t *testing.T) {
+	var hits int32
+	eztvPagedServer(t, &hits, true, 2, 5)
+	eps, err := NewEZTV().GetEpisodes("eztv/1", "1")
+	if len(eps) == 0 {
+		t.Fatalf("eps empty, want the episodes of the pages that did load (err=%v)", err)
+	}
+	if !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("err = %v, want ErrIncompleteEpisodeList: a requested episode may sit on the page that failed", err)
+	}
+}
+
+func TestEZTVGetEpisodesFlagsACatalogueCutAtThePageLimit(t *testing.T) {
+	var hits int32
+	eztvPagedServer(t, &hits, false, 0, eztvMaxPages+5)
+	eps, err := NewEZTV().GetEpisodes("eztv/1", "1")
+	if len(eps) == 0 || !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("eps=%d err=%v, want episodes plus ErrIncompleteEpisodeList at the %d-page limit", len(eps), err, eztvMaxPages)
+	}
+}
+
+func TestEZTVGetEpisodesCompleteCatalogueHasNoError(t *testing.T) {
+	var hits int32
+	eztvPagedServer(t, &hits, true, 0, 1)
+	if _, err := NewEZTV().GetEpisodes("eztv/1", "1"); err != nil {
+		t.Fatalf("err = %v, want nil for a fully fetched catalogue", err)
 	}
 }

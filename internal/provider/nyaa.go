@@ -129,8 +129,15 @@ func (n *Nyaa) fetch(feedURL string) ([]nyaaRelease, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("nyaa: unexpected status %d", resp.StatusCode)
 	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, nyaaMaxFeedBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading nyaa feed: %w", err)
+	}
+	if len(body) > nyaaMaxFeedBytes {
+		return nil, fmt.Errorf("nyaa: feed exceeds the %d MiB size limit", nyaaMaxFeedBytes>>20)
+	}
 	var feed nyaaFeed
-	if err := xml.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&feed); err != nil {
+	if err := xml.Unmarshal(body, &feed); err != nil {
 		return nil, fmt.Errorf("parsing nyaa feed: %w", err)
 	}
 	items := make([]nyaaRelease, 0, len(feed.Items))
@@ -175,8 +182,9 @@ var (
 	nyaaBatchEpsRe   = regexp.MustCompile(`(?i)\bepisodes?\s+\d{1,4}\s*[-~]\s*\d{1,4}\b`)
 	nyaaBatchParenRe = regexp.MustCompile(`\(\s*\d{1,4}\s*[-~]\s*\d{1,4}\s*\)`)
 	// Both ends zero-padded, so "Title 2 - 05" is an episode and "01-12" a
-	// range. The trailing \b refuses "12 - 1080p".
-	nyaaBatchRangeRe = regexp.MustCompile(`\b\d{2,4}\s*[-~]\s*\d{2,4}\b`)
+	// range. The trailing \b refuses "12 - 1080p". A range ascends, which
+	// is how "86 - 12" (the series 86, episode 12) is told apart.
+	nyaaBatchRangeRe = regexp.MustCompile(`\b(\d{2,4})\s*[-~]\s*(\d{2,4})\b`)
 	// "S03E09-E12", "S03E09-12", "E09-E12".
 	nyaaBatchERangeRe = regexp.MustCompile(`(?i)\b(?:S\d{1,2})?E\d{1,4}\s*[-~]\s*E?\d{1,4}\b`)
 
@@ -197,6 +205,19 @@ var (
 	nyaaSeasonOrdinalRe = regexp.MustCompile(`(?i)\b(\d{1,2})(?:st|nd|rd|th)\s+Season\b`)
 	nyaaSpaceRe         = regexp.MustCompile(`\s+`)
 )
+
+const nyaaMaxFeedBytes = 10 << 20
+
+func nyaaAscendingRange(s string) bool {
+	for _, m := range nyaaBatchRangeRe.FindAllStringSubmatch(s, -1) {
+		lo, _ := strconv.Atoi(m[1])
+		hi, _ := strconv.Atoi(m[2])
+		if lo < hi {
+			return true
+		}
+	}
+	return false
+}
 
 func nyaaCapturedTrailingYear(bare, captured string) bool {
 	y := nyaaBareYearRe.FindStringSubmatch(bare)
@@ -227,7 +248,7 @@ func parseNyaaTitle(raw string) nyaaRelease {
 		r.Height = 2160
 	}
 	if nyaaBatchWordRe.MatchString(s) || nyaaBatchEpsRe.MatchString(s) ||
-		nyaaBatchParenRe.MatchString(s) || nyaaBatchRangeRe.MatchString(s) ||
+		nyaaBatchParenRe.MatchString(s) || nyaaAscendingRange(s) ||
 		nyaaBatchERangeRe.MatchString(s) {
 		r.Batch = true
 		return r
@@ -747,11 +768,17 @@ func (n *Nyaa) GetEmbedURL(serverID string) (string, error) {
 
 // Trending lists the series behind the best-seeded torrents in the category.
 func (n *Nyaa) Trending(mediaType media.MediaType) ([]media.SearchResult, error) {
+	if mediaType == media.Movie {
+		return nil, fmt.Errorf("%w: nyaa lists series only", ErrNoResults)
+	}
 	return n.browse("seeders")
 }
 
 // Recent lists the series behind the newest uploads in the category.
 func (n *Nyaa) Recent(mediaType media.MediaType) ([]media.SearchResult, error) {
+	if mediaType == media.Movie {
+		return nil, fmt.Errorf("%w: nyaa lists series only", ErrNoResults)
+	}
 	return n.browse("")
 }
 
