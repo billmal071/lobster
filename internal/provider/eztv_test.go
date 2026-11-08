@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"lobster/internal/media"
 )
@@ -439,5 +440,79 @@ func TestEZTVGetEpisodesCompleteCatalogueHasNoError(t *testing.T) {
 	eztvPagedServer(t, &hits, true, 0, 1)
 	if _, err := NewEZTV().GetEpisodes("eztv/1", "1"); err != nil {
 		t.Fatalf("err = %v, want nil for a fully fetched catalogue", err)
+	}
+}
+
+func TestEZTVReturnsACatalogueLongerThanTenPages(t *testing.T) {
+	var hits int32
+	eztvPagedServer(t, &hits, false, 0, 14)
+	all, err := NewEZTV().torrents("eztv/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 14*eztvPageSize + 5; len(all) != want {
+		t.Fatalf("got %d torrents, want %d: a show past 1,000 releases lost its tail", len(all), want)
+	}
+	if _, err := NewEZTV().GetEpisodes("eztv/1", "1"); err != nil {
+		t.Fatalf("GetEpisodes err = %v, want nil for a catalogue fully walked", err)
+	}
+}
+
+func TestEZTVEndlessCatalogueStopsAtTheSafetyCap(t *testing.T) {
+	var hits int32
+	eztvPagedServer(t, &hits, false, 0, 1<<30)
+	e := NewEZTV()
+	eps, err := e.GetEpisodes("eztv/1", "1")
+	if len(eps) == 0 || !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("eps=%d err=%v, want episodes plus ErrIncompleteEpisodeList", len(eps), err)
+	}
+	if got := atomic.LoadInt32(&hits); got != eztvMaxPages {
+		t.Fatalf("fetched %d pages, want exactly the cap %d", got, eztvMaxPages)
+	}
+	if _, err := e.GetEpisodes("eztv/1", "1"); !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Errorf("second call err = %v, a catalogue cut at the cap was remembered as complete", err)
+	}
+}
+
+func TestEZTVSlowCatalogueStopsAtTheTimeBudget(t *testing.T) {
+	old := eztvBudget
+	eztvBudget = 300 * time.Millisecond
+	t.Cleanup(func() { eztvBudget = old })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		var torrents []map[string]any
+		for i := 0; i < eztvPageSize; i++ {
+			torrents = append(torrents, map[string]any{
+				"id": i, "filename": "S.S01E01.720p.mkv", "magnet_url": "magnet:?xt=urn:btih:x",
+				"season": "1", "episode": "1", "seeds": 1, "size_bytes": 1,
+			})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"torrents": torrents})
+	}))
+	t.Cleanup(srv.Close)
+	oldBase := eztvBase
+	eztvBase = srv.URL
+	t.Cleanup(func() { eztvBase = oldBase })
+
+	start := time.Now()
+	eps, err := NewEZTV().GetEpisodes("eztv/1", "1")
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("walk took %v, the budget did not bound it", elapsed)
+	}
+	if len(eps) == 0 || !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("eps=%d err=%v, want episodes plus ErrIncompleteEpisodeList", len(eps), err)
+	}
+}
+
+func TestEZTVFailedLaterPageOfALongCatalogueIsFlagged(t *testing.T) {
+	var hits int32
+	eztvPagedServer(t, &hits, false, 12, 14)
+	e := NewEZTV()
+	eps, err := e.GetEpisodes("eztv/1", "1")
+	if len(eps) == 0 || !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("eps=%d err=%v, want ErrIncompleteEpisodeList after page 12 failed", len(eps), err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 12 {
+		t.Fatalf("fetched %d pages, want 12 (walk ends at the failure)", got)
 	}
 }

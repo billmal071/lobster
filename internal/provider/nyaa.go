@@ -159,6 +159,7 @@ func (n *Nyaa) fetch(feedURL string) ([]nyaaRelease, error) {
 	return items, nil
 }
 
+// evictLocked drops expired feed cache entries, then the oldest ones until there is room for one more. The caller holds n.mu.
 func (n *Nyaa) evictLocked() {
 	for k, e := range n.cache {
 		if time.Since(e.at) >= nyaaCacheTTL {
@@ -228,6 +229,7 @@ var (
 
 const nyaaMaxFeedBytes = 10 << 20
 
+// nyaaYearSpan reports whether both ends are four-digit years in 1900-2099, which marks a "2019-2020" span rather than an episode range.
 func nyaaYearSpan(lo, hi string) bool {
 	isYear := func(v string) bool {
 		return len(v) == 4 && (strings.HasPrefix(v, "19") || strings.HasPrefix(v, "20"))
@@ -235,6 +237,7 @@ func nyaaYearSpan(lo, hi string) bool {
 	return isYear(lo) && isYear(hi)
 }
 
+// nyaaParenBatch reports whether s has a parenthesised range such as "(01-12)" that is not a year span.
 func nyaaParenBatch(s string) bool {
 	for _, m := range nyaaBatchParenRe.FindAllStringSubmatch(s, -1) {
 		if !nyaaYearSpan(m[1], m[2]) {
@@ -244,6 +247,7 @@ func nyaaParenBatch(s string) bool {
 	return false
 }
 
+// nyaaAscendingRange reports whether s has a bare ascending number range such as "01-12", ignoring year spans.
 func nyaaAscendingRange(s string) bool {
 	for _, m := range nyaaBatchRangeRe.FindAllStringSubmatch(s, -1) {
 		lo, _ := strconv.Atoi(m[1])
@@ -258,6 +262,7 @@ func nyaaAscendingRange(s string) bool {
 	return false
 }
 
+// nyaaCapturedTrailingYear reports whether captured, a number found in bare, is the four-digit year ending the name rather than an episode.
 func nyaaCapturedTrailingYear(bare, captured string) bool {
 	y := nyaaBareYearRe.FindStringSubmatch(bare)
 	return y != nil && y[1] == captured
@@ -495,6 +500,7 @@ func nyaaID(base string, season int, year string) string {
 	return id
 }
 
+// parseNyaaID splits a "nyaa/<base>?s=<season>&y=<year>" series ID into its base title, season and year.
 func parseNyaaID(id string) (base string, season int, year string, err error) {
 	rest, ok := strings.CutPrefix(id, "nyaa/")
 	if !ok || rest == "" {
@@ -513,6 +519,7 @@ func parseNyaaID(id string) (base string, season int, year string, err error) {
 	return base, season, year, nil
 }
 
+// nyaaResults maps grouped series to search results, counting each series' distinct episodes.
 func nyaaResults(series []*nyaaSeries) []media.SearchResult {
 	out := make([]media.SearchResult, 0, len(series))
 	for _, s := range series {
@@ -706,6 +713,7 @@ func nyaaQuality(height int) string {
 	return strconv.Itoa(height) + "p"
 }
 
+// nyaaServerName is the name a user picks a release by: quality, release group ("untagged" when none), size and seeders.
 func nyaaServerName(r nyaaRelease) string {
 	group := r.Group
 	if group == "" {
@@ -782,6 +790,7 @@ func (n *Nyaa) Watch(mediaID, episodeID, server, quality string) (*media.Stream,
 	}, nil
 }
 
+// GetDetails describes a series by its year, torrent count and release groups.
 func (n *Nyaa) GetDetails(id string) (*media.ContentDetail, error) {
 	s, err := n.seriesReleases(id)
 	if err != nil {
@@ -821,6 +830,7 @@ func (n *Nyaa) Recent(mediaType media.MediaType) ([]media.SearchResult, error) {
 	return n.browse("")
 }
 
+// browse lists the series behind the category feed ordered by sortBy ("" is newest first).
 func (n *Nyaa) browse(sortBy string) ([]media.SearchResult, error) {
 	items, err := n.fetch(nyaaFeedURL("", sortBy))
 	if err != nil {

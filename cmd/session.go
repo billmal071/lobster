@@ -222,10 +222,18 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 	return stream, "Fallback", nil
 }
 
+// jsonMagnetRefusalError is the failure for a title that resolved to a torrent
+// under --json; play.go finds it with errors.As to emit its message.
+type jsonMagnetRefusalError struct{ msg string }
+
+func (e *jsonMagnetRefusalError) Error() string { return e.msg }
+
+// jsonMagnetRefusal is the error for a title that resolved only to a torrent
+// while --json is set, with the advice to play it without --json.
 func jsonMagnetRefusal(title string) error {
-	return fmt.Errorf("%s resolved to a torrent, which --json cannot express as a playable URL; "+
+	return &jsonMagnetRefusalError{msg: fmt.Sprintf("%s resolved to a torrent, which --json cannot express as a playable URL; "+
 		"play it without --json, or fetch it first with the interactive CLI "+
-		`(lobster --base yts "title" --download <dir>; 'play' has no --download)`, title)
+		`(lobster --base yts "title" --download <dir>; 'play' has no --download)`, title)}
 }
 
 // recoveredTorrentSource reports whether the session's provider is a torrent

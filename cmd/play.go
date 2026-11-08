@@ -306,7 +306,16 @@ func playRun(cmd *cobra.Command, args []string) error {
 		// above) call for opposite advice, and only errSeasonNotFound is the
 		// latter.
 		var resolveErr *resolveFailure
-		if errors.As(err, &resolveErr) {
+		hasReport := errors.As(err, &resolveErr)
+		var refusal *jsonMagnetRefusalError
+		if errors.As(err, &refusal) {
+			detail := map[string]any{"torrent_refused": true}
+			if hasReport {
+				detail["providers"] = resolveErr.providerRows()
+			}
+			return emitErrDetail("providers_failed", exitProvidersFailed, detail, "%s", refusal.msg)
+		}
+		if hasReport {
 			return emitErrDetail("providers_failed", exitProvidersFailed,
 				map[string]any{"providers": resolveErr.providerRows()},
 				"no source could stream %s: %d providers tried, none produced a playable stream (per-provider reasons in error.providers)",

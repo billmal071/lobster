@@ -255,6 +255,7 @@ func withoutMagnetSources(ps []provider.Provider) []provider.Provider {
 	return out
 }
 
+// withoutProvider returns ps without any provider of the same concrete type as drop.
 func withoutProvider(ps []provider.Provider, drop provider.Provider) []provider.Provider {
 	out := make([]provider.Provider, 0, len(ps))
 	for _, p := range ps {
@@ -321,6 +322,7 @@ func tryFallbackStreamFrom(providers []provider.Provider, content media.SearchRe
 	return resolveTier(ctx, magnets, req, first)
 }
 
+// resolveTier races providers for req. A failure is wrapped in a resolveFailure, which carries earlier's attempts too when a previous tier failed.
 func resolveTier(ctx context.Context, providers []provider.Provider, req resolver.Request, earlier *resolveFailure) (*media.Stream, error) {
 	r := resolver.New(providers, sharedHealth(), debugf)
 	stream, report, err := r.Resolve(ctx, req)

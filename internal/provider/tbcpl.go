@@ -550,6 +550,7 @@ func tbcplDubLanguage(lang string) string {
 	return string(unicode.ToUpper(r)) + lang[size:]
 }
 
+// fetchVidzeeLanguages returns the non-empty audio languages Vidzee lists for path, or nil when the request or parse fails.
 func (t *TBCPL) fetchVidzeeLanguages(ctx context.Context, path string) []string {
 	body, err := t.fetchCtx(ctx, t.vidzeeAPI("streams/languages/"+path), t.vidzeeReferer(), "application/json, */*")
 	if err != nil {
@@ -570,6 +571,7 @@ func (t *TBCPL) fetchVidzeeLanguages(ctx context.Context, path string) []string 
 	return out
 }
 
+// watchWithServer asks one Vidzee server for a stream and attaches its subtitles, referer and headers.
 func (t *TBCPL) watchWithServer(ctx context.Context, path string, server tbcplVidzeeSource, quality string) (*media.Stream, error) {
 	values := url.Values{}
 	values.Set("s", server.Link)
@@ -649,6 +651,7 @@ func (t *TBCPL) fetchVidzeeSubtitles(ctx context.Context, path string) []media.S
 	return mapTBCPLVidzeeTracks(tracks)
 }
 
+// mapTBCPLVidzeeTracks converts Vidzee subtitle tracks to media subtitles, skipping tracks with no file.
 func mapTBCPLVidzeeTracks(tracks []tbcplVidzeeSubtitle) []media.Subtitle {
 	subs := make([]media.Subtitle, 0, len(tracks))
 	for _, tr := range tracks {

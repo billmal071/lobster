@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,8 +24,13 @@ var eztvBase = "https://eztvx.to"
 // eztvPageSize is the API maximum.
 const eztvPageSize = 100
 
-// eztvMaxPages bounds a show's torrent list (1000 releases) so a runaway count cannot page forever.
-const eztvMaxPages = 10
+// eztvMaxPages is the safety cap on a show's torrent walk: 100 pages is 10,000
+// releases, several times the largest real catalogues, so only a misbehaving
+// server that never ends a listing reaches it.
+const eztvMaxPages = 100
+
+// eztvBudget is the wall-clock limit on walking one show's pages. A var so tests can shorten it.
+var eztvBudget = 20 * time.Second
 
 // eztvSearchLimit caps the TMDB hits resolved to IMDb per search; each costs a page fetch.
 const eztvSearchLimit = 5
@@ -62,6 +68,7 @@ func NewEZTV() *EZTV {
 // eztvInt decodes a field EZTV serves as either a number or a numeric string.
 type eztvInt int64
 
+// UnmarshalJSON accepts a JSON number, a numeric string, an empty string or null (read as 0).
 func (n *eztvInt) UnmarshalJSON(b []byte) error {
 	s := strings.Trim(string(b), `"`)
 	if s == "" || s == "null" {
@@ -103,10 +110,11 @@ type eztvResponse struct {
 	Torrents      []eztvTorrent `json:"torrents"`
 }
 
-func (e *EZTV) fetchPage(imdb string, page int) (*eztvResponse, error) {
+// fetchPage reads one page of a show's torrent list, abandoning the request when ctx ends.
+func (e *EZTV) fetchPage(ctx context.Context, imdb string, page int) (*eztvResponse, error) {
 	apiURL := fmt.Sprintf("%s/api/get-torrents?imdb_id=%s&limit=%d&page=%d",
 		strings.TrimRight(eztvBase, "/"), imdb, eztvPageSize, page)
-	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +151,8 @@ func (e *EZTV) torrents(id string) ([]eztvTorrent, error) {
 }
 
 // catalogue is torrents plus whether the list is complete: false when a later
-// page failed or the page limit cut the walk short.
+// page failed, or the page cap or time budget cut the walk short. It pages
+// until an empty or short page or the reported torrents_count is reached.
 func (e *EZTV) catalogue(id string) ([]eztvTorrent, bool, error) {
 	imdb, err := eztvIMDB(id)
 	if err != nil {
@@ -159,8 +168,10 @@ func (e *EZTV) catalogue(id string) ([]eztvTorrent, bool, error) {
 	var all []eztvTorrent
 	partial := false
 	reachedEnd := false
-	for page := 1; page <= eztvMaxPages; page++ {
-		resp, err := e.fetchPage(imdb, page)
+	ctx, cancel := context.WithTimeout(context.Background(), eztvBudget)
+	defer cancel()
+	for page := 1; page <= eztvMaxPages && ctx.Err() == nil; page++ {
+		resp, err := e.fetchPage(ctx, imdb, page)
 		if err != nil {
 			// Keep earlier pages: a partial catalogue beats failing outright
 			// because page 3 timed out. It is served but not cached.
@@ -233,6 +244,7 @@ func (e *EZTV) Search(query string) ([]media.SearchResult, error) {
 	return results, nil
 }
 
+// tmdbGet fetches a TMDB URL with browser-like headers and returns the body, capped at 2 MiB.
 func (e *EZTV) tmdbGet(u string) ([]byte, error) {
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
@@ -304,6 +316,7 @@ func (e *EZTV) imdbFor(tmdbID int) string {
 
 // --- Seasons and episodes ---
 
+// GetSeasons lists the seasons that have at least one single-episode release, in ascending order.
 func (e *EZTV) GetSeasons(id string) ([]media.Season, error) {
 	torrents, err := e.torrents(id)
 	if err != nil {
@@ -509,6 +522,7 @@ func (e *EZTV) episodeTorrents(id, episodeID string) ([]eztvTorrent, error) {
 	return sortedEZTVTorrents(out), nil
 }
 
+// sortedEZTVTorrents orders releases by quality height then seeds, keeping only seeded ones when any exist.
 func sortedEZTVTorrents(in []eztvTorrent) []eztvTorrent {
 	seeded := make([]eztvTorrent, 0, len(in))
 	for _, t := range in {
@@ -530,6 +544,7 @@ func sortedEZTVTorrents(in []eztvTorrent) []eztvTorrent {
 	return out
 }
 
+// GetServers lists an episode's releases as servers named by quality, group, size and seeds.
 func (e *EZTV) GetServers(id string, episodeID string) ([]media.Server, error) {
 	torrents, err := e.episodeTorrents(id, episodeID)
 	if err != nil {

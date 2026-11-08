@@ -153,3 +153,26 @@ func TestResolveStreamPlaysAnExplicitTorrentBaseDirectly(t *testing.T) {
 		t.Fatalf("fallback chain consulted %d times for an explicit torrent base", len(chain.seen()))
 	}
 }
+
+func TestResolveStreamPlaysAnExplicitTorrentBaseDirectlyWhenChainPrimaryIsTheProvider(t *testing.T) {
+	chainTestConfig(t, false)
+	httpURL := stubStreamServer(t)
+	fb := &recordingSP{magnetProvider: magnetProvider{
+		stubStreamProvider: stubStreamProvider{stream: &media.Stream{URL: httpURL}},
+		results:            []media.SearchResult{chainTestContent()},
+	}}
+	chain := withRecordingFallbackChain(t, fb)
+
+	torrent := newTorrentSource()
+	sess := recoveredTorrentSession(torrent, torrent)
+	stream, name, err := resolveStream(sess, map[string]bool{})
+	if err != nil {
+		t.Fatalf("resolveStream: %v", err)
+	}
+	if stream.URL != chainTestMagnet || name != "Primary" {
+		t.Fatalf("stream = %q (%s), want the explicit torrent base's magnet from Primary", stream.URL, name)
+	}
+	if len(chain.seen()) != 0 {
+		t.Fatalf("fallback chain consulted %d times for an explicit torrent base", len(chain.seen()))
+	}
+}

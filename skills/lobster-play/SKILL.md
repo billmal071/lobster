@@ -234,6 +234,13 @@ chain was exhausted, so providers after that point were never asked at all. The
 `N providers tried` count in the message excludes it; anything still running
 when it fired also carries its own `batch-timeout` row.
 
+When the title did resolve, but only to a torrent, `play --json` refuses it
+(a magnet is not a URL a JSON consumer can open). The code is still
+`providers_failed` with exit 3, but the `message` is the refusal itself, which
+tells you to play it without `--json`, and the error carries
+`"torrent_refused": true`. `error.providers` may be present beside it and lists
+the streaming sources that failed first. Do not report this as an outage.
+
 Exit 3 from `play --detach` is a narrower case: the background process was
 started and then died within a second. The message names the log file. Read
 that log rather than running `doctor` — the cause is in it.
