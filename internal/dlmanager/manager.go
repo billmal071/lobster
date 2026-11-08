@@ -28,6 +28,7 @@ type StreamResult struct {
 	URL        string
 	StreamType string // "hls" or "http"
 	Referer    string
+	UserAgent  string
 }
 
 // ResolveRequest describes the work a queued download needs a stream for.
@@ -179,7 +180,7 @@ func (m *Manager) Cancel(id int) error {
 // Retry re-queues a failed download for another attempt.
 func (m *Manager) Retry(id int) error {
 	// Clear stream info so it gets re-resolved.
-	if err := m.store.UpdateStreamInfo(id, "", "", ""); err != nil {
+	if err := m.store.UpdateStreamInfo(id, "", "", "", ""); err != nil {
 		return err
 	}
 	if err := m.store.UpdateStatus(id, "queued", ""); err != nil {
@@ -269,7 +270,8 @@ func (m *Manager) processDownload(dl *store.Download) {
 		dl.StreamURL = result.URL
 		dl.StreamType = result.StreamType
 		dl.Referer = result.Referer
-		m.store.UpdateStreamInfo(dl.ID, result.URL, result.StreamType, result.Referer)
+		dl.UserAgent = result.UserAgent
+		m.store.UpdateStreamInfo(dl.ID, result.URL, result.StreamType, result.Referer, result.UserAgent)
 	}
 
 	if dl.StreamURL == "" {
@@ -320,9 +322,9 @@ func (m *Manager) downloadHTTP(ctx context.Context, dl *store.Download) error {
 
 	// Check for existing partial download.
 	if dl.DoneBytes > 0 {
-		return m.httpEngine.Resume(ctx, dl.StreamURL, dl.OutputPath, dl.Referer, progressFn)
+		return m.httpEngine.Resume(ctx, dl.StreamURL, dl.OutputPath, engine.Headers{Referer: dl.Referer, UserAgent: dl.UserAgent}, progressFn)
 	}
-	return m.httpEngine.Download(ctx, dl.StreamURL, dl.OutputPath, dl.Referer, progressFn)
+	return m.httpEngine.Download(ctx, dl.StreamURL, dl.OutputPath, engine.Headers{Referer: dl.Referer, UserAgent: dl.UserAgent}, progressFn)
 }
 
 func (m *Manager) downloadHLS(ctx context.Context, dl *store.Download) error {
@@ -341,9 +343,9 @@ func (m *Manager) downloadHLS(ctx context.Context, dl *store.Download) error {
 	}
 
 	if dl.DoneSegments > 0 {
-		return m.hlsEngine.ResumeWithID(ctx, dl.ID, dl.StreamURL, dl.OutputPath, dl.Referer, progressFn)
+		return m.hlsEngine.ResumeWithID(ctx, dl.ID, dl.StreamURL, dl.OutputPath, engine.Headers{Referer: dl.Referer, UserAgent: dl.UserAgent}, progressFn)
 	}
-	return m.hlsEngine.ResumeWithID(ctx, dl.ID, dl.StreamURL, dl.OutputPath, dl.Referer, progressFn)
+	return m.hlsEngine.ResumeWithID(ctx, dl.ID, dl.StreamURL, dl.OutputPath, engine.Headers{Referer: dl.Referer, UserAgent: dl.UserAgent}, progressFn)
 }
 
 func (m *Manager) sendProgress(p ProgressUpdate) {

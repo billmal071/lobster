@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func TestHTTPDownload(t *testing.T) {
 	out := filepath.Join(dir, "output.mkv")
 
 	e := &HTTPEngine{Client: srv.Client()}
-	err := e.Download(context.Background(), srv.URL, out, "", nil)
+	err := e.Download(context.Background(), srv.URL, out, Headers{}, nil)
 	if err != nil {
 		t.Fatalf("download: %v", err)
 	}
@@ -72,7 +73,7 @@ func TestHTTPResume(t *testing.T) {
 	}
 
 	e := &HTTPEngine{Client: srv.Client()}
-	err := e.Resume(context.Background(), srv.URL, out, "", nil)
+	err := e.Resume(context.Background(), srv.URL, out, Headers{}, nil)
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -117,7 +118,7 @@ func TestHTTPProgress(t *testing.T) {
 	var lastDone int64
 	var calls int32
 	e := &HTTPEngine{Client: srv.Client()}
-	err := e.Download(context.Background(), srv.URL, out, "", func(done, total int64) {
+	err := e.Download(context.Background(), srv.URL, out, Headers{}, func(done, total int64) {
 		atomic.AddInt32(&calls, 1)
 		if done < atomic.LoadInt64(&lastDone) {
 			t.Errorf("progress went backwards: %d < %d", done, lastDone)
@@ -161,7 +162,7 @@ func TestHTTPCancel(t *testing.T) {
 	time.AfterFunc(50*time.Millisecond, cancel)
 
 	e := &HTTPEngine{Client: srv.Client(), RetryDelay: 1 * time.Millisecond}
-	err := e.Download(ctx, srv.URL, out, "", nil)
+	err := e.Download(ctx, srv.URL, out, Headers{}, nil)
 	if err == nil {
 		t.Fatal("expected error from cancellation")
 	}
@@ -202,7 +203,7 @@ func TestHTTPRetry(t *testing.T) {
 	out := filepath.Join(dir, "output.mkv")
 
 	e := &HTTPEngine{Client: srv.Client(), RetryDelay: 1 * time.Millisecond}
-	err := e.Download(context.Background(), srv.URL, out, "", nil)
+	err := e.Download(context.Background(), srv.URL, out, Headers{}, nil)
 	if err != nil {
 		t.Fatalf("download with retries: %v", err)
 	}
@@ -233,7 +234,7 @@ func TestHTTPRangeNotSupported(t *testing.T) {
 	os.WriteFile(partPath, data[:1024], 0644)
 
 	e := &HTTPEngine{Client: srv.Client()}
-	err := e.Resume(context.Background(), srv.URL, out, "", nil)
+	err := e.Resume(context.Background(), srv.URL, out, Headers{}, nil)
 	if err != nil {
 		t.Fatalf("resume (no range): %v", err)
 	}
@@ -242,5 +243,40 @@ func TestHTTPRangeNotSupported(t *testing.T) {
 	got, _ := os.ReadFile(out)
 	if len(got) != len(data) {
 		t.Errorf("size: got %d, want %d", len(got), len(data))
+	}
+}
+
+func TestHTTPDownloadSendsStreamUserAgentAndReferer(t *testing.T) {
+	var gotUA, gotRef string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA, gotRef = r.Header.Get("User-Agent"), r.Header.Get("Referer")
+		w.Write([]byte("data"))
+	}))
+	defer srv.Close()
+
+	e := &HTTPEngine{Client: srv.Client()}
+	out := filepath.Join(t.TempDir(), "o.mkv")
+	if err := e.Download(context.Background(), srv.URL, out, Headers{Referer: "https://ref/", UserAgent: "CdnOnly/9"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if gotUA != "CdnOnly/9" || gotRef != "https://ref/" {
+		t.Fatalf("UA=%q Referer=%q, want the stream's own", gotUA, gotRef)
+	}
+}
+
+func TestHTTPDownloadDefaultsUserAgentWhenStreamNamesNone(t *testing.T) {
+	var gotUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		w.Write([]byte("data"))
+	}))
+	defer srv.Close()
+
+	e := &HTTPEngine{Client: srv.Client()}
+	if err := e.Download(context.Background(), srv.URL, filepath.Join(t.TempDir(), "o.mkv"), Headers{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(gotUA, "Mozilla/5.0") {
+		t.Fatalf("UA = %q, want the browser default", gotUA)
 	}
 }

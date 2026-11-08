@@ -2,6 +2,8 @@ package resolver
 
 import (
 	"fmt"
+	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +41,14 @@ func (r *Resolver) probe(p provider.Provider, req Request) probeResult {
 	// transiently and discard an otherwise-good stream.
 	for attempt := 0; attempt < 2; attempt++ {
 		stream, stage, err = resolveWithProvider(p, req, r.log)
+		if err == nil && stream == nil {
+			err, stage = fmt.Errorf("empty stream"), "validate"
+		}
+		if err == nil && req.Accept != nil {
+			if aerr := req.Accept(stream); aerr != nil {
+				return probeResult{Provider: name, Stage: StageAccept, Err: aerr, Latency: time.Since(start)}
+			}
+		}
 		if err == nil && r.validate {
 			if verr := validateStream(r.client, stream); verr != nil {
 				err, stage = verr, "validate"
@@ -78,6 +88,10 @@ type Request struct {
 	Season    int
 	Episode   int
 	Quality   string
+	// Accept, when set, vets a resolved stream before it is validated; a
+	// non-nil error fails that provider within this race (the next one is
+	// tried) without being recorded in the health store.
+	Accept func(*media.Stream) error
 }
 
 // resolveWithProvider tries to resolve a stream using the given provider and
@@ -107,7 +121,7 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 
 		var stream *media.Stream
 		if sp, ok := p.(provider.StreamProvider); ok {
-			stream, err = tryStreamProviderFallback(sp, match, req.MediaType, req.Season, req.Episode, quality, log)
+			stream, err = tryStreamProviderFallback(sp, match, req.MediaType, sequelSeason(req.Title, match.ID, req.Season), req.Episode, quality, log)
 		} else {
 			stream, err = tryEmbedProviderFallback(p, match, req.MediaType, req.Season, req.Episode, quality, log)
 		}
@@ -460,6 +474,32 @@ func yearDiff(a, b string) int {
 	} else {
 		return d
 	}
+}
+
+var (
+	titleSeasonRe  = regexp.MustCompile(`(?i)\s*[(\[]?\s*\bSeason\s+(\d{1,2})\s*[)\]]?\s*$`)
+	nyaaSeasonIDRe = regexp.MustCompile(`^nyaa/([^?]*)\?(?:.*&)?s=(\d+)(?:&|$)`)
+)
+
+// sequelSeason maps season 1 to N when a request titled "<Show> Season N" (or
+// "(Season N)") matched a Nyaa series of the same show marked "?s=N": the
+// primary lists that sequel as a season-1 entry of its own, but Nyaa numbers
+// it N. "3rd Season" and "Season 2 Part 2" are not recognised and stay season 1.
+func sequelSeason(title, candidateID string, season int) int {
+	if season != 1 {
+		return season
+	}
+	t, id := titleSeasonRe.FindStringSubmatchIndex(title), nyaaSeasonIDRe.FindStringSubmatch(candidateID)
+	if t == nil || id == nil {
+		return season
+	}
+	want, _ := strconv.Atoi(title[t[2]:t[3]])
+	got, _ := strconv.Atoi(id[2])
+	base, err := url.QueryUnescape(id[1])
+	if err != nil || want != got || normalize(base) != normalize(title[:t[0]]) {
+		return season
+	}
+	return want
 }
 
 // tryStreamProviderFallback resolves a stream via StreamProvider.Watch().

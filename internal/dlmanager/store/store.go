@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -24,6 +25,7 @@ type Download struct {
 	StreamURL     string
 	StreamType    string // "hls" or "http"
 	Referer       string
+	UserAgent     string
 	OutputPath    string
 	SubtitleURL   string
 	Status        string // pending, queued, downloading, paused, completed, failed
@@ -64,6 +66,7 @@ CREATE TABLE IF NOT EXISTS downloads (
     stream_url     TEXT NOT NULL DEFAULT '',
     stream_type    TEXT NOT NULL DEFAULT '',
     referer        TEXT DEFAULT '',
+    user_agent     TEXT NOT NULL DEFAULT '',
     output_path    TEXT NOT NULL,
     subtitle_url   TEXT DEFAULT '',
     status         TEXT NOT NULL DEFAULT 'queued',
@@ -99,8 +102,13 @@ func Open(path string) (*Store, error) {
 	// For file-backed databases, this is still safe with WAL mode.
 	db.SetMaxOpenConns(1)
 
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("setting busy timeout: %w", err)
+	}
+
 	// Enable WAL mode for better concurrent read/write performance.
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+	if err := execWhileLocked(db, "PRAGMA journal_mode=WAL"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("setting WAL mode: %w", err)
 	}
@@ -124,12 +132,27 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+// execWhileLocked runs a statement, retrying for up to five seconds while
+// another process holds the database: SQLite does not honour busy_timeout
+// when a journal-mode switch collides with another connection's open.
+func execWhileLocked(db *sql.DB, stmt string) error {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, err := db.Exec(stmt)
+		if err == nil || !strings.Contains(err.Error(), "SQLITE_BUSY") || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // migrate brings a database created by an older release up to the current
 // schema. CREATE TABLE IF NOT EXISTS is a no-op against an existing table, so
 // columns added after a release need an explicit ALTER here.
 func migrate(db *sql.DB) error {
 	for _, col := range []struct{ name, ddl string }{
 		{"year", "ALTER TABLE downloads ADD COLUMN year TEXT NOT NULL DEFAULT ''"},
+		{"user_agent", "ALTER TABLE downloads ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''"},
 	} {
 		has, err := hasColumn(db, "downloads", col.name)
 		if err != nil {
@@ -138,11 +161,21 @@ func migrate(db *sql.DB) error {
 		if has {
 			continue
 		}
-		if _, err := db.Exec(col.ddl); err != nil {
+		if err := addColumn(db, col.ddl); err != nil {
 			return fmt.Errorf("adding downloads.%s: %w", col.name, err)
 		}
 	}
 	return nil
+}
+
+// addColumn runs an ALTER TABLE ADD COLUMN, treating a column another process
+// added since hasColumn looked as success.
+func addColumn(db *sql.DB, ddl string) error {
+	_, err := db.Exec(ddl)
+	if err != nil && strings.Contains(err.Error(), "duplicate column name") {
+		return nil
+	}
+	return err
 }
 
 // hasColumn reports whether a table already defines a column.
@@ -173,12 +206,12 @@ func (s *Store) Close() error {
 func (s *Store) InsertDownload(d *Download) (int, error) {
 	res, err := s.db.Exec(`
 		INSERT INTO downloads (title, media_title, media_type, year, season, episode,
-			media_id, episode_id, stream_url, stream_type, referer,
+			media_id, episode_id, stream_url, stream_type, referer, user_agent,
 			output_path, subtitle_url, status, error,
 			total_bytes, done_bytes, total_segments, done_segments)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.Title, d.MediaTitle, d.MediaType, d.Year, d.Season, d.Episode,
-		d.MediaID, d.EpisodeID, d.StreamURL, d.StreamType, d.Referer,
+		d.MediaID, d.EpisodeID, d.StreamURL, d.StreamType, d.Referer, d.UserAgent,
 		d.OutputPath, d.SubtitleURL, d.Status, d.Error,
 		d.TotalBytes, d.DoneBytes, d.TotalSegments, d.DoneSegments,
 	)
@@ -197,14 +230,14 @@ func (s *Store) GetDownload(id int) (*Download, error) {
 	d := &Download{}
 	err := s.db.QueryRow(`
 		SELECT id, title, media_title, media_type, year, season, episode,
-			media_id, episode_id, stream_url, stream_type, referer,
+			media_id, episode_id, stream_url, stream_type, referer, user_agent,
 			output_path, subtitle_url, status, error,
 			total_bytes, done_bytes, total_segments, done_segments,
 			created_at, updated_at
 		FROM downloads WHERE id = ?`, id,
 	).Scan(
 		&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Year, &d.Season, &d.Episode,
-		&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer,
+		&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer, &d.UserAgent,
 		&d.OutputPath, &d.SubtitleURL, &d.Status, &d.Error,
 		&d.TotalBytes, &d.DoneBytes, &d.TotalSegments, &d.DoneSegments,
 		&d.CreatedAt, &d.UpdatedAt,
@@ -222,7 +255,7 @@ func (s *Store) GetDownload(id int) (*Download, error) {
 func (s *Store) ListDownloads() ([]Download, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, media_title, media_type, year, season, episode,
-			media_id, episode_id, stream_url, stream_type, referer,
+			media_id, episode_id, stream_url, stream_type, referer, user_agent,
 			output_path, subtitle_url, status, error,
 			total_bytes, done_bytes, total_segments, done_segments,
 			created_at, updated_at
@@ -237,7 +270,7 @@ func (s *Store) ListDownloads() ([]Download, error) {
 		var d Download
 		if err := rows.Scan(
 			&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Year, &d.Season, &d.Episode,
-			&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer,
+			&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer, &d.UserAgent,
 			&d.OutputPath, &d.SubtitleURL, &d.Status, &d.Error,
 			&d.TotalBytes, &d.DoneBytes, &d.TotalSegments, &d.DoneSegments,
 			&d.CreatedAt, &d.UpdatedAt,
@@ -279,11 +312,11 @@ func (s *Store) UpdateProgress(id int, doneBytes int64, doneSegments int) error 
 	return nil
 }
 
-// UpdateStreamInfo sets the resolved stream URL, type, and referer.
-func (s *Store) UpdateStreamInfo(id int, streamURL, streamType, referer string) error {
+// UpdateStreamInfo sets the resolved stream URL, type, referer and user agent.
+func (s *Store) UpdateStreamInfo(id int, streamURL, streamType, referer, userAgent string) error {
 	res, err := s.db.Exec(`
-		UPDATE downloads SET stream_url = ?, stream_type = ?, referer = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?`, streamURL, streamType, referer, id)
+		UPDATE downloads SET stream_url = ?, stream_type = ?, referer = ?, user_agent = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?`, streamURL, streamType, referer, userAgent, id)
 	if err != nil {
 		return fmt.Errorf("updating stream info: %w", err)
 	}
@@ -320,7 +353,7 @@ func (s *Store) RecoverStale(maxAge time.Duration) ([]Download, error) {
 
 	rows, err := s.db.Query(`
 		SELECT id, title, media_title, media_type, year, season, episode,
-			media_id, episode_id, stream_url, stream_type, referer,
+			media_id, episode_id, stream_url, stream_type, referer, user_agent,
 			output_path, subtitle_url, status, error,
 			total_bytes, done_bytes, total_segments, done_segments,
 			created_at, updated_at
@@ -335,7 +368,7 @@ func (s *Store) RecoverStale(maxAge time.Duration) ([]Download, error) {
 		var d Download
 		if err := rows.Scan(
 			&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Year, &d.Season, &d.Episode,
-			&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer,
+			&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer, &d.UserAgent,
 			&d.OutputPath, &d.SubtitleURL, &d.Status, &d.Error,
 			&d.TotalBytes, &d.DoneBytes, &d.TotalSegments, &d.DoneSegments,
 			&d.CreatedAt, &d.UpdatedAt,
@@ -436,7 +469,7 @@ func (s *Store) NextQueued() (*Download, error) {
 	d := &Download{}
 	err := s.db.QueryRow(`
 		SELECT id, title, media_title, media_type, year, season, episode,
-			media_id, episode_id, stream_url, stream_type, referer,
+			media_id, episode_id, stream_url, stream_type, referer, user_agent,
 			output_path, subtitle_url, status, error,
 			total_bytes, done_bytes, total_segments, done_segments,
 			created_at, updated_at
@@ -444,7 +477,7 @@ func (s *Store) NextQueued() (*Download, error) {
 		ORDER BY created_at ASC LIMIT 1`,
 	).Scan(
 		&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Year, &d.Season, &d.Episode,
-		&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer,
+		&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer, &d.UserAgent,
 		&d.OutputPath, &d.SubtitleURL, &d.Status, &d.Error,
 		&d.TotalBytes, &d.DoneBytes, &d.TotalSegments, &d.DoneSegments,
 		&d.CreatedAt, &d.UpdatedAt,
@@ -470,7 +503,7 @@ func (s *Store) ClaimNextQueued() (*Download, error) {
 	d := &Download{}
 	err = tx.QueryRow(`
 		SELECT id, title, media_title, media_type, year, season, episode,
-			media_id, episode_id, stream_url, stream_type, referer,
+			media_id, episode_id, stream_url, stream_type, referer, user_agent,
 			output_path, subtitle_url, status, error,
 			total_bytes, done_bytes, total_segments, done_segments,
 			created_at, updated_at
@@ -478,7 +511,7 @@ func (s *Store) ClaimNextQueued() (*Download, error) {
 		ORDER BY created_at ASC LIMIT 1`,
 	).Scan(
 		&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Year, &d.Season, &d.Episode,
-		&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer,
+		&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer, &d.UserAgent,
 		&d.OutputPath, &d.SubtitleURL, &d.Status, &d.Error,
 		&d.TotalBytes, &d.DoneBytes, &d.TotalSegments, &d.DoneSegments,
 		&d.CreatedAt, &d.UpdatedAt,

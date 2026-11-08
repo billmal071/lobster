@@ -119,7 +119,7 @@ func TestHLSDownload(t *testing.T) {
 	out := filepath.Join(dir, "output.mkv")
 
 	e := &HLSEngine{Client: srv.Client(), RetryDelay: 1 * time.Millisecond}
-	err := e.Download(context.Background(), srv.URL+"/playlist.m3u8", out, "", nil)
+	err := e.Download(context.Background(), srv.URL+"/playlist.m3u8", out, Headers{}, nil)
 	if err != nil {
 		t.Fatalf("download: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestHLSResume(t *testing.T) {
 	countClient := &http.Client{Transport: countingTransport}
 
 	e := &HLSEngine{Client: countClient, Store: s, RetryDelay: 1 * time.Millisecond}
-	err = e.ResumeWithID(context.Background(), id, srv.URL+"/playlist.m3u8", out, "", nil)
+	err = e.ResumeWithID(context.Background(), id, srv.URL+"/playlist.m3u8", out, Headers{}, nil)
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestHLSSegmentProgress(t *testing.T) {
 	var lastDone int64
 
 	e := &HLSEngine{Client: srv.Client(), RetryDelay: 1 * time.Millisecond}
-	err := e.Download(context.Background(), srv.URL+"/playlist.m3u8", out, "", func(done, total int64) {
+	err := e.Download(context.Background(), srv.URL+"/playlist.m3u8", out, Headers{}, func(done, total int64) {
 		atomic.AddInt32(&progressCalls, 1)
 		if total != 4 {
 			t.Errorf("total: got %d, want 4", total)
@@ -276,7 +276,7 @@ func TestHLSCancel(t *testing.T) {
 
 	// Use 1 worker so segments download sequentially (seg 0, 1 complete before seg 2 blocks).
 	e := &HLSEngine{Client: srv.Client(), RetryDelay: 1 * time.Millisecond, SegmentWorkers: 1}
-	err := e.Download(ctx, srv.URL+"/playlist.m3u8", out, "", nil)
+	err := e.Download(ctx, srv.URL+"/playlist.m3u8", out, Headers{}, nil)
 	if err == nil {
 		t.Fatal("expected error from cancellation")
 	}
@@ -317,7 +317,7 @@ func TestHLSMasterPlaylist(t *testing.T) {
 	out := filepath.Join(dir, "output.mkv")
 
 	e := &HLSEngine{Client: srv.Client(), RetryDelay: 1 * time.Millisecond}
-	err := e.Download(context.Background(), srv.URL+"/master.m3u8", out, "", nil)
+	err := e.Download(context.Background(), srv.URL+"/master.m3u8", out, Headers{}, nil)
 	if err != nil {
 		t.Fatalf("download: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestHLSProgressMonotonicUnderContention(t *testing.T) {
 	var calls int
 
 	e := &HLSEngine{Client: srv.Client(), RetryDelay: 1 * time.Millisecond, SegmentWorkers: 3}
-	err := e.Download(context.Background(), srv.URL+"/playlist.m3u8", out, "", func(done, total int64) {
+	err := e.Download(context.Background(), srv.URL+"/playlist.m3u8", out, Headers{}, func(done, total int64) {
 		// Hold the engine's progress lock long enough to make workers queue.
 		for start := time.Now(); time.Since(start) < 50*time.Microsecond; {
 		}
@@ -385,5 +385,34 @@ func TestHLSProgressMonotonicUnderContention(t *testing.T) {
 	}
 	if last != totalSegs {
 		t.Errorf("final progress: got %d, want %d", last, totalSegs)
+	}
+}
+
+func TestHLSDownloadSendsStreamUserAgentOnPlaylistAndSegments(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]string{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/p.m3u8", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen["playlist"] = r.Header.Get("User-Agent")
+		mu.Unlock()
+		w.Write([]byte("#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10.0,\ns0.ts\n#EXT-X-ENDLIST\n"))
+	})
+	mux.HandleFunc("/s0.ts", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen["segment"] = r.Header.Get("User-Agent")
+		mu.Unlock()
+		w.Write([]byte("seg"))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	e := &HLSEngine{Client: srv.Client(), RetryDelay: time.Millisecond}
+	out := filepath.Join(t.TempDir(), "o.mkv")
+	_ = e.Download(context.Background(), srv.URL+"/p.m3u8", out, Headers{UserAgent: "CdnOnly/9"}, nil)
+	mu.Lock()
+	defer mu.Unlock()
+	if seen["playlist"] != "CdnOnly/9" || seen["segment"] != "CdnOnly/9" {
+		t.Fatalf("user agents = %v, want the stream's on both", seen)
 	}
 }

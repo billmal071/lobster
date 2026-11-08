@@ -297,7 +297,12 @@ const fallbackBudget = 90 * time.Second
 // every one of them fails: a magnet validates instantly, so racing them
 // together lets a torrent beat a working scraper that is still being checked.
 func tryFallbackStreamFrom(providers []provider.Provider, content media.SearchResult, season, episode int) (*media.Stream, error) {
+	return tryFallbackStreamAccepting(providers, content, season, episode, nil)
+}
+
+func tryFallbackStreamAccepting(providers []provider.Provider, content media.SearchResult, season, episode int, accept func(*media.Stream) error) (*media.Stream, error) {
 	req := resolver.Request{
+		Accept:    accept,
 		ID:        content.ID,
 		Title:     fallbackTitle(content),
 		Year:      content.Year,
@@ -419,8 +424,9 @@ func (e *resolveFailure) providersTried() int {
 	return len(seen)
 }
 
-// makeStreamResolver builds a StreamResolver that tries the primary provider
-// and all fallbacks to resolve a stream URL for downloads.
+// makeStreamResolver builds a StreamResolver for the download queue. It races
+// the fallback chain with the primary excluded and the torrent sources left
+// out, and skips any stream the queue cannot download.
 func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 	return func(req dlmanager.ResolveRequest) (*dlmanager.StreamResult, error) {
 		mt := media.Movie
@@ -433,7 +439,7 @@ func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 		// magnet (streamToResultChecked), so one winning would fail the
 		// download while a scraper that could have served it was abandoned.
 		content := media.SearchResult{ID: req.MediaID, Title: req.Title, Year: req.Year, Type: mt}
-		fbStream, err := tryFallbackStreamFrom(withoutMagnetSources(agentFallbackProviders(primary)), content, req.Season, req.Episode)
+		fbStream, err := tryFallbackStreamAccepting(withoutMagnetSources(agentFallbackProviders(primary)), content, req.Season, req.Episode, queueAccepts)
 		if err != nil {
 			return nil, fmt.Errorf("all providers failed: %w", err)
 		}
@@ -455,6 +461,11 @@ func isDASHManifest(rawURL string) bool {
 	return strings.HasSuffix(strings.ToLower(path), ".mpd")
 }
 
+func queueAccepts(s *media.Stream) error {
+	_, err := streamToResultChecked(s)
+	return err
+}
+
 // streamToResult converts a media.Stream to a dlmanager.StreamResult.
 func streamToResult(s *media.Stream) *dlmanager.StreamResult {
 	streamType := "http"
@@ -465,6 +476,7 @@ func streamToResult(s *media.Stream) *dlmanager.StreamResult {
 		URL:        s.URL,
 		StreamType: streamType,
 		Referer:    s.Referer,
+		UserAgent:  s.UserAgent,
 	}
 }
 
@@ -488,6 +500,9 @@ func streamToResult(s *media.Stream) *dlmanager.StreamResult {
 func streamToResultChecked(s *media.Stream) (*dlmanager.StreamResult, error) {
 	if torrentstream.IsMagnet(s.URL) {
 		return nil, fmt.Errorf("this source is a torrent, which cannot be downloaded this way: play it instead, or pick another source")
+	}
+	if s.Deobfuscate {
+		return nil, fmt.Errorf("this source's segments are disguised and need the local de-obfuscating proxy, which the download queue does not run: play it instead, or download it with -d")
 	}
 	if isDASHManifest(s.URL) {
 		return nil, fmt.Errorf("this source is an MPEG-DASH stream, which the download queue cannot assemble: play it instead, or download it with -d, which goes through ffmpeg")

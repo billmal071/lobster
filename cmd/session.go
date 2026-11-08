@@ -190,6 +190,13 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 		}
 	}
 
+	if excludeNames["Fallback"] {
+		if primaryMagnet != nil {
+			return primaryMagnet, "Primary", nil
+		}
+		return nil, "", fmt.Errorf("no other source for %s", sess.Title())
+	}
+
 	debugf("resolving stream via fallback providers for %s", sess.Title())
 	// The chain is built by excluding its argument, and sess.Provider is
 	// not always the configured primary: the episode-list recovery moves
@@ -201,6 +208,8 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 	}
 	if flagJSON {
 		chain = withoutMagnetSources(chain)
+	} else if primaryMagnet != nil {
+		chain = withoutProvider(chain, sess.Provider)
 	}
 	stream, err := tryFallbackStreamFrom(
 		chain,
@@ -240,6 +249,15 @@ func jsonMagnetRefusal(title string) error {
 // source the episode-list recovery chose, as opposed to one the user selected.
 func recoveredTorrentSource(sess *playlist.Session) bool {
 	return sess.ChainPrimary != nil && sess.ChainPrimary != sess.Provider && servesMagnets(sess.Provider)
+}
+
+// heldMagnetRemains reports whether a recovered torrent source may still have
+// a magnet to try: resolveStream holds one back for such a session, and
+// neither the primary nor the fallback has been excluded yet. It does not know
+// a magnet was actually held; when none was, the extra attempt costs at most
+// one more Watch before the original error is returned.
+func heldMagnetRemains(sess *playlist.Session, excludeNames map[string]bool) bool {
+	return !flagJSON && recoveredTorrentSource(sess) && !excludeNames["Primary"] && !excludeNames["Fallback"]
 }
 
 // playCurrentEpisode resolves the stream and plays the current episode.
@@ -316,9 +334,13 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		}
 	}
 
+	var fallbackErr error
 	for {
 		stream, serverName, err := resolveStream(sess, excludeNames)
 		if err != nil {
+			if fallbackErr != nil {
+				return fallbackErr
+			}
 			return err
 		}
 
@@ -332,7 +354,12 @@ func playCurrentEpisode(sess *playlist.Session) error {
 			// A dead swarm is a failed source like any other: exclude it and
 			// try the next one, exactly as a Play failure below does.
 			if serverName == "Fallback" {
-				return err
+				if !heldMagnetRemains(sess, excludeNames) {
+					return err
+				}
+				fallbackErr = err
+				excludeNames["Fallback"] = true
+				continue
 			}
 			excludeNames[serverName] = true
 			cachedServerName = ""
@@ -359,7 +386,12 @@ func playCurrentEpisode(sess *playlist.Session) error {
 
 		// If the fallback stream also failed, don't retry endlessly
 		if serverName == "Fallback" {
-			return fmt.Errorf("playback failed: %w", playErr)
+			fallbackErr = fmt.Errorf("playback failed: %w", playErr)
+			if !heldMagnetRemains(sess, excludeNames) {
+				return fallbackErr
+			}
+			excludeNames["Fallback"] = true
+			continue
 		}
 
 		// Exclude this server and try the next one

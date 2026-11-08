@@ -243,6 +243,11 @@ func TestNyaaParseTitle(t *testing.T) {
 	}{
 		{"Show (2019-2020) - 12", "", "Show", 0, 12, 0, "", false},
 		{"Show (01-12)", "", "", 0, 0, 0, "", true},
+		{"Show 1990 - 2010 (1080p)", "", "", 0, 0, 1080, "", true},
+		{"Show 2019-2020", "", "", 0, 0, 0, "", true},
+		{"[Group] Show (2019-2020) [1080p]", "Group", "", 0, 0, 1080, "", true},
+		{"[Group] Show [WEB 2019-2020] 12", "Group", "Show", 0, 12, 0, "", false},
+		{"Show 2010", "", "", 0, 0, 0, "", false},
 		{"Show - 05 (2019-2020) [1080p]", "", "Show", 0, 5, 1080, "", false},
 		{"Show (2019-2020) - 05", "", "Show", 0, 5, 0, "", false},
 		{"[Group] Show (01-12) [1080p]", "Group", "", 0, 0, 1080, "", true},
@@ -383,7 +388,6 @@ func TestNyaaWatchAcceptsFallbackEpisodeForm(t *testing.T) {
 	const s3ep12 = "magnet:?xt=urn:btih:fc13cf7e7b8483de7cd1dbe63fef16afa49e6322&"
 	for _, c := range []struct{ id, episode string }{
 		{nyaaS3ID, "12"},
-		{nyaaS3ID, nyaaS3ID + ":1:12"},
 		{nyaaS3ID, nyaaS3ID + ":3:12"},
 		{"nyaa/One-Punch+Man", "nyaa/One-Punch+Man:3:12"},
 	} {
@@ -895,5 +899,13 @@ func TestNyaaCacheEvictsExpiredFeedsOnInsert(t *testing.T) {
 	}
 	if got := len(n.cache); got != 1 {
 		t.Errorf("cache holds %d feeds, want only the fresh one", got)
+	}
+}
+
+func TestNyaaWatchRefusesSeasonOneForASequelSeriesID(t *testing.T) {
+	nyaaStub(t)
+	n := NewNyaa()
+	if st, err := n.Watch(nyaaS3ID, nyaaS3ID+":1:12", "Default", "1080"); err == nil {
+		t.Fatalf("season 1 request against the season 3 series served %s", st.URL)
 	}
 }

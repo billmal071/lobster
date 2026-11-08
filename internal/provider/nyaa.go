@@ -197,9 +197,10 @@ var (
 	nyaaExtRe   = regexp.MustCompile(`(?i)\.(mkv|mp4|avi|webm|ts)$`)
 	nyaaGroupRe = regexp.MustCompile(`^\[([^\]]+)\]\s*`)
 	// A trailing "-GROUP" on scene-style names: "H 264-VARYG", "x265-Rapta".
-	nyaaSceneGroupRe = regexp.MustCompile(`-([A-Za-z0-9]+)\s*$`)
+	nyaaSceneGroupRe = regexp.MustCompile(`-([A-Za-z0-9]*[A-Za-z][A-Za-z0-9]*)\s*$`)
 
 	nyaaBatchWordRe  = regexp.MustCompile(`(?i)\bbatch\b`)
+	nyaaYearSpanRe   = regexp.MustCompile(`\b((?:19|20)\d{2})\s*[-~]\s*((?:19|20)\d{2})\b`)
 	nyaaBatchEpsRe   = regexp.MustCompile(`(?i)\bepisodes?\s+\d{1,4}\s*[-~]\s*\d{1,4}\b`)
 	nyaaBatchParenRe = regexp.MustCompile(`\(\s*(\d{1,4})\s*[-~]\s*(\d{1,4})\s*\)`)
 	// Both ends zero-padded, so "Title 2 - 05" is an episode and "01-12" a
@@ -235,6 +236,26 @@ func nyaaYearSpan(lo, hi string) bool {
 		return len(v) == 4 && (strings.HasPrefix(v, "19") || strings.HasPrefix(v, "20"))
 	}
 	return isYear(lo) && isYear(hi)
+}
+
+// nyaaYearSpanOnly reports whether s has an ascending year span such as "1990 - 2010" and no episode number once the spans are removed, so the span is the only number-like token and the title is a pack.
+func nyaaYearSpanOnly(s string) bool {
+	found := false
+	rest := nyaaYearSpanRe.ReplaceAllStringFunc(s, func(span string) string {
+		m := nyaaYearSpanRe.FindStringSubmatch(span)
+		lo, _ := strconv.Atoi(m[1])
+		hi, _ := strconv.Atoi(m[2])
+		if lo >= hi {
+			return span
+		}
+		found = true
+		return " "
+	})
+	if !found {
+		return false
+	}
+	r := parseNyaaTitle(rest)
+	return r.Episode == 0 || r.Batch
 }
 
 // nyaaParenBatch reports whether s has a parenthesised range such as "(01-12)" that is not a year span.
@@ -293,7 +314,7 @@ func parseNyaaTitle(raw string) nyaaRelease {
 	}
 	if nyaaBatchWordRe.MatchString(s) || nyaaBatchEpsRe.MatchString(s) ||
 		nyaaParenBatch(s) || nyaaAscendingRange(s) ||
-		nyaaBatchERangeRe.MatchString(s) {
+		nyaaBatchERangeRe.MatchString(s) || nyaaYearSpanOnly(s) {
 		r.Batch = true
 		return r
 	}
@@ -655,15 +676,15 @@ func nyaaEpisodeRef(episodeID string) (season, episode int, err error) {
 // first and best-seeded within a resolution. Unseeded torrents are dropped
 // when a seeded one exists. A fallback-form episode ID naming season N >= 2
 // against an unmarked series ID is redirected to that series' "?s=N" ID; one
-// naming a season other than a marked ID's is refused, so the resolver can
-// try another candidate rather than play the wrong season. Season 1 is the
-// synthetic season every Nyaa series reports (GetSeasons) and always fits.
+// naming a season other than a marked ID's (season 1 included) is refused, so
+// the resolver can try another candidate rather than play the wrong season.
+// Season 1 of an unmarked ID is the series as listed.
 func (n *Nyaa) episodeReleases(id, episodeID string) ([]nyaaRelease, error) {
 	season, ep, err := nyaaEpisodeRef(episodeID)
 	if err != nil {
 		return nil, err
 	}
-	if season >= 2 {
+	if season >= 1 {
 		base, idSeason, year, err := parseNyaaID(id)
 		if err != nil {
 			return nil, err

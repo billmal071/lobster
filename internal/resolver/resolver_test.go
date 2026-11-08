@@ -68,7 +68,7 @@ func TestResolveAdvancesPastSlowBatch(t *testing.T) {
 	fast := &delayedSP{fakeSP: &fakeSP{}, name: "fast", delay: 5 * time.Millisecond, stream: &media.Stream{URL: "https://cdn/fast.m3u8"}}
 	r := New([]provider.Provider{slow, fast}, NewHealthStore(), func(string, ...any) {})
 	r.validate = false
-	r.batchSize = 1               // slow in batch 1, fast in batch 2
+	r.batchSize = 1                          // slow in batch 1, fast in batch 2
 	r.attemptTimeout = 50 * time.Millisecond // batch 1 can't finish in time -> abandon -> batch 2
 	start := time.Now()
 	got, _, err := r.Resolve(context.Background(), Request{Title: "Foo", MediaType: media.Movie})
@@ -153,5 +153,100 @@ func TestResolveOverallTimeoutRowIsNotAProviderProbe(t *testing.T) {
 	// from IsProviderProbe is 1 here and not 0.
 	if probes != 1 {
 		t.Errorf("IsProviderProbe accepted %d attempts, want 1 (the abandoned provider); attempts: %+v", probes, rep.Attempts)
+	}
+}
+
+func TestResolveAcceptRejectsStreamAndTriesNext(t *testing.T) {
+	refused := &delayedSP{fakeSP: &fakeSP{}, name: "refused", stream: &media.Stream{URL: "https://cdn/obf.m3u8", Deobfuscate: true}}
+	usable := &delayedSP{fakeSP: &fakeSP{}, name: "usable", delay: 50 * time.Millisecond, stream: &media.Stream{URL: "https://cdn/ok.m3u8"}}
+	r := New([]provider.Provider{refused, usable}, NewHealthStore(), func(string, ...any) {})
+	r.validate = false
+	r.batchSize = 3
+	req := Request{Title: "Foo", MediaType: media.Movie, Accept: func(s *media.Stream) error {
+		if s.Deobfuscate {
+			return errors.New("needs the de-obfuscating proxy")
+		}
+		return nil
+	}}
+	got, rep, err := r.Resolve(context.Background(), req)
+	if err != nil || got == nil || got.URL != "https://cdn/ok.m3u8" {
+		t.Fatalf("want the accepted stream, got %v / %v", got, err)
+	}
+	var sawAccept bool
+	for _, a := range rep.Attempts {
+		if a.Stage == "accept" && a.Err != nil {
+			sawAccept = true
+		}
+	}
+	if !sawAccept {
+		t.Fatalf("report lacks the refused attempt: %+v", rep.Attempts)
+	}
+}
+
+func TestResolveAcceptRejectingAllFails(t *testing.T) {
+	a := &delayedSP{fakeSP: &fakeSP{}, name: "a", stream: &media.Stream{URL: "https://cdn/a.m3u8"}}
+	r := New([]provider.Provider{a}, NewHealthStore(), func(string, ...any) {})
+	r.validate = false
+	got, _, err := r.Resolve(context.Background(), Request{Title: "Foo", MediaType: media.Movie, Accept: func(*media.Stream) error { return errors.New("no") }})
+	if got != nil || err == nil {
+		t.Fatalf("expected failure, got %v", got)
+	}
+}
+
+func TestResolveAcceptRefusalLeavesProviderHealthUnchanged(t *testing.T) {
+	a := &delayedSP{fakeSP: &fakeSP{}, name: "a", stream: &media.Stream{URL: "https://cdn/a.m3u8"}}
+	h := NewHealthStore()
+	r := New([]provider.Provider{a}, h, func(string, ...any) {})
+	r.validate = false
+	_, _, _ = r.Resolve(context.Background(), Request{Title: "Foo", MediaType: media.Movie, Accept: func(*media.Stream) error { return errors.New("no") }})
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.records) != 0 {
+		t.Fatalf("a refused stream changed provider health: %+v", h.records)
+	}
+}
+
+func TestResolveNilStreamWithAcceptFailsInsteadOfPanicking(t *testing.T) {
+	a := &delayedSP{fakeSP: &fakeSP{}, name: "a"}
+	r := New([]provider.Provider{a}, NewHealthStore(), func(string, ...any) {})
+	r.validate = false
+	accept := func(s *media.Stream) error { _ = s.URL; return nil }
+	got, _, err := r.Resolve(context.Background(), Request{Title: "Foo", MediaType: media.Movie, Accept: accept})
+	if got != nil || err == nil {
+		t.Fatalf("got %v / %v, want failure", got, err)
+	}
+}
+
+type failingWatchSP struct{ *fakeSP }
+
+func (f *failingWatchSP) Search(string) ([]media.SearchResult, error) {
+	return []media.SearchResult{{ID: "movie/1", Title: "Foo", Type: media.Movie}}, nil
+}
+func (f *failingWatchSP) Watch(string, string, string, string) (*media.Stream, error) {
+	return nil, errors.New("status 404")
+}
+
+func TestResolveWithAcceptStillRecordsGenuineFailuresAndSuccess(t *testing.T) {
+	searchFails := &fakeSP{searchErr: errors.New("search rejected")}
+	watchFails := &failingWatchSP{fakeSP: &fakeSP{}}
+	ok := &delayedSP{fakeSP: &fakeSP{}, name: "ok", delay: 80 * time.Millisecond, stream: &media.Stream{URL: "https://cdn/ok.m3u8"}}
+	h := NewHealthStore()
+	r := New([]provider.Provider{searchFails, watchFails, ok}, h, func(string, ...any) {})
+	r.validate = false
+	r.batchSize = 3
+	req := Request{Title: "Foo", MediaType: media.Movie, Accept: func(*media.Stream) error { return nil }}
+	if got, _, err := r.Resolve(context.Background(), req); err != nil || got == nil {
+		t.Fatalf("Resolve = %v / %v", got, err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, p := range []provider.Provider{searchFails, watchFails} {
+		rec := h.records[ProviderName(p)]
+		if rec == nil || rec.Score >= healthNeutral {
+			t.Errorf("%s: genuine failure not recorded: %+v", ProviderName(p), rec)
+		}
+	}
+	if rec := h.records[ProviderName(ok)]; rec == nil || rec.Score <= healthNeutral {
+		t.Errorf("success not recorded: %+v", rec)
 	}
 }
