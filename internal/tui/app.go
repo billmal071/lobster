@@ -184,6 +184,7 @@ func (m AppModel) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// Update handles one message. Download-dialog messages, and key presses while the dialog is open, go to the dialog; every other message updates the model by its type (key presses, window size, spinner ticks, fetched results, detail and poster, download progress).
 func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -568,6 +569,7 @@ func (m AppModel) buildHeaderTab() (string, string) {
 	return header, tabBar
 }
 
+// View renders the header, tab bar, active tab content and footer, or the download dialog over them when it is open.
 func (m AppModel) View() string {
 	if m.width == 0 || m.height == 0 {
 		return "Initializing..."
@@ -624,6 +626,7 @@ func (m AppModel) View() string {
 	return base
 }
 
+// renderTabBar renders the tab labels with the active one highlighted; the Downloads tab is listed only when a download manager exists.
 func (m AppModel) renderTabBar() string {
 	activeStyle := lipgloss.NewStyle().
 		Bold(true).

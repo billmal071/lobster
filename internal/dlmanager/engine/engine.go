@@ -31,6 +31,7 @@ type Engine interface {
 
 const defaultUserAgent = "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/121.0"
 
+// apply sets the request headers the stream needs: its User-Agent (a default Firefox one when none is given) and its Referer when present.
 func (h Headers) apply(req *http.Request) {
 	ua := h.UserAgent
 	if ua == "" {

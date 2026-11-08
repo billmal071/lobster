@@ -353,6 +353,7 @@ func TestEZTVEpisodeRef(t *testing.T) {
 	}
 }
 
+// eztvPagedServer points eztvBase at a fake EZTV API. The first fullPages pages are full and later ones short, torrents_count is reported only when countKey is set, and every page from failFrom (when positive) answers 502.
 func eztvPagedServer(t *testing.T, hits *int32, countKey bool, failFrom int, fullPages int) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -386,6 +387,7 @@ func eztvPagedServer(t *testing.T, hits *int32, countKey bool, failFrom int, ful
 	t.Cleanup(func() { eztvBase = old })
 }
 
+// TestEZTVPaginationContinuesWhenTorrentsCountIsMissing checks that paging continues past a full page when the response carries no torrents_count.
 func TestEZTVPaginationContinuesWhenTorrentsCountIsMissing(t *testing.T) {
 	var hits int32
 	eztvPagedServer(t, &hits, false, 0, 2)
@@ -398,6 +400,7 @@ func TestEZTVPaginationContinuesWhenTorrentsCountIsMissing(t *testing.T) {
 	}
 }
 
+// TestEZTVDoesNotCacheACataloguePartiallyFetched checks that a catalogue cut short by a failed page is fetched again on the next call rather than cached.
 func TestEZTVDoesNotCacheACataloguePartiallyFetched(t *testing.T) {
 	var hits int32
 	eztvPagedServer(t, &hits, true, 2, 5)
@@ -414,6 +417,7 @@ func TestEZTVDoesNotCacheACataloguePartiallyFetched(t *testing.T) {
 	}
 }
 
+// TestEZTVGetEpisodesFlagsACataloguePartiallyFetched checks that GetEpisodes returns the episodes of the pages that loaded with ErrIncompleteEpisodeList when a later page fails.
 func TestEZTVGetEpisodesFlagsACataloguePartiallyFetched(t *testing.T) {
 	var hits int32
 	eztvPagedServer(t, &hits, true, 2, 5)
@@ -426,6 +430,7 @@ func TestEZTVGetEpisodesFlagsACataloguePartiallyFetched(t *testing.T) {
 	}
 }
 
+// TestEZTVGetEpisodesFlagsACatalogueCutAtThePageLimit checks that GetEpisodes flags a catalogue cut off at the page limit as incomplete.
 func TestEZTVGetEpisodesFlagsACatalogueCutAtThePageLimit(t *testing.T) {
 	var hits int32
 	eztvPagedServer(t, &hits, false, 0, eztvMaxPages+5)
@@ -435,6 +440,7 @@ func TestEZTVGetEpisodesFlagsACatalogueCutAtThePageLimit(t *testing.T) {
 	}
 }
 
+// TestEZTVGetEpisodesCompleteCatalogueHasNoError checks that GetEpisodes returns no error for a catalogue fetched in full.
 func TestEZTVGetEpisodesCompleteCatalogueHasNoError(t *testing.T) {
 	var hits int32
 	eztvPagedServer(t, &hits, true, 0, 1)
@@ -443,6 +449,7 @@ func TestEZTVGetEpisodesCompleteCatalogueHasNoError(t *testing.T) {
 	}
 }
 
+// TestEZTVReturnsACatalogueLongerThanTenPages checks that a catalogue of more than ten pages is returned whole and not flagged.
 func TestEZTVReturnsACatalogueLongerThanTenPages(t *testing.T) {
 	var hits int32
 	eztvPagedServer(t, &hits, false, 0, 14)
@@ -458,6 +465,7 @@ func TestEZTVReturnsACatalogueLongerThanTenPages(t *testing.T) {
 	}
 }
 
+// TestEZTVEndlessCatalogueStopsAtTheSafetyCap checks that an endless catalogue stops at the page cap, is flagged incomplete, and is not remembered as complete.
 func TestEZTVEndlessCatalogueStopsAtTheSafetyCap(t *testing.T) {
 	var hits int32
 	eztvPagedServer(t, &hits, false, 0, 1<<30)
@@ -474,6 +482,7 @@ func TestEZTVEndlessCatalogueStopsAtTheSafetyCap(t *testing.T) {
 	}
 }
 
+// TestEZTVSlowCatalogueStopsAtTheTimeBudget checks that a slow catalogue stops at the time budget and is flagged incomplete.
 func TestEZTVSlowCatalogueStopsAtTheTimeBudget(t *testing.T) {
 	old := eztvBudget
 	eztvBudget = 300 * time.Millisecond
@@ -514,5 +523,64 @@ func TestEZTVFailedLaterPageOfALongCatalogueIsFlagged(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&hits); got != 12 {
 		t.Fatalf("fetched %d pages, want 12 (walk ends at the failure)", got)
+	}
+}
+
+// TestEZTVGetSeasonsFlagsAPartiallyFetchedCatalogue checks that GetSeasons returns the seasons of the pages that loaded with ErrIncompleteEpisodeList when a later page fails.
+func TestEZTVGetSeasonsFlagsAPartiallyFetchedCatalogue(t *testing.T) {
+	var hits int32
+	eztvPagedServer(t, &hits, true, 2, 5)
+	seasons, err := NewEZTV().GetSeasons("eztv/1")
+	if len(seasons) == 0 {
+		t.Fatalf("seasons empty, want those of the pages that did load (err=%v)", err)
+	}
+	if !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("err = %v, want ErrIncompleteEpisodeList: a later season may sit on the page that failed", err)
+	}
+}
+
+// TestEZTVGetSeasonsFlagsACatalogueCutAtThePageLimit checks that GetSeasons flags a catalogue cut off at the page limit as incomplete.
+func TestEZTVGetSeasonsFlagsACatalogueCutAtThePageLimit(t *testing.T) {
+	var hits int32
+	eztvPagedServer(t, &hits, false, 0, eztvMaxPages+5)
+	seasons, err := NewEZTV().GetSeasons("eztv/1")
+	if len(seasons) == 0 || !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("seasons=%d err=%v, want seasons plus ErrIncompleteEpisodeList at the page limit", len(seasons), err)
+	}
+}
+
+// TestEZTVGetSeasonsCompleteCatalogueHasNoError checks that GetSeasons returns no error for a catalogue fetched in full.
+func TestEZTVGetSeasonsCompleteCatalogueHasNoError(t *testing.T) {
+	var hits int32
+	eztvPagedServer(t, &hits, true, 0, 1)
+	if _, err := NewEZTV().GetSeasons("eztv/1"); err != nil {
+		t.Fatalf("err = %v, want nil for a fully fetched catalogue", err)
+	}
+}
+
+// TestEZTVGetSeasonsFlagsATimeBudgetCut checks that GetSeasons flags a catalogue cut off by the time budget as incomplete.
+func TestEZTVGetSeasonsFlagsATimeBudgetCut(t *testing.T) {
+	old := eztvBudget
+	eztvBudget = 300 * time.Millisecond
+	t.Cleanup(func() { eztvBudget = old })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		var torrents []map[string]any
+		for i := 0; i < eztvPageSize; i++ {
+			torrents = append(torrents, map[string]any{
+				"id": i, "filename": "S.S01E01.720p.mkv", "magnet_url": "magnet:?xt=urn:btih:x",
+				"season": "1", "episode": "1", "seeds": 1, "size_bytes": 1,
+			})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"torrents": torrents})
+	}))
+	t.Cleanup(srv.Close)
+	oldBase := eztvBase
+	eztvBase = srv.URL
+	t.Cleanup(func() { eztvBase = oldBase })
+
+	seasons, err := NewEZTV().GetSeasons("eztv/1")
+	if len(seasons) == 0 || !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("seasons=%d err=%v, want seasons plus ErrIncompleteEpisodeList", len(seasons), err)
 	}
 }

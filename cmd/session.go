@@ -173,6 +173,13 @@ func episodeListMenu(sess *playlist.Session) error {
 // the session's native episode ID; otherwise (e.g. FlixHQWS, used for metadata
 // only) resolution goes through the resilient fallback path.
 func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media.Stream, string, error) {
+	return resolveStreamHolding(sess, excludeNames, new(*media.Stream))
+}
+
+// resolveStreamHolding is resolveStream with a slot that keeps the primary's
+// magnet between calls: a later Primary Watch that fails still leaves the one
+// an earlier call received to fall back on.
+func resolveStreamHolding(sess *playlist.Session, excludeNames map[string]bool, held **media.Stream) (*media.Stream, string, error) {
 	// Primary StreamProvider gets first crack with the native episode ID from the
 	// session — lets a provider with its own ID scheme (TBCPL, VaPlayer) reach
 	// its own Watch verbatim, bypassing tmdbID:season:episode reconstruction.
@@ -187,7 +194,11 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 				return stream, "Primary", nil
 			}
 			primaryMagnet = stream
+			*held = stream
 		}
+	}
+	if primaryMagnet == nil && *held != nil && !excludeNames["Primary"] {
+		primaryMagnet = *held
 	}
 
 	if excludeNames["Fallback"] {
@@ -220,7 +231,7 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 	if err != nil {
 		if primaryMagnet != nil {
 			if flagJSON {
-				return nil, "", errors.Join(jsonMagnetRefusal(sess.Title()),
+				return nil, "", errors.Join(jsonMagnetRefusal(sess.Title(), sess.Content.Type, sess.CurrentSeason().Number, sess.Current().Number),
 					fmt.Errorf("all providers failed for %s: %w", sess.Title(), err))
 			}
 			return primaryMagnet, "Primary", nil
@@ -238,11 +249,23 @@ type jsonMagnetRefusalError struct{ msg string }
 func (e *jsonMagnetRefusalError) Error() string { return e.msg }
 
 // jsonMagnetRefusal is the error for a title that resolved only to a torrent
-// while --json is set, with the advice to play it without --json.
-func jsonMagnetRefusal(title string) error {
+// while --json is set. It advises playing without --json, or fetching the
+// title with the interactive CLI from the torrent source that carries its
+// kind: YTS for a film, EZTV for an episode (picked by season and episode at
+// the CLI's prompts), or Nyaa for anime, which lists a sequel as its own
+// "Title Season N" entry rather than as a season of "Title".
+func jsonMagnetRefusal(title string, mediaType media.MediaType, season, episode int) error {
+	fetch := `lobster --base yts "title" --download <dir>`
+	if mediaType == media.TV {
+		pick := ""
+		if season > 0 && episode > 0 {
+			pick = fmt.Sprintf(", then pick season %d episode %d", season, episode)
+		}
+		fetch = `lobster --base eztv "title" --download <dir>` + pick +
+			`, or --base nyaa for anime, where a sequel is its own "Title Season N" entry`
+	}
 	return &jsonMagnetRefusalError{msg: fmt.Sprintf("%s resolved to a torrent, which --json cannot express as a playable URL; "+
-		"play it without --json, or fetch it first with the interactive CLI "+
-		`(lobster --base yts "title" --download <dir>; 'play' has no --download)`, title)}
+		"play it without --json, or fetch it first with the interactive CLI (%s; 'play' has no --download)", title, fetch)}
 }
 
 // recoveredTorrentSource reports whether the session's provider is a torrent
@@ -276,7 +299,7 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		// is not a URL a JSON consumer can open, and a loopback URL would die
 		// with this process.
 		if torrentstream.IsMagnet(stream.URL) {
-			return jsonMagnetRefusal(title)
+			return jsonMagnetRefusal(title, sess.Content.Type, sess.CurrentSeason().Number, sess.Current().Number)
 		}
 		return outputJSON(stream, title)
 	}
@@ -335,8 +358,9 @@ func playCurrentEpisode(sess *playlist.Session) error {
 	}
 
 	var fallbackErr error
+	var heldMagnet *media.Stream
 	for {
-		stream, serverName, err := resolveStream(sess, excludeNames)
+		stream, serverName, err := resolveStreamHolding(sess, excludeNames, &heldMagnet)
 		if err != nil {
 			if fallbackErr != nil {
 				return fallbackErr

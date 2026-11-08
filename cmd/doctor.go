@@ -34,6 +34,7 @@ broken rather than the catalogue being thin.`,
 	RunE: doctorRun,
 }
 
+// doctorRun probes a fixed list of providers, each with query (the first argument, or a well-known default) except AnimeOnsen, Nyaa and EZTV, which use their own fixed queries, prints the health table to stdout, and fails only when no provider is usable.
 func doctorRun(cmd *cobra.Command, args []string) error {
 	query := doctorDefaultQuery
 	if len(args) > 0 && args[0] != "" {

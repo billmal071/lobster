@@ -315,6 +315,9 @@ listing is the whole season:
   whole season. It is not a floor in the way the code above is, and the two are
   separate codes because a single code fired on most correct runs and so said
   nothing.
+- `{"code": "season_list_incomplete", "provider": "eztv"}` — the source could
+  not fetch its whole release list, so `seasons` may be missing some. A season
+  absent from it is not proof the season does not exist.
 - `{"code": "episode_list_from_fallback", "base": "flixhq.ws",
   "provider": "tbcpl", "episodes_listed": 10}` — the source named by `--base`
   (or by the ref) could not list this season, so the listing came from a

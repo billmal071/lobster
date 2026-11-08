@@ -320,6 +320,12 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		stopSeasons := ui.StartSpinner("Fetching seasons...")
 		seasons, err := p.GetSeasons(selected.ID)
 		stopSeasons()
+		seasonsPartial := false
+		if err != nil && len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
+			seasonsPartial = true
+			warnf("%s could not list every season of %q, so the season list may be short: %v", providerLabel(p), title, err)
+			err = nil
+		}
 		if err != nil || len(seasons) == 0 {
 			// Primary provider can't resolve seasons — try fallback stream
 			debugf("primary provider seasons failed: %v, trying fallbacks", err)
@@ -344,14 +350,15 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// `play` goes ahead on a number the user supplied.
 			if season > 0 {
 				if hits := fallbackSeasonHits(chainPrimary, contentRequest(selected)); len(hits) > 0 {
-					enumerated := false
+					enumerated, anyPartial := false, false
 					for _, h := range hits {
 						if _, ok := pickSeason(h.seasons, season); ok {
 							enumerated = true
 							break
 						}
+						anyPartial = anyPartial || h.partial
 					}
-					if !enumerated {
+					if !enumerated && !anyPartial {
 						return errSeasonNotFound{season: season, title: title}
 					}
 				}
@@ -418,9 +425,17 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				// the provider-call key moves with it, never selected.ID.
 				alt, altSeasons, altSel, ok := seasonAcrossHits(
 					chainPrimary, contentRequest(selected),
-					seasonAnswer{provider: p, id: providerID, seasons: seasons, fromPrimary: true},
+					seasonAnswer{provider: p, id: providerID, seasons: seasons, fromPrimary: true, partial: seasonsPartial},
 					season,
 				)
+				if !ok && alt.partial {
+					debugf("season %d is absent from a partial season list; trying the fallback chain by number", season)
+					fbStream, fbErr := tryFallbackStream(chainPrimary, selected, season, episode)
+					if fbErr != nil {
+						return fbErr
+					}
+					return playStream(fbStream, title, selected, season, episode)
+				}
 				if !ok {
 					return errSeasonNotFound{season: season, title: title}
 				}
@@ -850,7 +865,7 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 		// works. Guarding here rather than at each arrival covers all of
 		// them, including any added later.
 		if torrentstream.IsMagnet(stream.URL) {
-			return jsonMagnetRefusal(title)
+			return jsonMagnetRefusal(title, selected.Type, season, episode)
 		}
 		out := map[string]interface{}{
 			"title":     title,

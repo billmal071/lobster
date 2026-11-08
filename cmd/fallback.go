@@ -300,6 +300,12 @@ func tryFallbackStreamFrom(providers []provider.Provider, content media.SearchRe
 	return tryFallbackStreamAccepting(providers, content, season, episode, nil)
 }
 
+// tryFallbackStreamAccepting is tryFallbackStreamFrom with accept vetting each
+// stream a provider yields: a refused stream moves that provider on to its
+// next server or confident-match candidate first, and a provider left with no
+// accepted stream is reported as an accept refusal, after which the race
+// moves on to the next provider. The streaming providers run first and the
+// torrent providers only after all of them fail.
 func tryFallbackStreamAccepting(providers []provider.Provider, content media.SearchResult, season, episode int, accept func(*media.Stream) error) (*media.Stream, error) {
 	req := resolver.Request{
 		Accept:    accept,
@@ -425,8 +431,10 @@ func (e *resolveFailure) providersTried() int {
 }
 
 // makeStreamResolver builds a StreamResolver for the download queue. It races
-// the fallback chain with the primary excluded and the torrent sources left
-// out, and skips any stream the queue cannot download.
+// the primary provider together with the fallback chain, leaves the torrent
+// sources out, and skips any stream the queue cannot download. The primary
+// takes part because a queued item resolves here only when it holds no saved
+// URL, and the primary may be the one source that can supply one.
 func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 	return func(req dlmanager.ResolveRequest) (*dlmanager.StreamResult, error) {
 		mt := media.Movie
@@ -439,7 +447,8 @@ func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 		// magnet (streamToResultChecked), so one winning would fail the
 		// download while a scraper that could have served it was abandoned.
 		content := media.SearchResult{ID: req.MediaID, Title: req.Title, Year: req.Year, Type: mt}
-		fbStream, err := tryFallbackStreamAccepting(withoutMagnetSources(agentFallbackProviders(primary)), content, req.Season, req.Episode, queueAccepts)
+		chain := append([]provider.Provider{primary}, withoutProvider(agentFallbackProviders(primary), primary)...)
+		fbStream, err := tryFallbackStreamAccepting(withoutMagnetSources(chain), content, req.Season, req.Episode, queueAccepts)
 		if err != nil {
 			return nil, fmt.Errorf("all providers failed: %w", err)
 		}

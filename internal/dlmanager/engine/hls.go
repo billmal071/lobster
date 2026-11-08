@@ -49,6 +49,7 @@ func (e *HLSEngine) ResumeWithID(ctx context.Context, downloadID int, streamURL,
 	return e.downloadHLS(ctx, streamURL, outputPath, hdr, progressFn, downloadID)
 }
 
+// downloadHLS fetches the playlist, downloads the segments that are not already recorded as complete for downloadID into outputPath+".parts", reporting progress per segment, then muxes them into outputPath and removes the parts directory.
 func (e *HLSEngine) downloadHLS(ctx context.Context, streamURL, outputPath string, hdr Headers, progressFn ProgressFunc, downloadID int) error {
 	partsDir := outputPath + ".parts"
 	if err := os.MkdirAll(partsDir, 0755); err != nil {
@@ -191,6 +192,7 @@ func (e *HLSEngine) downloadHLS(ctx context.Context, streamURL, outputPath strin
 	return nil
 }
 
+// downloadSegment downloads one segment, retrying with exponential backoff up to MaxRetries attempts (three when unset) and stopping early when ctx is cancelled.
 func (e *HLSEngine) downloadSegment(ctx context.Context, segURL, segPath string, hdr Headers) error {
 	base := e.RetryDelay
 	if base == 0 {
@@ -224,6 +226,7 @@ func (e *HLSEngine) downloadSegment(ctx context.Context, segURL, segPath string,
 	return fmt.Errorf("after %d attempts: %w", maxRetries, lastErr)
 }
 
+// doSegmentDownload makes one attempt to fetch segURL into segPath, failing on any status other than 200.
 func (e *HLSEngine) doSegmentDownload(ctx context.Context, segURL, segPath string, hdr Headers) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, segURL, nil)
 	if err != nil {
@@ -251,6 +254,7 @@ func (e *HLSEngine) doSegmentDownload(ctx context.Context, segURL, segPath strin
 	return err
 }
 
+// fetchPlaylist returns the segment URLs of the playlist at playlistURL, following a master playlist to its last variant.
 func (e *HLSEngine) fetchPlaylist(ctx context.Context, playlistURL string, hdr Headers) ([]string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, playlistURL, nil)
 	if err != nil {

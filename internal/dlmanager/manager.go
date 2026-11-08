@@ -234,6 +234,7 @@ func (m *Manager) worker() {
 	}
 }
 
+// processDownload runs one claimed download to a final state. It resolves the stream through the resolver when none is stored, saving the result with its Referer and User-Agent, dispatches on the stream type, and records completed or failed, leaving the status alone when the download was cancelled or paused.
 func (m *Manager) processDownload(dl *store.Download) {
 	dlCtx, dlCancel := context.WithCancel(m.ctx)
 	m.mu.Lock()
@@ -305,6 +306,7 @@ func (m *Manager) processDownload(dl *store.Download) {
 	m.sendProgress(ProgressUpdate{DownloadID: dl.ID, Status: "completed"})
 }
 
+// downloadHTTP downloads dl over the HTTP engine, resuming when bytes were already saved, and records byte progress and speed.
 func (m *Manager) downloadHTTP(ctx context.Context, dl *store.Download) error {
 	tracker := newSpeedTracker()
 
@@ -327,6 +329,7 @@ func (m *Manager) downloadHTTP(ctx context.Context, dl *store.Download) error {
 	return m.httpEngine.Download(ctx, dl.StreamURL, dl.OutputPath, engine.Headers{Referer: dl.Referer, UserAgent: dl.UserAgent}, progressFn)
 }
 
+// downloadHLS downloads dl over the HLS engine, resuming from the recorded segments when some were already saved, and records segment progress and speed.
 func (m *Manager) downloadHLS(ctx context.Context, dl *store.Download) error {
 	tracker := newSpeedTracker()
 

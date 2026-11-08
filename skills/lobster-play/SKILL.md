@@ -67,7 +67,7 @@ Do not tell the user a row came from their base unless it did; each `ref`
 names its own source where that source has a base token, so prefer the rows
 whose base matches when they asked for one.
 
-`episodes` uses the same array for three entries of its own:
+`episodes` uses the same array for four entries of its own:
 
 - `{"code": "episode_list_incomplete", "provider": "animeonsen",
   "episodes_listed": 8}` — the episodes listed were all confirmed, and the
@@ -80,6 +80,9 @@ whose base matches when they asked for one.
   tell the user an episode past it definitely does not exist, and offer to try
   playing it if they ask for one. This is the normal outcome for sources that
   enumerate by probing, so do not present it to the user as a problem.
+- `{"code": "season_list_incomplete", "provider": "eztv"}` — the source could
+  not fetch its whole release list, so `seasons` may be missing some. Do not
+  tell the user a season does not exist because it is not listed.
 - `{"code": "episode_list_from_fallback", "base": "flixhq.ws",
   "provider": "tbcpl", "episodes_listed": 10}` — the base the user asked for
   could not list this season and a fallback answered instead. Say which source

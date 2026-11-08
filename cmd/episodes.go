@@ -38,6 +38,7 @@ func init() {
 	episodesCmd.Flags().IntVar(&flagSeason, "season", 0, "Season number (default: first)")
 }
 
+// episodesRun lists the requested season of the --ref show as a JSON envelope: seasons come from the configured provider or, when it cannot enumerate them, the first fallback that can, and the result carries warnings when the list is short or came from a different provider.
 func episodesRun(cmd *cobra.Command, args []string) error {
 	r, err := decodeRef(flagRef)
 	if err != nil {
@@ -96,6 +97,11 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		src, seasons, sel, ok = seasonAcrossHits(primary, seasonRequest(r), src, wantSeason)
 		p = src.provider
 	}
+	if !ok && src.partial {
+		return emitErr("providers_failed", exitProvidersFailed,
+			"season %d was not in the season list %s could fetch for %q, and that list is incomplete, so it may still exist",
+			flagSeason, providerLabel(src.provider), r.Title)
+	}
 	if !ok {
 		return emitErr("no_results", exitNoResults, "season %d not found for %q", flagSeason, r.Title)
 	}
@@ -117,6 +123,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	// base test below asked whether the *chain member's* token named the
 	// primary.
 	asked := primary
+	seasonsPartial := src.partial
 
 	eps, err := listSeasonEpisodes(p, src, sel)
 	// An enumeration that stopped short of the end is an answer, not a
@@ -159,6 +166,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 			debugf("episodes: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), a.season.Number)
 			p, seasons, sel, eps, err = a.hit.provider, a.hit.seasons, a.season, a.episodes, nil
 			shortfall = a.shortfall
+			seasonsPartial = a.hit.partial
 		}
 	}
 	if err != nil {
@@ -200,7 +208,17 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		"episodes": out,
 		"provider": providerLabel(p),
 	}
-	if w := episodeSourceWarnings(asked, p, shortfall, len(out)); len(w) > 0 {
+	w := episodeSourceWarnings(asked, p, shortfall, len(out))
+	if seasonsPartial {
+		w = append(w, map[string]any{
+			"code":     "season_list_incomplete",
+			"provider": providerLabel(p),
+			"message": fmt.Sprintf(
+				"%s flagged its season list as incomplete, so the seasons above may be missing some",
+				providerLabel(p)),
+		})
+	}
+	if len(w) > 0 {
 		payload["warnings"] = w
 	}
 	return emitJSON(payload)
@@ -479,6 +497,9 @@ func seasonSource(primary provider.Provider, r playRef) seasonAnswer {
 	if err == nil && len(seasons) > 0 {
 		return seasonAnswer{provider: primary, id: r.ID, seasons: seasons, fromPrimary: true}
 	}
+	if len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
+		return seasonAnswer{provider: primary, id: r.ID, seasons: seasons, fromPrimary: true, partial: true}
+	}
 	debugf("episodes: primary could not enumerate %q (err=%v, seasons=%d); re-searching the fallback chain by title", r.ID, err, len(seasons))
 
 	if hits := fallbackSeasonHits(primary, seasonRequest(r)); len(hits) > 0 {
@@ -486,6 +507,7 @@ func seasonSource(primary provider.Provider, r playRef) seasonAnswer {
 			provider: hits[0].provider,
 			id:       hits[0].id,
 			seasons:  hits[0].seasons,
+			partial:  hits[0].partial,
 			alts:     hits[1:],
 		}
 	}
@@ -522,8 +544,12 @@ func seasonAcrossHits(primary provider.Provider, req resolver.Request, src seaso
 			provider: h.provider,
 			id:       h.id,
 			seasons:  h.seasons,
+			partial:  h.partial,
 			alts:     alts[i+1:],
 		}, h.seasons, sel, true
+	}
+	for _, h := range alts {
+		src.partial = src.partial || h.partial
 	}
 	return src, src.seasons, media.Season{}, false
 }
@@ -540,7 +566,12 @@ type seasonAnswer struct {
 	// fromPrimary reports that the chain scan has not run, so alts is empty
 	// because nothing looked rather than because nothing answered.
 	fromPrimary bool
-	err         error
+	// partial reports that a season list consulted for this answer, the
+	// provider's own or a chain hit's, was flagged incomplete
+	// (provider.ErrIncompleteEpisodeList), so a season absent from all of them
+	// may still exist.
+	partial bool
+	err     error
 }
 
 // seasonRequest is the ref as the resolver sees it: the ID/Title/Year all
@@ -744,6 +775,8 @@ type seasonHit struct {
 	id       string
 	title    string
 	seasons  []media.Season
+	// partial reports that seasons came with provider.ErrIncompleteEpisodeList.
+	partial bool
 }
 
 // probeSeasons asks one fallback provider whether it has req's work and can
@@ -761,10 +794,11 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 			continue
 		}
 		seasons, err := seasonsWithContext(ctx, p, c.ID)
-		if err != nil || len(seasons) == 0 {
+		partial := err != nil && len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList)
+		if (err != nil && !partial) || len(seasons) == 0 {
 			continue
 		}
-		return &seasonHit{provider: p, id: c.ID, title: c.Title, seasons: seasons}
+		return &seasonHit{provider: p, id: c.ID, title: c.Title, seasons: seasons, partial: partial}
 	}
 	return nil
 }

@@ -63,6 +63,7 @@ func TestResolveAllFailReturnsReport(t *testing.T) {
 	}
 }
 
+// TestResolveAdvancesPastSlowBatch checks that the resolver moves on to the next batch of providers when the first batch does not answer in time.
 func TestResolveAdvancesPastSlowBatch(t *testing.T) {
 	slow := &delayedSP{fakeSP: &fakeSP{}, name: "slow", delay: 500 * time.Millisecond, stream: &media.Stream{URL: "https://cdn/slow.m3u8"}}
 	fast := &delayedSP{fakeSP: &fakeSP{}, name: "fast", delay: 5 * time.Millisecond, stream: &media.Stream{URL: "https://cdn/fast.m3u8"}}
@@ -156,6 +157,7 @@ func TestResolveOverallTimeoutRowIsNotAProviderProbe(t *testing.T) {
 	}
 }
 
+// TestResolveAcceptRejectsStreamAndTriesNext checks that a provider whose stream Accept refuses is reported at the accept stage and the next provider's stream is returned.
 func TestResolveAcceptRejectsStreamAndTriesNext(t *testing.T) {
 	refused := &delayedSP{fakeSP: &fakeSP{}, name: "refused", stream: &media.Stream{URL: "https://cdn/obf.m3u8", Deobfuscate: true}}
 	usable := &delayedSP{fakeSP: &fakeSP{}, name: "usable", delay: 50 * time.Millisecond, stream: &media.Stream{URL: "https://cdn/ok.m3u8"}}
@@ -183,6 +185,7 @@ func TestResolveAcceptRejectsStreamAndTriesNext(t *testing.T) {
 	}
 }
 
+// TestResolveAcceptRejectingAllFails checks that Resolve fails when Accept refuses every provider's stream.
 func TestResolveAcceptRejectingAllFails(t *testing.T) {
 	a := &delayedSP{fakeSP: &fakeSP{}, name: "a", stream: &media.Stream{URL: "https://cdn/a.m3u8"}}
 	r := New([]provider.Provider{a}, NewHealthStore(), func(string, ...any) {})
@@ -193,6 +196,7 @@ func TestResolveAcceptRejectingAllFails(t *testing.T) {
 	}
 }
 
+// TestResolveAcceptRefusalLeavesProviderHealthUnchanged checks that an Accept refusal records nothing in the health store.
 func TestResolveAcceptRefusalLeavesProviderHealthUnchanged(t *testing.T) {
 	a := &delayedSP{fakeSP: &fakeSP{}, name: "a", stream: &media.Stream{URL: "https://cdn/a.m3u8"}}
 	h := NewHealthStore()
@@ -206,6 +210,7 @@ func TestResolveAcceptRefusalLeavesProviderHealthUnchanged(t *testing.T) {
 	}
 }
 
+// TestResolveNilStreamWithAcceptFailsInsteadOfPanicking checks that a provider answering with a nil stream fails without Accept being called on it.
 func TestResolveNilStreamWithAcceptFailsInsteadOfPanicking(t *testing.T) {
 	a := &delayedSP{fakeSP: &fakeSP{}, name: "a"}
 	r := New([]provider.Provider{a}, NewHealthStore(), func(string, ...any) {})
@@ -226,6 +231,7 @@ func (f *failingWatchSP) Watch(string, string, string, string) (*media.Stream, e
 	return nil, errors.New("status 404")
 }
 
+// TestResolveWithAcceptStillRecordsGenuineFailuresAndSuccess checks that, with Accept set, real failures and successes are still recorded in the health store.
 func TestResolveWithAcceptStillRecordsGenuineFailuresAndSuccess(t *testing.T) {
 	searchFails := &fakeSP{searchErr: errors.New("search rejected")}
 	watchFails := &failingWatchSP{fakeSP: &fakeSP{}}

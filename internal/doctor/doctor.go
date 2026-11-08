@@ -74,7 +74,7 @@ func Check(name string, p provider.Provider, query string) Result {
 	episodeID := ""
 	if pick.Type == media.TV {
 		seasons, err := p.GetSeasons(pick.ID)
-		if err != nil {
+		if err != nil && !(errors.Is(err, provider.ErrIncompleteEpisodeList) && len(seasons) > 0) {
 			return finish(StageSeasons, err.Error(), false)
 		}
 		if len(seasons) == 0 {

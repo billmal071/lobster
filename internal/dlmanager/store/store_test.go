@@ -174,6 +174,7 @@ func TestUpdateProgress(t *testing.T) {
 	}
 }
 
+// TestUpdateStreamInfo checks that UpdateStreamInfo stores the stream URL, type and referer.
 func TestUpdateStreamInfo(t *testing.T) {
 	s := openTestStore(t)
 	d := sampleDownload()
@@ -441,6 +442,7 @@ func TestNextQueued(t *testing.T) {
 	}
 }
 
+// TestUpdateStreamInfoPersistsUserAgent checks that the User-Agent given to UpdateStreamInfo is returned by GetDownload and ListDownloads.
 func TestUpdateStreamInfoPersistsUserAgent(t *testing.T) {
 	s := openTestStore(t)
 	d := sampleDownload()

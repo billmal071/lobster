@@ -316,9 +316,12 @@ func (e *EZTV) imdbFor(tmdbID int) string {
 
 // --- Seasons and episodes ---
 
-// GetSeasons lists the seasons that have at least one single-episode release, in ascending order.
+// GetSeasons lists the seasons that have at least one single-episode release,
+// in ascending order. When the release list could not be fetched in full, the
+// seasons found so far come back with an error wrapping ErrIncompleteEpisodeList:
+// a missing season may sit on a page that was never read.
 func (e *EZTV) GetSeasons(id string) ([]media.Season, error) {
-	torrents, err := e.torrents(id)
+	torrents, complete, err := e.catalogue(id)
 	if err != nil {
 		return nil, err
 	}
@@ -336,6 +339,9 @@ func (e *EZTV) GetSeasons(id string) ([]media.Season, error) {
 	seasons := make([]media.Season, 0, len(nums))
 	for _, n := range nums {
 		seasons = append(seasons, media.Season{Number: n, ID: strconv.Itoa(n)})
+	}
+	if !complete {
+		return seasons, fmt.Errorf("%w: eztv could not fetch every page of the release list for %s", ErrIncompleteEpisodeList, id)
 	}
 	return seasons, nil
 }

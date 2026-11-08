@@ -34,6 +34,7 @@ func (e *HTTPEngine) Resume(ctx context.Context, streamURL, outputPath string, h
 	return e.download(ctx, streamURL, outputPath, hdr, progressFn, info.Size())
 }
 
+// download writes the stream to outputPath+".part" and renames it into place on success. It retries with exponential backoff up to MaxRetries attempts (three when unset), resuming each retry from the bytes already on disk.
 func (e *HTTPEngine) download(ctx context.Context, streamURL, outputPath string, hdr Headers, progressFn ProgressFunc, offset int64) error {
 	partPath := outputPath + ".part"
 
@@ -76,6 +77,7 @@ func (e *HTTPEngine) download(ctx context.Context, streamURL, outputPath string,
 	return fmt.Errorf("after %d attempts: %w", maxRetries, lastErr)
 }
 
+// doRequest makes one request for url, asking for a byte range from offset when it is positive, and appends the body to partPath. A server that ignores the range restarts the file from the beginning.
 func (e *HTTPEngine) doRequest(ctx context.Context, url, partPath string, hdr Headers, progressFn ProgressFunc, offset int64) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

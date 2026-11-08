@@ -97,6 +97,7 @@ func (r *episodeIDRecorder) Watch(_, episodeID, _, _ string) (*media.Stream, err
 	return r.stream, nil
 }
 
+// TestNyaaSequelCandidateGetsItsSeasonWhenTheTitleNamesIt checks that a Nyaa sequel candidate is asked for the season the request title names.
 func TestNyaaSequelCandidateGetsItsSeasonWhenTheTitleNamesIt(t *testing.T) {
 	for _, tc := range []struct {
 		name, title, want string
@@ -121,6 +122,7 @@ func TestNyaaSequelCandidateGetsItsSeasonWhenTheTitleNamesIt(t *testing.T) {
 	}
 }
 
+// TestSequelSeasonTitleForms checks the title forms sequelSeason recognises (Season N, zero-padded, parenthesised, ordinal, number word) and that a different show, a mismatched number or a Season N Part M title stays season 1.
 func TestSequelSeasonTitleForms(t *testing.T) {
 	for _, tc := range []struct {
 		name, title, id string
@@ -131,7 +133,13 @@ func TestSequelSeasonTitleForms(t *testing.T) {
 		{"parenthesised", "One Punch Man (Season 3)", "nyaa/One-Punch+Man?s=3", 3},
 		{"different show base", "Other Season 3", "nyaa/One-Punch+Man?s=3", 1},
 		{"season mismatch", "One Punch Man Season 2", "nyaa/One-Punch+Man?s=3", 1},
-		{"ordinal form not handled", "One Punch Man 3rd Season", "nyaa/One-Punch+Man?s=3", 1},
+		{"ordinal 3rd", "One Punch Man 3rd Season", "nyaa/One-Punch+Man?s=3", 3},
+		{"ordinal 2nd", "One Punch Man 2nd Season", "nyaa/One-Punch+Man?s=2", 2},
+		{"ordinal 4th parenthesised", "One Punch Man (4th Season)", "nyaa/One-Punch+Man?s=4", 4},
+		{"ordinal mismatch", "One Punch Man 2nd Season", "nyaa/One-Punch+Man?s=3", 1},
+		{"ordinal different show base", "Other 3rd Season", "nyaa/One-Punch+Man?s=3", 1},
+		{"word form", "One Punch Man Season Three", "nyaa/One-Punch+Man?s=3", 3},
+		{"word form mismatch", "One Punch Man Season Two", "nyaa/One-Punch+Man?s=3", 1},
 		{"part form not handled", "One Punch Man Season 2 Part 2", "nyaa/One-Punch+Man?s=2", 1},
 		{"later season untouched", "One Punch Man Season 3", "nyaa/One-Punch+Man?s=3", 3},
 	} {

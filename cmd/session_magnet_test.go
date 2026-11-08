@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -159,5 +160,41 @@ func TestPlayCurrentEpisodeJSONRefusesAMagnet(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "use --download") || !strings.Contains(err.Error(), `--download <dir>`) {
 		t.Fatalf("err = %v, want the working form: lobster --base yts \"title\" --download <dir>", err)
+	}
+}
+
+// TestJSONMagnetRefusalNamesTheSourceThatFitsTheTitle checks that the --json refusal suggests YTS for a film and EZTV or Nyaa, with the season and episode, for an episode.
+func TestJSONMagnetRefusalNamesTheSourceThatFitsTheTitle(t *testing.T) {
+	movie := jsonMagnetRefusal("Heat", media.Movie, 0, 0).Error()
+	if !strings.Contains(movie, "--base yts") || strings.Contains(movie, "eztv") || strings.Contains(movie, "nyaa") {
+		t.Errorf("movie refusal = %q, want only the YTS command", movie)
+	}
+
+	episode := jsonMagnetRefusal("Show", media.TV, 2, 5).Error()
+	for _, want := range []string{"--base eztv", "--base nyaa", "season 2 episode 5", "--download <dir>", `"Title Season N"`} {
+		if !strings.Contains(episode, want) {
+			t.Errorf("episode refusal = %q, missing %q", episode, want)
+		}
+	}
+	if strings.Contains(episode, "--base yts") {
+		t.Errorf("episode refusal = %q, YTS has no TV catalogue", episode)
+	}
+}
+
+// TestSessionJSONRefusalNamesTheEpisodeAndATVSource checks that a series session refused under --json is pointed at a TV torrent source rather than YTS.
+func TestSessionJSONRefusalNamesTheEpisodeAndATVSource(t *testing.T) {
+	playStreamHarness(t, &stubPlayerImpl{})
+	withOutputFlags(t, true, "")
+	withRecordingFallbackChain(t)
+
+	prov := &stubStreamProvider{stream: &media.Stream{URL: "magnet:?xt=urn:btih:0000000000000000000000000000000000000000"}}
+	sess := sessionForTest(prov)
+	err := playCurrentEpisode(sess)
+	if err == nil || !strings.Contains(err.Error(), "--base eztv") || strings.Contains(err.Error(), "--base yts") {
+		t.Fatalf("err = %v, want the TV torrent source, not YTS", err)
+	}
+	want := fmt.Sprintf("season %d episode %d", sess.CurrentSeason().Number, sess.Current().Number)
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want it to name %q", err, want)
 	}
 }

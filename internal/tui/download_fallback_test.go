@@ -48,3 +48,22 @@ func TestFetchEpisodesUsesTheFallbackWhenTheProviderCannotList(t *testing.T) {
 		t.Fatalf("fallback was asked for season %d, want the selected season 2", askedSeason)
 	}
 }
+
+type partialSeasonsProvider struct{ provider.Provider }
+
+func (partialSeasonsProvider) GetSeasons(string) ([]media.Season, error) {
+	return []media.Season{{ID: "1", Number: 1}, {ID: "2", Number: 2}}, provider.ErrIncompleteEpisodeList
+}
+
+// TestStartKeepsTheSeasonsOfAnIncompleteList checks that the download dialog keeps the seasons of a list flagged incomplete instead of showing an error.
+func TestStartKeepsTheSeasonsOfAnIncompleteList(t *testing.T) {
+	d := &downloadDialog{}
+	cmd := d.start(media.SearchResult{ID: "eztv/1", Type: media.TV}, partialSeasonsProvider{}, nil, "")
+	msg, ok := cmd().(dlSeasonsMsg)
+	if !ok {
+		t.Fatalf("start returned %T, want dlSeasonsMsg", cmd())
+	}
+	if msg.err != nil || len(msg.seasons) != 2 {
+		t.Fatalf("msg = %+v, want the two seasons that were listed and no error", msg)
+	}
+}

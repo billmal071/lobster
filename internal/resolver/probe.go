@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -44,10 +45,8 @@ func (r *Resolver) probe(p provider.Provider, req Request) probeResult {
 		if err == nil && stream == nil {
 			err, stage = fmt.Errorf("empty stream"), "validate"
 		}
-		if err == nil && req.Accept != nil {
-			if aerr := req.Accept(stream); aerr != nil {
-				return probeResult{Provider: name, Stage: StageAccept, Err: aerr, Latency: time.Since(start)}
-			}
+		if stage == StageAccept {
+			return probeResult{Provider: name, Stage: StageAccept, Err: err, Latency: time.Since(start)}
 		}
 		if err == nil && r.validate {
 			if verr := validateStream(r.client, stream); verr != nil {
@@ -88,15 +87,20 @@ type Request struct {
 	Season    int
 	Episode   int
 	Quality   string
-	// Accept, when set, vets a resolved stream before it is validated; a
-	// non-nil error fails that provider within this race (the next one is
-	// tried) without being recorded in the health store.
+	// Accept, when set, vets each stream a provider yields, candidate by
+	// candidate and server by server; a refused one is skipped in favour of the
+	// provider's next server or, once a stream has been refused, its next
+	// candidate that is a confident match for the request. A provider that
+	// yields no accepted stream after any refusal fails at StageAccept within
+	// this race (the next provider is tried) without being recorded in the
+	// health store, whatever else went wrong for it.
 	Accept func(*media.Stream) error
 }
 
 // resolveWithProvider tries to resolve a stream using the given provider and
 // request parameters. It returns the stream, the stage reached ("search",
-// "match", or "resolve"), and any error. The log function receives debug
+// "match", "resolve", or StageAccept when every stream it found was refused by
+// req.Accept), and any error. The log function receives debug
 // messages in the same format as fmt.Sprintf.
 func resolveWithProvider(p provider.Provider, req Request, log func(string, ...any)) (*media.Stream, string, error) {
 	results, err := p.Search(req.Title)
@@ -114,26 +118,63 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 		quality = "1080"
 	}
 
-	var lastErr error
+	var lastErr, refusal error
 	for i := range candidates {
 		match := &candidates[i]
+		if refusal != nil && !confidentMatch(*match, req) {
+			log("fallback candidate %s skipped: not a confident match after a refused stream", match.Title)
+			continue
+		}
 		log("fallback candidate: %s (ID: %s)", match.Title, match.ID)
 
 		var stream *media.Stream
 		if sp, ok := p.(provider.StreamProvider); ok {
 			stream, err = tryStreamProviderFallback(sp, match, req.MediaType, sequelSeason(req.Title, match.ID, req.Season), req.Episode, quality, log)
 		} else {
-			stream, err = tryEmbedProviderFallback(p, match, req.MediaType, req.Season, req.Episode, quality, log)
+			stream, err = tryEmbedProviderFallback(p, match, req.MediaType, req.Season, req.Episode, quality, req.Accept, log)
+		}
+		if err == nil && stream == nil && refusal != nil {
+			err = fmt.Errorf("empty stream")
+		}
+		if err == nil && stream != nil && req.Accept != nil {
+			if aerr := req.Accept(stream); aerr != nil {
+				err = &acceptRefusal{aerr}
+			}
 		}
 		if err == nil {
 			return stream, "resolve", nil
+		}
+		var refused *acceptRefusal
+		if errors.As(err, &refused) && refusal == nil {
+			refusal = refused
 		}
 		lastErr = err
 		log("fallback candidate %s failed: %v", match.Title, err)
 	}
 
+	if refusal != nil {
+		return nil, StageAccept, fmt.Errorf("stream refused: %w", refusal)
+	}
 	return nil, "resolve", fmt.Errorf("all %d candidates failed: %w", len(candidates), lastErr)
 }
+
+// confidentMatch reports whether c is the work req identifies: the same ID, or
+// a title Matches accepts with release years that are unknown or within one.
+func confidentMatch(c media.SearchResult, req Request) bool {
+	if req.ID != "" && c.ID == req.ID {
+		return true
+	}
+	if !Matches(c, req) {
+		return false
+	}
+	return req.Year == "" || c.Year == "" || yearDiff(c.Year, req.Year) <= 1
+}
+
+// acceptRefusal marks a candidate that failed only because Request.Accept refused its stream.
+type acceptRefusal struct{ err error }
+
+func (e *acceptRefusal) Error() string { return e.err.Error() }
+func (e *acceptRefusal) Unwrap() error { return e.err }
 
 // FallbackCandidates filters and deduplicates search results, preferring
 // results of the requested media type, limited to MaxCandidates.
@@ -477,14 +518,17 @@ func yearDiff(a, b string) int {
 }
 
 var (
-	titleSeasonRe  = regexp.MustCompile(`(?i)\s*[(\[]?\s*\bSeason\s+(\d{1,2})\s*[)\]]?\s*$`)
+	titleSeasonRe  = regexp.MustCompile(`(?i)\s*[(\[]?\s*\b(?:(\d{1,2})(?:st|nd|rd|th)\s+Season|Season\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten))\s*[)\]]?\s*$`)
 	nyaaSeasonIDRe = regexp.MustCompile(`^nyaa/([^?]*)\?(?:.*&)?s=(\d+)(?:&|$)`)
 )
 
-// sequelSeason maps season 1 to N when a request titled "<Show> Season N" (or
-// "(Season N)") matched a Nyaa series of the same show marked "?s=N": the
-// primary lists that sequel as a season-1 entry of its own, but Nyaa numbers
-// it N. "3rd Season" and "Season 2 Part 2" are not recognised and stay season 1.
+var seasonWords = map[string]int{"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+
+// sequelSeason maps season 1 to N when a request titled "<Show> Season N",
+// "(Season N)", "<Show> 3rd Season" or "<Show> Season Three" (words one to ten)
+// matched a Nyaa series of the same show marked "?s=N": the primary lists that
+// sequel as a season-1 entry of its own, but Nyaa numbers it N. "Season 2 Part
+// 2" is not recognised and stays season 1.
 func sequelSeason(title, candidateID string, season int) int {
 	if season != 1 {
 		return season
@@ -493,13 +537,29 @@ func sequelSeason(title, candidateID string, season int) int {
 	if t == nil || id == nil {
 		return season
 	}
-	want, _ := strconv.Atoi(title[t[2]:t[3]])
+	want := titleSeasonNumber(title, t)
 	got, _ := strconv.Atoi(id[2])
 	base, err := url.QueryUnescape(id[1])
 	if err != nil || want != got || normalize(base) != normalize(title[:t[0]]) {
 		return season
 	}
 	return want
+}
+
+// titleSeasonNumber reads the season number out of a titleSeasonRe match: the
+// ordinal group, else the digits or number word after "Season".
+func titleSeasonNumber(title string, m []int) int {
+	for _, g := range []int{1, 2} {
+		if m[2*g] < 0 {
+			continue
+		}
+		word := strings.ToLower(title[m[2*g]:m[2*g+1]])
+		if n, err := strconv.Atoi(word); err == nil {
+			return n
+		}
+		return seasonWords[word]
+	}
+	return 0
 }
 
 // tryStreamProviderFallback resolves a stream via StreamProvider.Watch().
@@ -522,7 +582,10 @@ func tryStreamProviderFallback(sp provider.StreamProvider, match *media.SearchRe
 }
 
 // tryEmbedProviderFallback resolves a stream via GetServers + GetEmbedURL + Extract.
-func tryEmbedProviderFallback(fb provider.Provider, match *media.SearchResult, mediaType media.MediaType, season, episode int, quality string, log func(string, ...any)) (*media.Stream, error) {
+// A stream accept refuses is skipped and the next server tried; when no server
+// yields an accepted stream and at least one stream was refused, the error is
+// an *acceptRefusal, even if other servers failed to give an embed URL or a stream.
+func tryEmbedProviderFallback(fb provider.Provider, match *media.SearchResult, mediaType media.MediaType, season, episode int, quality string, accept func(*media.Stream) error, log func(string, ...any)) (*media.Stream, error) {
 	var episodeID string
 
 	if mediaType != media.Movie && (season > 0 || episode > 0) {
@@ -567,7 +630,7 @@ func tryEmbedProviderFallback(fb provider.Provider, match *media.SearchResult, m
 		return nil, fmt.Errorf("no servers found")
 	}
 
-	// Try each server
+	var refused error
 	for _, srv := range servers {
 		log("fallback trying server: %s (ID: %s)", srv.Name, srv.ID)
 
@@ -577,18 +640,38 @@ func tryEmbedProviderFallback(fb provider.Provider, match *media.SearchResult, m
 			continue
 		}
 
-		ext, resolvedURL := extract.ResolveForURL(embedURL, providerReferer(fb))
-		stream, err := ext.Extract(resolvedURL, quality)
+		stream, err := extractEmbed(embedURL, providerReferer(fb), quality)
 		if err != nil {
 			log("fallback server %s extract failed: %v", srv.Name, err)
 			continue
+		}
+
+		if stream == nil && refused != nil {
+			log("fallback server %s returned no stream", srv.Name)
+			continue
+		}
+		if accept != nil && stream != nil {
+			if aerr := accept(stream); aerr != nil {
+				log("fallback server %s refused: %v", srv.Name, aerr)
+				refused = aerr
+				continue
+			}
 		}
 
 		log("fallback stream resolved (server: %s)", srv.Name)
 		return stream, nil
 	}
 
+	if refused != nil {
+		return nil, &acceptRefusal{refused}
+	}
 	return nil, fmt.Errorf("all fallback servers failed")
+}
+
+// extractEmbed turns an embed URL into a stream; a variable so tests can stand in for the network extractors.
+var extractEmbed = func(embedURL, referer, quality string) (*media.Stream, error) {
+	ext, resolvedURL := extract.ResolveForURL(embedURL, referer)
+	return ext.Extract(resolvedURL, quality)
 }
 
 // providerReferer returns the Referer URL for a provider's embed requests.

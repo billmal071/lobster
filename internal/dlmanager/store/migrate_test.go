@@ -43,6 +43,7 @@ INSERT INTO downloads (title, media_title, media_type, output_path, referer, sta
 VALUES ('Old', 'Old Show', 'tv', '/tmp/old.mkv', 'https://ref/', 'queued');
 `
 
+// oldSchemaDB creates a downloads database with the previous release's schema and one queued row, and returns its path.
 func oldSchemaDB(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "downloads.db")
@@ -57,6 +58,7 @@ func oldSchemaDB(t *testing.T) string {
 	return path
 }
 
+// TestOpenMigratesThePreviousReleaseSchemaKeepingRows checks that opening a database with the previous schema migrates it and keeps its rows.
 func TestOpenMigratesThePreviousReleaseSchemaKeepingRows(t *testing.T) {
 	s, err := Open(oldSchemaDB(t))
 	if err != nil {
@@ -72,6 +74,7 @@ func TestOpenMigratesThePreviousReleaseSchemaKeepingRows(t *testing.T) {
 	}
 }
 
+// TestConcurrentOpenOfAnOldSchemaDatabaseBothSucceed checks that several concurrent opens of an old-schema database all succeed.
 func TestConcurrentOpenOfAnOldSchemaDatabaseBothSucceed(t *testing.T) {
 	path := oldSchemaDB(t)
 	var wg sync.WaitGroup
@@ -95,6 +98,7 @@ func TestConcurrentOpenOfAnOldSchemaDatabaseBothSucceed(t *testing.T) {
 	}
 }
 
+// TestAddColumnToleratesAColumnAlreadyAdded checks that adding a column that already exists is not an error.
 func TestAddColumnToleratesAColumnAlreadyAdded(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

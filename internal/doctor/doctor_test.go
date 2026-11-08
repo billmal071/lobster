@@ -213,6 +213,7 @@ func TestCheckProbesASeriesThroughItsFirstEpisode(t *testing.T) {
 	}
 }
 
+// TestCheckReportsSeasonsStageFailureForASeries checks that a failing GetSeasons for a series is reported at the seasons stage.
 func TestCheckReportsSeasonsStageFailureForASeries(t *testing.T) {
 	p := &fakeStreamProvider{fakeProvider{
 		results:   []media.SearchResult{{ID: "tv/1", Title: "Foo", Type: media.TV}},
@@ -233,6 +234,20 @@ func TestCheckToleratesAnIncompleteEpisodeList(t *testing.T) {
 		episodes:   []media.Episode{{Number: 1, ID: "1"}},
 		episodeErr: fmt.Errorf("probe budget: %w", provider.ErrIncompleteEpisodeList),
 		stream:     &media.Stream{URL: "https://cdn/x.m3u8"},
+	}}
+	if got := Check("Fake", p, "foo"); !got.OK {
+		t.Fatalf("want OK, got stage=%q detail=%q", got.Stage, got.Detail)
+	}
+}
+
+// TestCheckToleratesAnIncompleteSeasonList checks that a season list flagged incomplete passes the seasons stage.
+func TestCheckToleratesAnIncompleteSeasonList(t *testing.T) {
+	p := &fakeStreamProvider{fakeProvider{
+		results:   []media.SearchResult{{ID: "eztv/1", Title: "Foo", Type: media.TV}},
+		seasons:   []media.Season{{Number: 1, ID: "1"}},
+		seasonErr: fmt.Errorf("eztv page budget: %w", provider.ErrIncompleteEpisodeList),
+		episodes:  []media.Episode{{Number: 1, ID: "1x1"}},
+		stream:    &media.Stream{URL: "https://cdn/x.m3u8"},
 	}}
 	if got := Check("Fake", p, "foo"); !got.OK {
 		t.Fatalf("want OK, got stage=%q detail=%q", got.Stage, got.Detail)

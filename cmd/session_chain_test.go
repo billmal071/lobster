@@ -24,6 +24,7 @@ func chainTestConfig(t *testing.T, json bool) {
 	t.Cleanup(func() { cfg, flagJSON = prev, prevJSON })
 }
 
+// TestResolveStreamUnderJSONTriesHTTPFallbacksAfterAPrimaryMagnet checks that under --json an HTTP fallback is tried when the primary answers with a magnet.
 func TestResolveStreamUnderJSONTriesHTTPFallbacksAfterAPrimaryMagnet(t *testing.T) {
 	chainTestConfig(t, true)
 	httpURL := stubStreamServer(t)
@@ -46,6 +47,7 @@ func TestResolveStreamUnderJSONTriesHTTPFallbacksAfterAPrimaryMagnet(t *testing.
 
 type otherRecordingSP struct{ recordingSP }
 
+// TestRetryChainExcludesTheRecoveredProviderOnceItsStreamFailed checks that a recovered provider whose stream failed playback is left out of the retry chain.
 func TestRetryChainExcludesTheRecoveredProviderOnceItsStreamFailed(t *testing.T) {
 	chainTestConfig(t, false)
 	url := stubStreamServer(t)
@@ -74,6 +76,7 @@ func TestRetryChainExcludesTheRecoveredProviderOnceItsStreamFailed(t *testing.T)
 	}
 }
 
+// TestResolveStreamUnderJSONKeepsFallbackFailureWhenPrimaryIsAMagnet checks that under --json the refusal of a primary magnet is reported together with the fallback failure.
 func TestResolveStreamUnderJSONKeepsFallbackFailureWhenPrimaryIsAMagnet(t *testing.T) {
 	chainTestConfig(t, true)
 	empty := &recordingSP{magnetProvider: magnetProvider{
@@ -104,6 +107,7 @@ func newTorrentSource() *torrentDouble {
 	return &torrentDouble{magnetProvider{stubStreamProvider: stubStreamProvider{stream: &media.Stream{URL: chainTestMagnet}}}}
 }
 
+// TestResolveStreamTriesStreamingBeforeARecoveredTorrentProvider checks that a streaming fallback is tried before a recovered torrent provider.
 func TestResolveStreamTriesStreamingBeforeARecoveredTorrentProvider(t *testing.T) {
 	chainTestConfig(t, false)
 	httpURL := stubStreamServer(t)
@@ -123,6 +127,7 @@ func TestResolveStreamTriesStreamingBeforeARecoveredTorrentProvider(t *testing.T
 	}
 }
 
+// TestResolveStreamFallsBackToARecoveredTorrentWhenStreamingFails checks that the recovered torrent provider is used once streaming sources are exhausted.
 func TestResolveStreamFallsBackToARecoveredTorrentWhenStreamingFails(t *testing.T) {
 	chainTestConfig(t, false)
 	withRecordingFallbackChain(t)
@@ -137,6 +142,7 @@ func TestResolveStreamFallsBackToARecoveredTorrentWhenStreamingFails(t *testing.
 	}
 }
 
+// TestResolveStreamPlaysAnExplicitTorrentBaseDirectly checks that an explicitly chosen torrent base plays without consulting the fallback chain.
 func TestResolveStreamPlaysAnExplicitTorrentBaseDirectly(t *testing.T) {
 	chainTestConfig(t, false)
 	chain := withRecordingFallbackChain(t)
@@ -154,6 +160,7 @@ func TestResolveStreamPlaysAnExplicitTorrentBaseDirectly(t *testing.T) {
 	}
 }
 
+// TestResolveStreamPlaysAnExplicitTorrentBaseDirectlyWhenChainPrimaryIsTheProvider checks that a torrent base that is also the chain primary plays directly without consulting the chain.
 func TestResolveStreamPlaysAnExplicitTorrentBaseDirectlyWhenChainPrimaryIsTheProvider(t *testing.T) {
 	chainTestConfig(t, false)
 	httpURL := stubStreamServer(t)
