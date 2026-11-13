@@ -60,7 +60,7 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (*media.Stream, *Re
 	// empty episode ID, which they read as a film. Refuse before probing: no
 	// provider is searched, and none is scored for the caller's mistake.
 	if req.MediaType == media.TV && req.Season == 0 && req.Episode == 0 {
-		return nil, &Report{}, fmt.Errorf("%q is a TV title with no season or episode: %w", req.Title, ErrSeasonEpisodeRequired)
+		return nil, &Report{}, fmt.Errorf("%q is a TV title: %w", req.Title, ErrSeasonEpisodeRequired)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, r.overallTimeout)

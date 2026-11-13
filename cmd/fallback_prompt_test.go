@@ -168,13 +168,13 @@ func TestUnlistableTVRefusesWhereNobodyCanBeAsked(t *testing.T) {
 
 // TestAskPositiveRetriesBadInputAndCancels checks 0, negatives and non-numbers are rejected and asked again, and a cancelled prompt returns its error.
 func TestAskPositiveRetriesBadInputAndCancels(t *testing.T) {
-	asked := withAnswers(t, map[string][]string{"Season": {"0", "-3", "abc", "", " 4 "}})
+	asked := withAnswers(t, map[string][]string{"Season": {"0", "-3", "abc", "", "99999999999999999999", " 4 "}})
 	n, err := askPositive("Season")
 	if err != nil || n != 4 {
 		t.Fatalf("askPositive = (%d, %v), want 4", n, err)
 	}
-	if len(*asked) != 5 {
-		t.Fatalf("asked %d times, want 5 (4 rejected, 1 accepted)", len(*asked))
+	if len(*asked) != 6 {
+		t.Fatalf("asked %d times, want 6 (5 rejected, 1 accepted)", len(*asked))
 	}
 
 	withAnswers(t, nil)

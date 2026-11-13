@@ -45,8 +45,8 @@ func askSeasonEpisode(p provider.Provider, sel media.SearchResult, season, episo
 		return season, episode, nil
 	}
 	if !promptInteractive() {
-		return 0, 0, fmt.Errorf("%q is a TV title and no season/episode was chosen: run without --json in a terminal, or use `lobster play --ref %s --season N --episode M`: %w",
-			sel.Title, refFor(p, sel), resolver.ErrSeasonEpisodeRequired)
+		return 0, 0, seasonEpisodeRefusal{fmt.Sprintf("%q is a TV title and no season or episode was chosen: run without --json in a terminal, or use `lobster play --ref %s --season N --episode M`",
+			sel.Title, refFor(p, sel))}
 	}
 	var err error
 	if season == 0 {
@@ -59,6 +59,13 @@ func askSeasonEpisode(p provider.Provider, sel media.SearchResult, season, episo
 	}
 	return season, episode, nil
 }
+
+// seasonEpisodeRefusal is the readable refusal; it unwraps to
+// resolver.ErrSeasonEpisodeRequired so callers can tell it from a provider failure.
+type seasonEpisodeRefusal struct{ msg string }
+
+func (e seasonEpisodeRefusal) Error() string { return e.msg }
+func (e seasonEpisodeRefusal) Unwrap() error { return resolver.ErrSeasonEpisodeRequired }
 
 // refFor encodes the ref `lobster find` would have printed for sel, or a
 // placeholder when it cannot be built.

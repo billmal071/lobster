@@ -328,6 +328,11 @@ func tryFallbackStreamAccepting(providers []provider.Provider, content media.Sea
 	if err == nil || ctx.Err() != nil {
 		return stream, err
 	}
+	// A request the resolver refuses is the caller's mistake, not a provider
+	// failure; the torrent tier would refuse it too and bury the reason.
+	if errors.Is(err, resolver.ErrSeasonEpisodeRequired) {
+		return nil, err
+	}
 	var first *resolveFailure
 	errors.As(err, &first)
 	return resolveTier(ctx, magnets, req, first)
@@ -430,6 +435,16 @@ func (e *resolveFailure) providersTried() int {
 	return len(seen)
 }
 
+// allProvidersFailed prefixes a resolver failure for the queue and batch
+// callers, except the typed season/episode refusal: that is not a provider
+// failure and keeps its own message.
+func allProvidersFailed(err error) error {
+	if errors.Is(err, resolver.ErrSeasonEpisodeRequired) {
+		return err
+	}
+	return fmt.Errorf("all providers failed: %w", err)
+}
+
 // makeStreamResolver builds a StreamResolver for the download queue. It races
 // the primary provider together with the fallback chain, leaves the torrent
 // sources out, and skips any stream the queue cannot download. The primary
@@ -450,7 +465,7 @@ func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 		chain := append([]provider.Provider{primary}, withoutProvider(agentFallbackProviders(primary), primary)...)
 		fbStream, err := tryFallbackStreamAccepting(withoutMagnetSources(chain), content, req.Season, req.Episode, queueAccepts)
 		if err != nil {
-			return nil, fmt.Errorf("all providers failed: %w", err)
+			return nil, allProvidersFailed(err)
 		}
 		return streamToResultChecked(fbStream)
 	}

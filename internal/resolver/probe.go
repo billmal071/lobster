@@ -77,7 +77,7 @@ const maxCandidates = MaxCandidates
 // on TBCPL), so such a request would ask for a movie under a TV id. It names no
 // CLI flag because the callers differ (search, history, queue, TUI); each adds
 // its own hint.
-var ErrSeasonEpisodeRequired = errors.New("season and episode are required for a TV title")
+var ErrSeasonEpisodeRequired = errors.New("season and episode are required")
 
 // Request parameterizes a single stream-resolution attempt.
 //
