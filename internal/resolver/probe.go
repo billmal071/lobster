@@ -564,8 +564,14 @@ func titleSeasonNumber(title string, m []int) int {
 
 // tryStreamProviderFallback resolves a stream via StreamProvider.Watch().
 func tryStreamProviderFallback(sp provider.StreamProvider, match *media.SearchResult, mediaType media.MediaType, season, episode int, quality string, log func(string, ...any)) (*media.Stream, error) {
-	if mediaType == media.Movie || (season == 0 && episode == 0) {
+	if mediaType == media.Movie {
 		return sp.Watch(match.ID, "", "Default", quality)
+	}
+	// An empty episode ID is the movie path ("movie/<id>" on TBCPL). A TV
+	// request with no season or episode has no episode to build, so refuse
+	// rather than ask a TV id for a film.
+	if season == 0 && episode == 0 {
+		return nil, fmt.Errorf("%s is a TV title: season and episode are required (pass --season and --episode)", match.ID)
 	}
 
 	// TV: construct the episode ID
