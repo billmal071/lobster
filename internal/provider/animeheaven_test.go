@@ -439,3 +439,20 @@ func TestAnimeHeavenClosedAnchorDoesNotReadPastItsClose(t *testing.T) {
 		t.Errorf("got %+v, %v; want only the 3 real episodes", eps, err)
 	}
 }
+
+// The next anchor may open with any whitespace after "<a", as ahEpisodeRe
+// accepts; an unclosed stray before it must still stop there.
+func TestAnimeHeavenStrayAnchorBoundedByAnyWhitespaceAnchor(t *testing.T) {
+	for _, ws := range []string{"\n", "\t"} {
+		stray := `<a class='c' id ="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" href='x'>no cell `
+		old := ahAnimePage
+		page := strings.Replace(old, "<a class='c' id =\""+ahKey1, stray+"<a"+ws+"class='c' id =\""+ahKey1, 1)
+		ahAnimePage = page
+		p, _ := ahStub(t, ahGatePage)
+		eps, err := p.GetEpisodes("ukr6y", "1")
+		ahAnimePage = old
+		if err != nil || len(eps) != 3 || eps[2].ID != ahKey1 {
+			t.Errorf("ws %q: got %+v, %v; want the 3 real episodes with their own keys", ws, eps, err)
+		}
+	}
+}

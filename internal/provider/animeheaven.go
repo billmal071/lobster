@@ -52,7 +52,9 @@ var (
 	// Episode rows: the opening tag of an anchor whose id is the 32-hex gate
 	// key. The episode number sits in a watch2 cell before the anchor closes.
 	ahEpisodeRe = regexp.MustCompile(`<a\s[^>]*?\bid\s*="([0-9a-f]{32})"[^>]*>`)
-	ahNumberRe  = regexp.MustCompile(`watch2[^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*<`)
+	// Any later anchor opening ends the segment; \s matches what ahEpisodeRe does.
+	ahNextAnchorRe = regexp.MustCompile(`<a\s`)
+	ahNumberRe     = regexp.MustCompile(`watch2[^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*<`)
 	// A comment runs to its terminator, or to the end of the page when it has
 	// none, as a browser reads it.
 	ahCommentRe = regexp.MustCompile(`(?s)<!--.*?(?:-->|$)`)
@@ -176,8 +178,8 @@ func (a *AnimeHeaven) GetEpisodes(id, seasonID string) ([]media.Episode, error) 
 		if i := strings.Index(seg, "</a>"); i >= 0 {
 			seg = seg[:i]
 		}
-		if i := strings.Index(seg, "<a "); i >= 0 {
-			seg = seg[:i]
+		if l := ahNextAnchorRe.FindStringIndex(seg); l != nil {
+			seg = seg[:l[0]]
 		}
 		nm := ahNumberRe.FindStringSubmatch(seg)
 		if nm == nil {
