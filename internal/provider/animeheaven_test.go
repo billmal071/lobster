@@ -242,8 +242,9 @@ func TestAnimeHeavenSeasonsAndEmbed(t *testing.T) {
 	}
 }
 
-// Downloads and the fallback resolver call Watch with "" or
-// "<show>:<season>:<episode>", never with a gate key.
+// The download queue and the fallback resolver call Watch with "" or
+// "<show>:<season>:<episode>" rather than a gate key; direct playback passes
+// gate keys, which the other tests cover.
 func TestAnimeHeavenWatchAcceptsResolverEpisodeIDs(t *testing.T) {
 	p, cookie := ahStub(t, ahGatePage)
 	for _, id := range []string{"ukr6y:1:3", "ukr6y:1:03"} {
@@ -375,9 +376,10 @@ func TestAnimeHeavenOversizedBodyIsAnError(t *testing.T) {
 }
 
 func TestAnimeHeavenSendsBrowserHeaders(t *testing.T) {
-	var ua string
+	var ua, accept string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ua = r.UserAgent()
+		accept = r.Header.Get("Accept")
 		_, _ = w.Write([]byte(ahChrome))
 	}))
 	defer srv.Close()
@@ -387,6 +389,9 @@ func TestAnimeHeavenSendsBrowserHeaders(t *testing.T) {
 	_, _ = NewAnimeHeaven().Search("x")
 	if !strings.HasPrefix(ua, "Mozilla/") {
 		t.Errorf("User-Agent = %q, want a browser one", ua)
+	}
+	if !strings.Contains(accept, "text/html") {
+		t.Errorf("Accept = %q, want it to ask for HTML", accept)
 	}
 }
 
@@ -453,6 +458,52 @@ func TestAnimeHeavenStrayAnchorBoundedByAnyWhitespaceAnchor(t *testing.T) {
 		ahAnimePage = old
 		if err != nil || len(eps) != 3 || eps[2].ID != ahKey1 {
 			t.Errorf("ws %q: got %+v, %v; want the 3 real episodes with their own keys", ws, eps, err)
+		}
+	}
+}
+
+// The resolver looks episodes up by number, not by position: here the list
+// starts at 0, repeats 2 and carries a 2.5 that is skipped.
+func TestAnimeHeavenWatchResolvesByEpisodeNumberNotPosition(t *testing.T) {
+	const (
+		kA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"
+		kB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2"
+		kC = "ccccccccccccccccccccccccccccccc3"
+		kE = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeee4"
+		kZ = "00000000000000000000000000000005"
+	)
+	old := ahAnimePage
+	ahAnimePage = "<html><body>" + ahChrome + "<div>" +
+		ahEpisodeLink(ahKey1, "3") + ahEpisodeLink(kE, "2.5") + ahEpisodeLink(kA, "2") +
+		ahEpisodeLink(kB, "2") + ahEpisodeLink(kC, "1") + ahEpisodeLink(kZ, "0") + "</div></body></html>"
+	t.Cleanup(func() { ahAnimePage = old })
+	p, cookie := ahStub(t, ahGatePage)
+	for id, want := range map[string]string{
+		"": kC, "ukr6y:1:0": kZ, "ukr6y:1:1": kC, "ukr6y:1:2": kA, "ukr6y:1:3": ahKey1,
+	} {
+		*cookie = ""
+		if _, err := p.Watch("ukr6y", id, "", ""); err != nil {
+			t.Errorf("Watch(%q): %v", id, err)
+			continue
+		}
+		if *cookie != want {
+			t.Errorf("Watch(%q) sent key %q, want %q", id, *cookie, want)
+		}
+	}
+	for _, bad := range []string{"ukr6y:1:4", "ukr6y:1:-1", "ukr6y:1:2.5"} {
+		if _, err := p.Watch("ukr6y", bad, "", ""); err == nil {
+			t.Errorf("Watch(%q) should fail", bad)
+		}
+	}
+}
+
+func TestAnimeHeavenFoldDiacritics(t *testing.T) {
+	for in, want := range map[string]string{
+		"Shippūden": "Shippuden", "Pokémon": "Pokemon", "Ōkami": "Okami",
+		"ß æ ø ł": "ß æ ø ł", "Plain & Simple": "Plain & Simple",
+	} {
+		if got := ahFoldDiacritics(in); got != want {
+			t.Errorf("ahFoldDiacritics(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

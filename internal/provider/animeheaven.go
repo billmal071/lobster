@@ -39,8 +39,8 @@ var animeHeavenBase = "https://animeheaven.me"
 // is about 50 KB.
 const animeHeavenMaxBody = 4 << 20
 
-// animeHeavenUserAgent is sent on every request; the site serves its pages to
-// browsers.
+// animeHeavenUserAgent is the User-Agent sent on every request: the same
+// Firefox string httputil.Get sends.
 const animeHeavenUserAgent = "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/121.0"
 
 var (
@@ -79,10 +79,9 @@ type AnimeHeaven struct {
 
 func NewAnimeHeaven() *AnimeHeaven { return &AnimeHeaven{client: httputil.NewClient()} }
 
-// get fetches a page, optionally with the gate cookie, and returns its body.
-// The request is built here rather than through httputil.Get because the gate
-// needs a cookie. A body past animeHeavenMaxBody is an error: a truncated page
-// would parse as a shorter catalogue.
+// get fetches a page, sending the gate cookie when gateKey is set, and returns
+// its body. A body past animeHeavenMaxBody is an error rather than a truncated
+// page.
 func (a *AnimeHeaven) get(rawURL, gateKey string) (string, error) {
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
