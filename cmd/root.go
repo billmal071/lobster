@@ -91,7 +91,7 @@ func registerPersistentFlags(c *cobra.Command) {
 	// (newProvider, cmd/provider.go), which is worth knowing before typing
 	// one; a retired source's name (config.RetiredBase) is rejected outright
 	// here, and downgraded to auto with a warning when it comes from the file.
-	fs.StringVar(&flagBase, "base", "", "Content source: auto | vaplayer | flixhq.ws | tbcpl | 1shows.org | animeonsen | yts | nyaa | eztv (see GUIDE.md)")
+	fs.StringVar(&flagBase, "base", "", "Content source: auto | vaplayer | flixhq.ws | tbcpl | 1shows.org | animeonsen | animeheaven | yts | nyaa | eztv (see GUIDE.md)")
 	fs.BoolVarP(&flagDebug, "debug", "x", false, "Debug logging to stderr")
 }
 
