@@ -251,27 +251,46 @@ func x1337IsSeries(query string, rows []x1337Row) bool {
 	return episodes*2 > len(rows)
 }
 
-func x1337QueryFromID(id string) (string, error) {
+var x1337YearRe = regexp.MustCompile(`\b((?:19|20)\d{2})\b`)
+
+func x1337ReleaseYear(name string) string {
+	if m := x1337YearRe.FindStringSubmatch(name); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+func x1337QueryFromID(id string) (query, year string, err error) {
 	rest, ok := strings.CutPrefix(id, "1337x/")
 	if !ok {
-		return "", fmt.Errorf("1337x: invalid ID %q", id)
+		return "", "", fmt.Errorf("1337x: invalid ID %q", id)
 	}
+	rest, year, hasYear := strings.Cut(rest, "?y=")
 	q, err := url.QueryUnescape(rest)
 	q = x1337NormaliseQuery(q)
-	if err != nil || q == "" || len(q) > x1337MaxQueryLen {
-		return "", fmt.Errorf("1337x: invalid ID %q", id)
+	if err != nil || q == "" || len(q) > x1337MaxQueryLen || (hasYear && x1337ReleaseYear(year) != year) {
+		return "", "", fmt.Errorf("1337x: invalid ID %q", id)
 	}
-	return q, nil
+	return q, year, nil
 }
 
 func (x *X1337) catalogue(id string) (string, []x1337Row, error) {
-	q, err := x1337QueryFromID(id)
+	q, year, err := x1337QueryFromID(id)
 	if err != nil {
 		return "", nil, err
 	}
 	rows, err := x.rows(q)
 	if err != nil {
 		return "", nil, err
+	}
+	if year != "" {
+		var kept []x1337Row
+		for _, r := range rows {
+			if x1337ReleaseYear(r.Name) == year {
+				kept = append(kept, r)
+			}
+		}
+		rows = kept
 	}
 	if len(rows) == 0 {
 		return "", nil, fmt.Errorf("1337x: no releases for %q: %w", q, ErrNoResults)
@@ -295,11 +314,31 @@ func (x *X1337) Search(query string) ([]media.SearchResult, error) {
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("%w for %q", ErrNoResults, q)
 	}
-	typ := media.Movie
+	id := "1337x/" + url.QueryEscape(q)
 	if x1337IsSeries(q, rows) {
-		typ = media.TV
+		return []media.SearchResult{{ID: id, Title: q, Type: media.TV}}, nil
 	}
-	return []media.SearchResult{{ID: "1337x/" + url.QueryEscape(q), Title: q, Type: typ}}, nil
+	seeds := map[string]int{}
+	var years []string
+	for _, r := range rows {
+		y := x1337ReleaseYear(r.Name)
+		if y == "" {
+			continue
+		}
+		if _, ok := seeds[y]; !ok {
+			years = append(years, y)
+		}
+		seeds[y] += r.Seeds
+	}
+	if len(years) < 2 {
+		return []media.SearchResult{{ID: id, Title: q, Type: media.Movie}}, nil
+	}
+	sort.SliceStable(years, func(i, j int) bool { return seeds[years[i]] > seeds[years[j]] })
+	results := make([]media.SearchResult, 0, len(years))
+	for _, y := range years {
+		results = append(results, media.SearchResult{ID: id + "?y=" + y, Title: q, Year: y, Type: media.Movie})
+	}
+	return results, nil
 }
 
 func (x *X1337) GetSeasons(id string) ([]media.Season, error) {

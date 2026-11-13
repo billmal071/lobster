@@ -52,6 +52,7 @@ func (s *x1337Site) handler(t *testing.T, hits *int32) http.Handler {
 	series := x1337Fixture(t, "x1337_search_series.html")
 	seriesP2 := x1337Fixture(t, "x1337_search_series_p2.html")
 	movie := x1337Fixture(t, "x1337_search_movie.html")
+	dune := x1337Fixture(t, "x1337_search_dune.html")
 	empty := x1337Fixture(t, "x1337_search_empty.html")
 	detail := x1337Fixture(t, "x1337_detail.html")
 	noMagnet := x1337Fixture(t, "x1337_detail_nomagnet.html")
@@ -73,6 +74,8 @@ func (s *x1337Site) handler(t *testing.T, hits *int32) http.Handler {
 			switch {
 			case strings.Contains(q, "matrix"):
 				_, _ = w.Write([]byte(movie))
+			case strings.Contains(q, "dune"):
+				_, _ = w.Write([]byte(dune))
 			case strings.Contains(q, "nothing"):
 				_, _ = w.Write([]byte(empty))
 			case strings.Contains(q, "garbage"):
@@ -558,5 +561,35 @@ func TestX1337KeepsEarlierPagesWhenALaterPageFailsAndDoesNotCacheThem(t *testing
 	x.mu.Unlock()
 	if cached != 0 {
 		t.Fatal("a partially fetched result list was cached")
+	}
+}
+
+func TestX1337DifferentMoviesAreSeparateSelectableResults(t *testing.T) {
+	x := x1337Stub(t, nil)
+	res, err := x.Search("Dune")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 2 {
+		t.Fatalf("results = %+v, want one per release year", res)
+	}
+	byYear := map[string]media.SearchResult{}
+	for _, r := range res {
+		byYear[r.Year] = r
+	}
+	old, ok := byYear["1984"]
+	if !ok || byYear["2021"].ID == old.ID {
+		t.Fatalf("results = %+v, want distinct 1984 and 2021 entries", res)
+	}
+	st, err := x.Watch(old.ID, "", "", "best")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(st.URL, x1337Hash(3001)) {
+		t.Fatalf("1984 entry played another film: %s", st.URL)
+	}
+	servers, err := x.GetServers(byYear["2021"].ID, "")
+	if err != nil || len(servers) != 2 {
+		t.Fatalf("2021 servers = %+v, err = %v", servers, err)
 	}
 }
