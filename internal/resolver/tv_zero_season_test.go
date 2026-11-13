@@ -21,3 +21,23 @@ func TestTVWithoutSeasonEpisodeDoesNotAskForMoviePath(t *testing.T) {
 	_, _, _ = resolveWithProvider(r, Request{Title: "Naruto", MediaType: media.TV, Season: 1, Episode: 1, Quality: "1080"}, func(string, ...any) {})
 	t.Logf("season=1 episode=1 -> episodeID=%q", r.got)
 }
+
+// embedRecorder is a non-StreamProvider that records whether GetServers was reached.
+type embedRecorder struct {
+	*fakeSP
+	asked bool
+}
+
+func (e *embedRecorder) GetServers(string, string) ([]media.Server, error) {
+	e.asked = true
+	return nil, nil
+}
+
+// TestEmbedProviderTVWithoutSeasonEpisodeIsRefused checks that an embed provider is not asked for servers on a TV title with no season or episode.
+func TestEmbedProviderTVWithoutSeasonEpisodeIsRefused(t *testing.T) {
+	e := &embedRecorder{fakeSP: &fakeSP{searchResults: []media.SearchResult{{ID: "tv/1", Title: "X", Type: media.TV}}}}
+	_, _, err := resolveWithProvider(e, Request{Title: "X", MediaType: media.TV}, func(string, ...any) {})
+	if err == nil || e.asked {
+		t.Fatalf("err=%v asked=%v; want refusal before GetServers", err, e.asked)
+	}
+}

@@ -348,6 +348,14 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// them. Note the residual asymmetry that leaves — `episodes` still
 			// answers no_results there, because it has no list to print, while
 			// `play` goes ahead on a number the user supplied.
+			// The resolver builds the episode ID from numbers, so both are
+			// needed; the interactive flow passes 0/0 and nothing else here
+			// would ask. Without a prompt this refuses instead of letting the
+			// TV id be requested as a movie.
+			var askErr error
+			if season, episode, askErr = askSeasonEpisode(title, season, episode); askErr != nil {
+				return askErr
+			}
 			if season > 0 {
 				if hits := fallbackSeasonHits(chainPrimary, contentRequest(selected)); len(hits) > 0 {
 					enumerated, anyPartial := false, false

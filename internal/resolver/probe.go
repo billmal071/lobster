@@ -108,6 +108,10 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 		return nil, "search", fmt.Errorf("search failed: %w", err)
 	}
 
+	if req.MediaType == media.TV && req.Season == 0 && req.Episode == 0 {
+		return nil, "match", fmt.Errorf("%q is a TV title: season and episode are required (pass --season and --episode)", req.Title)
+	}
+
 	candidates := candidatesFor(results, req)
 	if len(candidates) == 0 {
 		return nil, "match", fmt.Errorf("no matching result for %q", req.Title)
