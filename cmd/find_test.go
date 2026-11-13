@@ -449,3 +449,12 @@ func TestFindTypeMovieFilters(t *testing.T) {
 		t.Fatalf("results = %+v, want only the film", got.Results)
 	}
 }
+
+func TestRefBaseForStampsTheProviderTokenNotAnUnselectingBase(t *testing.T) {
+	row := media.SearchResult{ID: "movie/1", Title: "X", Provider: "flixhq.ws"}
+	for _, configured := range []string{"auto", "sopa2day", "nonesuch"} {
+		if got := refBaseFor(row, "flixhq.ws", configured); got != "flixhq.ws" {
+			t.Errorf("refBaseFor(flixhq.ws row, configured %q) = %q, want %q: the typed value selected nothing, the row came from FlixHQWS", configured, got, "flixhq.ws")
+		}
+	}
+}

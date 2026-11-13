@@ -17,11 +17,12 @@ import (
 
 // BaseAuto is the Base value meaning "let lobster choose the source".
 //
-// It is the default because there is no single source that serves both
-// content types well: measured 2026-09-09, flixhq.ws — the previous default —
-// answered TV season enumeration with HTTP 404, and YTS has no TV catalogue at
-// all. Naming the absence of a choice lets the per-type routing apply without
-// ever second-guessing a base the user did pick.
+// It is the default because no single source serves both content types:
+// YTS carries films only and has no TV catalogue, while the scraping source
+// "auto" maps to (cmd/provider.go) carries both. Naming the absence of a
+// choice lets the per-type routing apply (films to YTS where it has them,
+// series to the scraper) without ever second-guessing a base the user did
+// pick.
 const BaseAuto = "auto"
 
 // BaseFlixHQWS names the streaming source a retired base is downgraded to
@@ -388,8 +389,8 @@ func IsTorrentBase(base string) bool {
 
 // retiredBases lists the sources lobster no longer wires in, each verified
 // dead upstream (VaPlayer on 2026-11-13, the rest on 2026-11-07) with no fix
-// available on lobster's side. Their provider code stays under internal/provider; what is gone is every path
-// that could select them (cmd.newProvider, cmd.fallbackProviders, the doctor
+// available on lobster's side. Their provider code stays under
+// internal/provider; what is gone is every path that could select them (cmd.newProvider, cmd.fallbackProviders, the doctor
 // table, the TUI). A base naming one is not silently routed elsewhere: a
 // config file's value is downgraded to "flixhq.ws" — "auto" under
 // torrent_fallback — with a warning (Load), an

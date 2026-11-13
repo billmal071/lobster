@@ -293,3 +293,22 @@ func TestFindTreatsAnExplicitFlixHQWSBaseAsNamed(t *testing.T) {
 		})
 	}
 }
+
+func TestFindStampsTheProviderTokenWhenTheBaseSelectedNothing(t *testing.T) {
+	_, envelope := runFindForWarnings(t, "sopa2day", provider.NewFlixHQWS("flixhq.ws"), []media.SearchResult{
+		{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "flixhq.ws"},
+	})
+	var results []struct {
+		Ref string `json:"ref"`
+	}
+	if err := json.Unmarshal(envelope["results"], &results); err != nil || len(results) != 1 {
+		t.Fatalf("results = %s, err %v", envelope["results"], err)
+	}
+	decoded, err := decodeRef(results[0].Ref)
+	if err != nil {
+		t.Fatalf("decodeRef: %v", err)
+	}
+	if decoded.Base != "flixhq.ws" {
+		t.Errorf("ref base = %q, want %q: \"sopa2day\" names nothing, so stamping it would replay against a source that does not exist", decoded.Base, "flixhq.ws")
+	}
+}

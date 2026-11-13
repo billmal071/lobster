@@ -204,8 +204,8 @@ func applyConfig() error {
 		cfg.SubsLanguage = flagLanguage
 	}
 	if flagBase != "" {
-		// Load downgrades a retired base in the file to "auto" with a
-		// warning; one typed on the command line is a mistake worth
+		// Load replaces a retired base in the file with "flixhq.ws"
+		// ("auto" under torrent_fallback) and a warning; one typed on the command line is a mistake worth
 		// stopping on. Not when api_url is set: base is never read then.
 		if cfg.APIURL == "" {
 			if err := config.RetiredBaseError(flagBase); err != nil {

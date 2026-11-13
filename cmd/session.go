@@ -213,7 +213,7 @@ func resolveStreamHolding(sess *playlist.Session, excludeNames map[string]bool, 
 	// not always the configured primary: the episode-list recovery moves
 	// it to whichever chain member could list the season. Excluding that
 	// one would remove the only provider known to have this show.
-	chain := agentFallbackProviders(sess.ChainBase())
+	chain := streamChain(sess.ChainBase())
 	if excludeNames["Primary"] {
 		chain = withoutProvider(chain, sess.Provider)
 	}
