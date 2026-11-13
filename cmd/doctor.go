@@ -54,6 +54,7 @@ func doctorRun(cmd *cobra.Command, args []string) error {
 		// Anime catalogues need an anime title, or they report broken for being
 		// asked about the wrong film.
 		{Name: "AnimeOnsen", Provider: provider.NewAnimeOnsen(), Query: doctorAnimeOnsenQuery},
+		{Name: "AnimeHeaven", Provider: provider.NewAnimeHeaven(), Query: doctorAnimeOnsenQuery},
 		{Name: "Nyaa", Provider: provider.NewNyaa(), Query: doctorAnimeOnsenQuery},
 		// A TV-only catalogue needs a series title, for the same reason.
 		{Name: "EZTV", Provider: provider.NewEZTV(), Query: doctorEZTVQuery},

@@ -181,6 +181,49 @@ func TestAnimeHeavenWatchSkipsEntityEncodedErrorMirror(t *testing.T) {
 	}
 }
 
+func TestAnimeHeavenWatchSkipsError2Mirror(t *testing.T) {
+	gate := `<source src='https://ck.example/video.mp4?` + ahKey1 + `&tok&error2' type='video/mp4'>
+<source src='https://rx.example/video.mp4?` + ahKey1 + `&tok' type='video/mp4'>`
+	p, _ := ahStub(t, gate)
+	st, err := p.Watch("ukr6y", ahKey1, "", "")
+	if err != nil || strings.Contains(st.URL, "error2") {
+		t.Errorf("got %+v, %v; want the non-error mirror", st, err)
+	}
+}
+
+func TestAnimeHeavenSearchSkipsBlankTitles(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<div class='similarname c'><a href='anime.php?abc12' class='c'>   </a></div>`))
+	}))
+	defer srv.Close()
+	prev := animeHeavenBase
+	animeHeavenBase = srv.URL
+	defer func() { animeHeavenBase = prev }()
+	got, err := NewAnimeHeaven().Search("x")
+	if err != nil || len(got) != 0 {
+		t.Errorf("blank title must be dropped; got %v, %v", got, err)
+	}
+}
+
+func TestAnimeHeavenHTTPErrorStatusIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	prev := animeHeavenBase
+	animeHeavenBase = srv.URL
+	defer func() { animeHeavenBase = prev }()
+	if _, err := NewAnimeHeaven().Search("x"); err == nil {
+		t.Error("a 500 must surface as an error, not an empty result")
+	}
+}
+
+func TestAnimeHeavenSeasonsRejectsBadID(t *testing.T) {
+	if _, err := NewAnimeHeaven().GetSeasons("../x"); err == nil {
+		t.Error("bad show id should be rejected")
+	}
+}
+
 func TestAnimeHeavenSeasonsAndEmbed(t *testing.T) {
 	p, _ := ahStub(t, ahGatePage)
 	s, err := p.GetSeasons("ukr6y")
