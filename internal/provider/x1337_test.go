@@ -89,7 +89,7 @@ func (s *x1337Site) handler(t *testing.T, hits *int32) http.Handler {
 			switch {
 			case strings.Contains(q, "matrix"):
 				only("Movies", movie)
-			case strings.Contains(q, "dune%20messiah"):
+			case strings.Contains(q, "dune messiah"):
 				_, _ = w.Write([]byte(messiah))
 			case strings.Contains(q, "dune"):
 				only("Movies", dune)
