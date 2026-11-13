@@ -24,10 +24,10 @@ import (
 // ever second-guessing a base the user did pick.
 const BaseAuto = "auto"
 
-// BaseVaPlayer names the streaming source a retired base is downgraded to
+// BaseFlixHQWS names the streaming source a retired base is downgraded to
 // when torrent_fallback is off (Load). "auto" would route every movie to YTS
 // (cmd/typeroute.go), a swarm the file never opted into.
-const BaseVaPlayer = "vaplayer"
+const BaseFlixHQWS = "flixhq.ws"
 
 // Config holds all application configuration.
 type Config struct {
@@ -296,12 +296,12 @@ func Load() (*Config, error) {
 	// what to switch to, and `--base` could not override a value Load had
 	// already rejected (the flag is applied after Load, cmd.applyConfig).
 	// The flag keeps the loud error; the file gets one warning and a working
-	// base: "auto" when torrent_fallback is on, otherwise "vaplayer", since
+	// base: "auto" when torrent_fallback is on, otherwise "flixhq.ws", since
 	// "auto" routes movies to YTS and the file never opted into a swarm.
 	// With api_url set the base is never read, so it is left alone.
 	if cfg.APIURL == "" {
 		if name, reason, ok := RetiredBase(cfg.Base); ok {
-			to := BaseVaPlayer
+			to := BaseFlixHQWS
 			if cfg.TorrentFallback {
 				to = BaseAuto
 			}
@@ -387,11 +387,11 @@ func IsTorrentBase(base string) bool {
 }
 
 // retiredBases lists the sources lobster no longer wires in, each verified
-// dead upstream on 2026-11-07 with no fix available on lobster's side. Their
-// provider code stays under internal/provider; what is gone is every path
+// dead upstream (VaPlayer on 2026-11-13, the rest on 2026-11-07) with no fix
+// available on lobster's side. Their provider code stays under internal/provider; what is gone is every path
 // that could select them (cmd.newProvider, cmd.fallbackProviders, the doctor
 // table, the TUI). A base naming one is not silently routed elsewhere: a
-// config file's value is downgraded to "vaplayer" — "auto" under
+// config file's value is downgraded to "flixhq.ws" — "auto" under
 // torrent_fallback — with a warning (Load), an
 // explicit --base is an error (cmd.applyConfig), and a ref stamped with one
 // is ignored with a warning (cmd.applyRefBase).
@@ -409,6 +409,7 @@ var retiredBases = []struct{ token, name, reason string }{
 	{"allanime", "AllAnime", "its sources endpoint is crypto-gated"},
 	{"anipub", "AniPub", "the domain was dropped and now serves spam"},
 	{"flixhq", "FlixHQ (flixhq.to)", "its origin has been down since August 2026"},
+	{"vaplayer", "VaPlayer", "its stream API no longer returns stream URLs (streams moved behind a session-bound browser player)"},
 }
 
 // IsFlixHQWSBase reports whether base names FlixHQWS: any spelling with "ws"

@@ -129,7 +129,7 @@ func fallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 }
 
 // fallbackProviders returns all available fallback providers, excluding the primary.
-// Both StreamProviders (VaPlayer, TBCPL) and regular Providers (FlixHQWS) are
+// Both StreamProviders (TBCPL) and regular Providers (FlixHQWS) are
 // included so the app tries every source before giving up. Consumet joins
 // them only when api_url is configured.
 //
@@ -137,10 +137,6 @@ func fallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 // cost a probe timeout per resolve for an answer that could only be a failure.
 func fallbackProviders(primary provider.Provider) []provider.Provider {
 	var fallbacks []provider.Provider
-
-	if _, ok := primary.(*provider.VaPlayer); !ok {
-		fallbacks = append(fallbacks, provider.NewVaPlayer())
-	}
 
 	if _, ok := primary.(*provider.TBCPL); !ok {
 		tb := provider.NewTBCPL("tbcpl")
@@ -208,7 +204,7 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 	// because a scraper broke is not, which is why this stays off until asked.
 	//
 	// Opting out of swarming altogether is a source, not this flag:
-	// `base = "vaplayer"` — or any explicit non-torrent base, or an api_url,
+	// `base = "flixhq.ws"` — or any explicit non-torrent base, or an api_url,
 	// which overrides base entirely — with torrent_fallback off never
 	// reaches a magnet. An explicit yts, nyaa or eztv base still does: the
 	// user named the torrent source outright.

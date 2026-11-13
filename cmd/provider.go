@@ -11,10 +11,10 @@ import (
 // autoBase is the general-purpose source config.BaseAuto maps to: the primary
 // used to search, and — for a series — to enumerate seasons and episodes.
 //
-// VaPlayer since 2026-11-07 (Soap2Day before, now retired): a StreamProvider
-// that enumerates seasons truthfully. As the primary it is excluded from its
-// own fallback chain, which therefore starts at TBCPL (cmd/fallback.go).
-const autoBase = "vaplayer"
+// FlixHQWS since 2026-11-13 (VaPlayer before, now retired). As the primary it
+// is excluded from its own fallback chain, which therefore starts at TBCPL
+// (cmd/fallback.go).
+const autoBase = config.BaseFlixHQWS
 
 // resolveDomain is provider.ResolveDomain behind a package var. It probes the
 // configured domain over the network and falls over to a known mirror, which
@@ -27,10 +27,10 @@ var resolveDomain = provider.ResolveDomain
 // If APIURL is set, it overrides Base entirely and uses the Consumet API.
 // Otherwise Base selects the scraping provider (config.BaseAuto -> autoBase;
 // FlixHQWS, TBCPL, etc. by their Base value); an unrecognized Base falls
-// back to VaPlayer, the same source autoBase names.
+// back to FlixHQWS, the same source autoBase names.
 //
 // A base naming a retired source never reaches here: config.Load downgrades
-// the file's value (to vaplayer, or auto under torrent_fallback), applyConfig
+// the file's value (to flixhq.ws, or auto under torrent_fallback), applyConfig
 // rejects the flag, and applyRefBase
 // (cmd/play.go) ignores a ref's stamped base with a warning (config.RetiredBase).
 //
@@ -77,7 +77,7 @@ func newProvider() provider.Provider {
 	if strings.Contains(base, "animeonsen") {
 		return provider.NewAnimeOnsen()
 	}
-	// Default: VaPlayer. This arm doubles as the explicit `--base vaplayer`
-	// arm; fallThroughBase (cmd/providerbase.go) is derived from it.
-	return provider.NewVaPlayer()
+	// Default: FlixHQWS on its own domain; fallThroughBase
+	// (cmd/providerbase.go) is derived from it.
+	return provider.NewFlixHQWS(resolveDomain(autoBase, "flixhqws", overrides))
 }

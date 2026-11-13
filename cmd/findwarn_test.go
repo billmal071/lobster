@@ -233,16 +233,16 @@ func TestFindCountsOnlyTheRowsTheCallerReceived(t *testing.T) {
 // A base token that selects nothing at all.
 //
 // newProvider has no unknown-base arm: `--base sopa2day` falls through to
-// VaPlayer, so primaryBase becomes "vaplayer" and every VaPlayer row matches
+// FlixHQWS, so primaryBase becomes "flixhq.ws" and every FlixHQWS row matches
 // it. Counting those rows as the requested base's would make the typo look
 // like a source that answered in full, and the caller would be told nothing —
-// while every ref in the same response honestly says "vaplayer". The input
+// while every ref in the same response honestly says "flixhq.ws". The input
 // here is exactly that shape: the configured token names no provider, and the
 // rows all come from the fall-through.
 func TestFindWarnsWhenTheBaseNamesNoProviderAtAll(t *testing.T) {
-	warnings, _ := runFindForWarnings(t, "sopa2day", provider.NewVaPlayer(), []media.SearchResult{
-		{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "vaplayer"},
-		{ID: "2", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "vaplayer"},
+	warnings, _ := runFindForWarnings(t, "sopa2day", provider.NewFlixHQWS("flixhq.ws"), []media.SearchResult{
+		{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "flixhq.ws"},
+		{ID: "2", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "flixhq.ws"},
 	})
 	if len(warnings) != 1 {
 		t.Fatalf("got %d warnings, want 1: %+v; --base sopa2day selected no provider, so nothing the caller received came from the base they asked for", len(warnings), warnings)
@@ -278,56 +278,18 @@ func TestFindDoesNotCallALegitimateAliasAnUnknownBase(t *testing.T) {
 	}
 }
 
-// The fall-through provider named on purpose. "vaplayer" selects VaPlayer
-// through the default arm rather than by falling through it, so it is a base
-// that was used, not one that named nothing.
-func TestFindTreatsAnExplicitVaPlayerBaseAsNamed(t *testing.T) {
-	warnings, envelope := runFindForWarnings(t, "vaplayer", provider.NewVaPlayer(), []media.SearchResult{
-		{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "vaplayer"},
-	})
-	if _, ok := envelope["warnings"]; ok {
-		t.Fatalf("got warnings %+v, want none: --base vaplayer asked for VaPlayer and VaPlayer produced every row", warnings)
-	}
-}
-
-// The substring trap. "notvaplayer" names no provider — newProvider has no
-// vaplayer arm of its own, so it reaches VaPlayer through the same default
-// branch "sopa2day" does — yet it *contains* "vaplayer". A containment test
-// therefore reads it as an explicit VaPlayer base, which costs twice over:
-// the caller is told nothing about a token that selected nothing, and every
-// ref in the response is stamped "notvaplayer", naming a source that does not
-// exist.
-//
-// Only the fall-through token itself may be matched exactly; containment is
-// what makes "notvaplayer" indistinguishable from "vaplayer".
-func TestFindDoesNotMistakeASubstringOfTheFallThroughForThatBase(t *testing.T) {
-	warnings, envelope := runFindForWarnings(t, "notvaplayer", provider.NewVaPlayer(), []media.SearchResult{
-		{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "vaplayer"},
-		{ID: "2", Title: "The Matrix Reloaded", Year: "2003", Type: media.Movie, Provider: "vaplayer"},
-	})
-	if len(warnings) != 1 || warnings[0].Code != "base_unknown" {
-		t.Fatalf("got warnings %+v, want one base_unknown; --base notvaplayer selected no provider, it merely contains the fall-through's token", warnings)
-	}
-	if warnings[0].Base != "notvaplayer" {
-		t.Errorf("warning base = %q, want %q", warnings[0].Base, "notvaplayer")
-	}
-
-	var results []struct {
-		Ref string `json:"ref"`
-	}
-	if err := json.Unmarshal(envelope["results"], &results); err != nil {
-		t.Fatalf("results is not an array of objects: %v", err)
-	}
-	if len(results) != 2 {
-		t.Fatalf("got %d results, want 2", len(results))
-	}
-	for i, r := range results {
-		decoded, err := decodeRef(r.Ref)
-		if err != nil {
-			t.Fatalf("decodeRef(results[%d]): %v", i, err)
-		}
-		if decoded.Base != "vaplayer" {
-			t.Errorf("ref for row %d has base %q, want %q; VaPlayer produced the row and \"notvaplayer\" names nothing, so stamping it would send a replay looking for a source that does not exist", i, decoded.Base, "vaplayer")
-		}
+// The fall-through provider named on purpose. "flixhq.ws" selects FlixHQWS
+// through the first arm of newProvider rather than by falling through, and so
+// do its other spellings: a base that was used, not one that named nothing.
+func TestFindTreatsAnExplicitFlixHQWSBaseAsNamed(t *testing.T) {
+	for _, base := range []string{"flixhq.ws", "flixhqws", "flixhq.ws.xx", "flixhq-ws.example"} {
+		t.Run(base, func(t *testing.T) {
+			warnings, envelope := runFindForWarnings(t, base, provider.NewFlixHQWS("flixhq.ws"), []media.SearchResult{
+				{ID: "1", Title: "The Matrix", Year: "1999", Type: media.Movie, Provider: "flixhq.ws"},
+			})
+			if _, ok := envelope["warnings"]; ok {
+				t.Fatalf("got warnings %+v, want none: --base %s asked for FlixHQWS and FlixHQWS produced every row", warnings, base)
+			}
+		})
 	}
 }

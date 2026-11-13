@@ -1485,7 +1485,7 @@ func TestTheResolverHopKeepsTheProviderThatHadTheSeason(t *testing.T) {
 // Reachable, not hypothetical: FlixHQ.GetEpisodes and FlixHQWS.GetEpisodes end
 // in `return parseEpisodes(doc), nil`, so a page whose selector matches
 // nothing yields (empty, nil). Both enumerate seasons for real, so both reach
-// this path. Their five siblings (soap2day, vaplayer, tbcpl, kimcartoon,
+// this path. Their five siblings (soap2day, tbcpl, kimcartoon,
 // moviebox) all guard internally with "no episodes found"; these two do not,
 // which is why the command needs the backstop.
 //

@@ -169,7 +169,7 @@ func episodeListMenu(sess *playlist.Session) error {
 }
 
 // resolveStream resolves a stream for the current episode. A primary provider
-// that implements StreamProvider (e.g. VaPlayer, TBCPL) is tried first with
+// that implements StreamProvider (e.g. TBCPL) is tried first with
 // the session's native episode ID; otherwise (e.g. FlixHQWS, used for metadata
 // only) resolution goes through the resilient fallback path.
 func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media.Stream, string, error) {
@@ -181,7 +181,7 @@ func resolveStream(sess *playlist.Session, excludeNames map[string]bool) (*media
 // an earlier call received to fall back on.
 func resolveStreamHolding(sess *playlist.Session, excludeNames map[string]bool, held **media.Stream) (*media.Stream, string, error) {
 	// Primary StreamProvider gets first crack with the native episode ID from the
-	// session — lets a provider with its own ID scheme (TBCPL, VaPlayer) reach
+	// session — lets a provider with its own ID scheme (TBCPL) reach
 	// its own Watch verbatim, bypassing tmdbID:season:episode reconstruction.
 	// Skip it once it's been excluded (its last stream failed playback), so a
 	// dead Primary stream can't trap playCurrentEpisode in an infinite retry.

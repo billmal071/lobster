@@ -15,8 +15,7 @@ Lobster selects the content provider via the `base` setting in `config.toml` or 
    ```
 
 2. **Available providers**  
-   - `auto` (default) — VaPlayer for search and series; films routed to YTS
-   - `vaplayer` — general-purpose, API-based
+   - `auto` (default) — FlixHQWS for search and series; films routed to YTS
    - `flixhq.ws` — scraper; browsing, trending, metadata
    - `tbcpl` / `1shows.org` — streaming via Vidzee
    - `animeonsen` — anime
@@ -42,11 +41,6 @@ Use the `--base` flag to force a specific provider:
 ```bash
 # Test with FlixHQ.ws
 lobster --base flixhq.ws trending
-
-# Test with VaPlayer. If VaPlayer fails, a fallback can still play the title,
-# so playback alone does not show VaPlayer works: check the fallback message
-# or run with -x before recording VaPlayer streaming as successful.
-lobster --base vaplayer "Inception"
 
 # Test with TBCPL
 lobster --base tbcpl "Inception"
@@ -111,10 +105,10 @@ Provider tests use httptest servers with mocked responses and don't hit real API
 A: Run with `-x` (debug mode). It prints the selected provider and all fallback attempts.
 
 **Q: Can I test multiple providers in one session?**  
-A: Switch with `--base` on the CLI; each command is an independent check of that source. The TUI (run `lobster` with no args) is not an independent check per category: under the default config Movies and Series both search VaPlayer and only Anime searches AnimeOnsen, and Movies and Series searches can add rows from fallback providers when the primary returns few results (the Anime tab never does).
+A: Switch with `--base` on the CLI; each command is an independent check of that source. The TUI (run `lobster` with no args) is not an independent check per category: under the default config Movies and Series both search FlixHQWS and only Anime searches AnimeOnsen, and Movies and Series searches can add rows from fallback providers when the primary returns few results (the Anime tab never does).
 
 **Q: What if a provider is down?**  
-A: Lobster builds a fallback chain from every source except the primary: VaPlayer, TBCPL, Consumet (when `api_url` is set), FlixHQWS, AnimeOnsen, TBCPLEmbed (when the catalog feed is on), and, only when `torrent_fallback` is on, EZTV, Nyaa and YTS. The probes are health-ranked and raced, not tried strictly in sequence, and the torrent sources are tried only after every HTTP source has failed. When `api_url` is set, Consumet is the primary rather than a fallback, and `base` is ignored. Under the default config VaPlayer is the primary for series and for any film YTS has no match for, so its fallbacks start at TBCPL; with `base = "auto"` a film is routed to YTS at play time instead (not with `--json`, or `--download`, which keep VaPlayer).
+A: Lobster builds a fallback chain from every source except the primary: TBCPL, Consumet (when `api_url` is set), FlixHQWS, AnimeOnsen, TBCPLEmbed (when the catalog feed is on), and, only when `torrent_fallback` is on, EZTV, Nyaa and YTS. The probes are health-ranked and raced, not tried strictly in sequence, and the torrent sources are tried only after every HTTP source has failed. When `api_url` is set, Consumet is the primary rather than a fallback, and `base` is ignored. Under the default config FlixHQWS is the primary for series and for any film YTS has no match for, so its fallbacks start at TBCPL; with `base = "auto"` a film is routed to YTS at play time instead (not with `--json`, or `--download`, which keep FlixHQWS).
 
 ---
 

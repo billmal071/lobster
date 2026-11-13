@@ -19,7 +19,7 @@ func chainTestContent() media.SearchResult {
 func chainTestConfig(t *testing.T, json bool) {
 	t.Helper()
 	prev, prevJSON := cfg, flagJSON
-	cfg = &config.Config{Base: "vaplayer", Quality: "1080"}
+	cfg = &config.Config{Base: "flixhq.ws", Quality: "1080"}
 	flagJSON = json
 	t.Cleanup(func() { cfg, flagJSON = prev, prevJSON })
 }

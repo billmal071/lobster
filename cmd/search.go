@@ -771,7 +771,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		debugf("fallback failed: %v", err)
 		hint := ""
 		if _, isFlixHQWS := p.(*provider.FlixHQWS); isFlixHQWS {
-			hint = "\nTip: try --base vaplayer or --base yts for better stream availability"
+			hint = "\nTip: try --base tbcpl or --base yts for better stream availability"
 		}
 		return fmt.Errorf("all providers failed for %s: %w%s", title, err, hint)
 	}

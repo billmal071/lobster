@@ -44,7 +44,6 @@ func doctorRun(cmd *cobra.Command, args []string) error {
 	// Only sources newProvider or fallbackProviders can still reach; the
 	// retired ones (config.retiredBases) would only ever read FAIL.
 	providers := []doctor.Named{
-		{Name: "VaPlayer", Provider: provider.NewVaPlayer()},
 		{Name: "TBCPL", Provider: provider.NewTBCPL("tbcpl")},
 		{Name: "FlixHQWS", Provider: provider.NewFlixHQWS("flixhq.ws")},
 		// 1shows.org is the same TBCPL provider on a different base, and the two

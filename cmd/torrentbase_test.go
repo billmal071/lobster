@@ -56,7 +56,7 @@ func TestTorrentBasesBuildTheirProviderAndRoundTrip(t *testing.T) {
 // The non-torrent bases must stay out of IsTorrentBase, or every scraping run
 // would pay a needless re-exec.
 func TestIsTorrentBaseIsFalseForEveryScrapingBase(t *testing.T) {
-	for _, base := range []string{"auto", "vaplayer", "flixhq.ws", "tbcpl", "1shows.org", "animeonsen"} {
+	for _, base := range []string{"auto", "flixhq.ws", "tbcpl", "1shows.org", "animeonsen"} {
 		if config.IsTorrentBase(base) {
 			t.Errorf("config.IsTorrentBase(%q) = true, want false", base)
 		}
@@ -93,7 +93,7 @@ func TestFallbackProvidersOrderWithTorrentFallback(t *testing.T) {
 	t.Cleanup(func() { cfg = prev })
 
 	want := []string{
-		"*provider.VaPlayer", "*provider.TBCPL", "*provider.EZTV", "*provider.FlixHQWS",
+		"*provider.TBCPL", "*provider.EZTV", "*provider.FlixHQWS",
 		"*provider.AnimeOnsen", "*provider.Nyaa", "*provider.YTS",
 	}
 	got := providerNames(fallbackProviders(nil))

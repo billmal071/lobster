@@ -306,22 +306,22 @@ func TestRefCmdRestoresTheFlagGlobalsItRegistrationClobbers(t *testing.T) {
 }
 
 // A ref stamped with a retired source still names the work: play re-searches
-// by title (cmd/ref.go), and older soap2day refs carry TMDB IDs VaPlayer
-// reads. The stamp is ignored, the configured base stays, and one warning
+// by title (cmd/ref.go), and older soap2day refs carry TMDB IDs the
+// retired source read. The stamp is ignored, the configured base stays, and one warning
 // says so — on stderr even under --json, since play's envelope carries no
 // warnings field.
 func TestApplyRefBaseIgnoresARetiredRefBaseWithAWarning(t *testing.T) {
 	unsetStorageEnv(t)
 	withOutputFlags(t, true, "")
 	prev := cfg
-	cfg = &config.Config{Base: "vaplayer", Quality: "1080", Player: "mpv"}
+	cfg = &config.Config{Base: "flixhq.ws", Quality: "1080", Player: "mpv"}
 	t.Cleanup(func() { cfg = prev })
 	out := captureAgentOut(t)
 	warnings := captureWarnings(t)
 
 	applyRefBase(refCmd(t), playRef{Base: "soap2day"})
-	if cfg.Base != "vaplayer" {
-		t.Errorf("base = %q after a retired ref base, want the configured vaplayer", cfg.Base)
+	if cfg.Base != "flixhq.ws" {
+		t.Errorf("base = %q after a retired ref base, want the configured flixhq.ws", cfg.Base)
 	}
 	if out.Len() != 0 {
 		t.Errorf("stdout = %q, want nothing: no envelope is emitted for a warning", out.String())
@@ -334,5 +334,26 @@ func TestApplyRefBaseIgnoresARetiredRefBaseWithAWarning(t *testing.T) {
 	}
 	if strings.Contains((*warnings)[0], "choose another source") {
 		t.Errorf("warning = %q, tells the user to choose a source while saying the run continues on the configured one", (*warnings)[0])
+	}
+}
+
+func TestApplyRefBaseIgnoresAVaPlayerRefBaseWithAWarning(t *testing.T) {
+	for _, stamped := range []string{"vaplayer", "VAPLAYER", " vaplayer ", "vaplayer.ru"} {
+		t.Run(stamped, func(t *testing.T) {
+			unsetStorageEnv(t)
+			withOutputFlags(t, true, "")
+			prev := cfg
+			cfg = &config.Config{Base: "flixhq.ws", Quality: "1080", Player: "mpv"}
+			t.Cleanup(func() { cfg = prev })
+			warnings := captureWarnings(t)
+
+			applyRefBase(refCmd(t), playRef{Base: stamped})
+			if cfg.Base != "flixhq.ws" {
+				t.Errorf("base = %q after a vaplayer ref base, want the configured flixhq.ws", cfg.Base)
+			}
+			if len(*warnings) != 1 || !strings.Contains((*warnings)[0], "VaPlayer") {
+				t.Fatalf("warnings = %q, want exactly one naming VaPlayer", *warnings)
+			}
+		})
 	}
 }

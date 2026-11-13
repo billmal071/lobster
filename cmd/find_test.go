@@ -96,7 +96,6 @@ func TestRefBaseForKeepsNonDottedFlixHQWSMirror(t *testing.T) {
 		"flixhqws":          "flixhqws",
 		"flixhq.ws.xx":      "flixhq.ws.xx",
 		"flixhq.ws":         "flixhq.ws",
-		"vaplayer":          "flixhq.ws",
 	} {
 		if got := refBaseFor(row, "flixhq.ws", configured); got != want {
 			t.Errorf("refBaseFor(flixhq.ws row, configured %q) = %q, want %q", configured, got, want)
