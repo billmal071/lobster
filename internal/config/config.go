@@ -63,7 +63,7 @@ type Config struct {
 	// AllAnime's retirement (retiredBases); kept so existing config files parse.
 	AllowAdultAnime bool `toml:"allow_adult_anime"`
 	// TorrentFallback lets the resolver fall back to the torrent sources (YTS,
-	// EZTV, Nyaa) when the streaming providers fail. Off by default and
+	// EZTV, Nyaa, 1337x) when the streaming providers fail. Off by default and
 	// deliberately so: they resolve to a magnet, so falling back to one joins a BitTorrent swarm and exposes the
 	// user's IP to its peers. That is worth doing on request, not silently
 	// because a scraper broke.
@@ -373,17 +373,17 @@ func IsYTSBase(base string) bool {
 }
 
 // IsTorrentBase reports whether a base value names any source that resolves
-// to a magnet rather than an HTTP stream: YTS (films), Nyaa (anime) or EZTV
-// (TV series). It is the predicate cmd.mayStreamTorrent reads, so a run whose
+// to a magnet rather than an HTTP stream: YTS (films), Nyaa (anime), EZTV
+// (TV series) or 1337x (films and series). It is the predicate cmd.mayStreamTorrent reads, so a run whose
 // primary can only ever answer with a magnet is put on the storage backend
 // that cannot SIGBUS — the same guarantee IsYTSBase gives YTS alone.
 //
 // Substring, like IsYTSBase and for the same reason: cmd.newProvider selects
 // each of these by substring, and the two readers must agree. None of the
-// other documented bases contains "nyaa" or "eztv".
+// other documented bases contains "nyaa", "eztv" or "1337x".
 func IsTorrentBase(base string) bool {
 	b := NormalizeBase(base)
-	return IsYTSBase(b) || strings.Contains(b, "nyaa") || strings.Contains(b, "eztv")
+	return IsYTSBase(b) || strings.Contains(b, "nyaa") || strings.Contains(b, "eztv") || strings.Contains(b, "1337x")
 }
 
 // retiredBases lists the sources lobster no longer wires in, each verified

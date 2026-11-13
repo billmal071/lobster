@@ -86,7 +86,7 @@ func TestFallbackProvidersGatesNyaaAndEZTVOnTorrentFallback(t *testing.T) {
 // With torrent_fallback on, the whole chain in order: EZTV after TBCPL and
 // before FlixHQWS (a series' complete encode ahead of the remaining scrapers),
 // Nyaa right after AnimeOnsen (anime the streaming anime source lacks), YTS
-// last.
+// then 1337x last.
 func TestFallbackProvidersOrderWithTorrentFallback(t *testing.T) {
 	prev := cfg
 	cfg = &config.Config{TorrentFallback: true}
@@ -94,7 +94,7 @@ func TestFallbackProvidersOrderWithTorrentFallback(t *testing.T) {
 
 	want := []string{
 		"*provider.VaPlayer", "*provider.TBCPL", "*provider.EZTV", "*provider.FlixHQWS",
-		"*provider.AnimeOnsen", "*provider.Nyaa", "*provider.YTS",
+		"*provider.AnimeOnsen", "*provider.Nyaa", "*provider.YTS", "*provider.X1337",
 	}
 	got := providerNames(fallbackProviders(nil))
 	if fmt.Sprint(got) != fmt.Sprint(want) {

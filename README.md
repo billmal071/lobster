@@ -135,9 +135,10 @@ Provider health (query: "The Matrix")
   ok   YTS            0.871s           12 results, magnet resolved
   ok   EZTV           1.530s           5 results, magnet resolved
   ok   Nyaa           0.912s           8 results, magnet resolved
+  ok   1337x          1.204s           1 results, magnet resolved
   FAIL AnimeOnsen     4.310s  search   no results for "One Punch Man"
 
-7 of 8 providers usable.
+8 of 9 providers usable.
 ```
 
 Only sources lobster still wires in are probed. Soap2Day, MovieBox, VidNest,
@@ -398,7 +399,8 @@ download_dir = "~/Videos/lobster"
 # anything YTS does not carry falls back to vaplayer. Any other value is an
 # explicit choice and is used for both content types.
 # Available: auto, vaplayer, flixhq.ws, tbcpl, 1shows.org, animeonsen, yts,
-# nyaa (anime torrents), eztv (TV series torrents)
+# nyaa (anime torrents), eztv (TV series torrents), 1337x (film and series
+# torrents)
 # All other providers are automatically used as fallbacks (the torrent ones
 # only with torrent_fallback = true).
 # Retired (treated as "auto" with a warning here; an error as --base):
@@ -410,13 +412,13 @@ download_dir = "~/Videos/lobster"
 # your resume positions".
 # base = "auto"
 
-# yts, nyaa and eztv are BitTorrent, not HTTP streaming. They play while
+# yts, nyaa, eztv and 1337x are BitTorrent, not HTTP streaming. They play while
 # downloading, but also make you a participant in the swarm: your IP is visible to every peer
 # and to the monitoring firms that sit in them, which ordinary streaming never
 # does. This applies to the default install, because "auto" plays movies from
 # YTS — set base = "vaplayer" (or another explicit non-torrent source, or
 # api_url) and leave torrent_fallback false to never join a swarm. Naming yts,
-# nyaa or eztv joins one even with torrent_fallback false. Otherwise use a VPN.
+# nyaa, eztv or 1337x joins one even with torrent_fallback false. Otherwise use a VPN.
 # Needs a 64-bit build, or the classic storage backend, which lobster selects
 # for you on a run that may stream a torrent (GUIDE.md -> "Torrent storage
 # backend"). Pieces land in ~/Videos/.lobster/ and are removed when playback
@@ -437,7 +439,7 @@ download_dir = "~/Videos/lobster"
 # When set, lobster uses this API for search, streaming, etc. It overrides
 # `base` entirely, and counts as an explicit source: movies are not routed to
 # YTS. With torrent_fallback left false, such a run never joins a swarm —
-# torrent_fallback = true puts YTS, EZTV and Nyaa back in the fallback chain
+# torrent_fallback = true puts YTS, EZTV, Nyaa and 1337x back in the fallback chain
 # whatever api_url says.
 # api_url = "https://your-consumet-instance.example.com"
 

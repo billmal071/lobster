@@ -186,7 +186,7 @@ func openBatchStream(chainPrimary provider.Provider, selected media.SearchResult
 }
 
 // resolveBatchStream asks the fallback chain for an episode's stream. An
-// explicitly chosen torrent base (nyaa, eztv) is asked first: the chain is
+// explicitly chosen torrent base (nyaa, eztv, 1337x) is asked first: the chain is
 // built by excluding its primary, which would otherwise skip the one source
 // the user named and the one proven to carry the episode list.
 func resolveBatchStream(chainPrimary provider.Provider, selected media.SearchResult, ep media.Episode, seasonNum int) (*media.Stream, error) {
@@ -262,7 +262,7 @@ func preferQualityServers(servers []media.Server, quality string) []media.Server
 }
 
 // serverQualityHeight reads the "<n>p" token a torrent server name starts
-// with (YTS, EZTV, Nyaa), or 0 for a name that carries none.
+// with (YTS, EZTV, Nyaa, 1337x), or 0 for a name that carries none.
 func serverQualityHeight(name string) int {
 	token, _, _ := strings.Cut(strings.ToLower(name), " ")
 	if !strings.HasSuffix(token, "p") {
