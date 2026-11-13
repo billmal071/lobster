@@ -330,6 +330,15 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// Primary provider can't resolve seasons — try fallback stream
 			debugf("primary provider seasons failed: %v, trying fallbacks", err)
 			fmt.Fprintf(os.Stderr, "Provider has no season data, trying fallbacks...\n")
+			// The resolver builds the episode ID from numbers, so a season
+			// and an episode are both needed; the interactive flow reaches
+			// here with neither, and nothing later asks. Ask for what is
+			// missing, or refuse where nobody can be asked, rather than let
+			// the TV id be requested as a movie.
+			var askErr error
+			if season, episode, askErr = askSeasonEpisode(chainPrimary, selected, season, episode); askErr != nil {
+				return askErr
+			}
 			// A requested season has to exist somewhere before the resolver is
 			// asked for it. tryFallbackStream resolves a StreamProvider by
 			// NUMBER — the episode ID is built arithmetically from season and
@@ -348,14 +357,6 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// them. Note the residual asymmetry that leaves — `episodes` still
 			// answers no_results there, because it has no list to print, while
 			// `play` goes ahead on a number the user supplied.
-			// The resolver builds the episode ID from numbers, so both are
-			// needed; the interactive flow passes 0/0 and nothing else here
-			// would ask. Without a prompt this refuses instead of letting the
-			// TV id be requested as a movie.
-			var askErr error
-			if season, episode, askErr = askSeasonEpisode(title, season, episode); askErr != nil {
-				return askErr
-			}
 			if season > 0 {
 				if hits := fallbackSeasonHits(chainPrimary, contentRequest(selected)); len(hits) > 0 {
 					enumerated, anyPartial := false, false

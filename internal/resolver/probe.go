@@ -72,6 +72,13 @@ const MaxCandidates = 5
 // maxCandidates is the package-internal alias.
 const maxCandidates = MaxCandidates
 
+// ErrSeasonEpisodeRequired is returned by Resolve for a TV request with neither
+// season nor episode. Providers read an empty episode ID as a film ("movie/<id>"
+// on TBCPL), so such a request would ask for a movie under a TV id. It names no
+// CLI flag because the callers differ (search, history, queue, TUI); each adds
+// its own hint.
+var ErrSeasonEpisodeRequired = errors.New("season and episode are required for a TV title")
+
 // Request parameterizes a single stream-resolution attempt.
 //
 // ID and Year identify the exact work the user picked. Each provider still
@@ -106,10 +113,6 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 	results, err := p.Search(req.Title)
 	if err != nil {
 		return nil, "search", fmt.Errorf("search failed: %w", err)
-	}
-
-	if req.MediaType == media.TV && req.Season == 0 && req.Episode == 0 {
-		return nil, "match", fmt.Errorf("%q is a TV title: season and episode are required (pass --season and --episode)", req.Title)
 	}
 
 	candidates := candidatesFor(results, req)
@@ -571,13 +574,6 @@ func tryStreamProviderFallback(sp provider.StreamProvider, match *media.SearchRe
 	if mediaType == media.Movie {
 		return sp.Watch(match.ID, "", "Default", quality)
 	}
-	// An empty episode ID is the movie path ("movie/<id>" on TBCPL). A TV
-	// request with no season or episode has no episode to build, so refuse
-	// rather than ask a TV id for a film.
-	if season == 0 && episode == 0 {
-		return nil, fmt.Errorf("%s is a TV title: season and episode are required (pass --season and --episode)", match.ID)
-	}
-
 	// TV: construct the episode ID
 	tmdbID := match.ID
 	if idx := len("tv/"); len(tmdbID) > idx && tmdbID[:idx] == "tv/" {

@@ -6,70 +6,180 @@ import (
 	"testing"
 
 	"lobster/internal/media"
+	"lobster/internal/resolver"
 )
 
-func withPromptNumber(t *testing.T, interactive bool, answers map[string]string) *[]string {
+// withTTY fakes the terminal probe and --json, leaving promptInteractive's own gating real.
+func withTTY(t *testing.T, tty, json bool) {
+	t.Helper()
+	prevT, prevJ := stdinIsTerminal, flagJSON
+	stdinIsTerminal = func() bool { return tty }
+	flagJSON = json
+	t.Cleanup(func() { stdinIsTerminal, flagJSON = prevT, prevJ })
+}
+
+// withAnswers fakes the number prompt. Each label gets its answers in order;
+// like ui.Input, a label with none left returns an error ("no input provided")
+// rather than an empty answer, and an unbounded loop fails fast.
+func withAnswers(t *testing.T, answers map[string][]string) *[]string {
 	t.Helper()
 	asked := []string{}
-	prevI, prevN := promptInteractive, promptNumber
-	promptInteractive = func() bool { return interactive }
+	prev := promptNumber
 	promptNumber = func(label string) (string, error) {
 		asked = append(asked, label)
-		return answers[label], nil
+		if len(asked) > 20 {
+			t.Fatalf("prompt loop: asked %v", asked)
+		}
+		if q := answers[label]; len(q) > 0 {
+			answers[label] = q[1:]
+			return q[0], nil
+		}
+		return "", errors.New("no input provided")
 	}
-	t.Cleanup(func() { promptInteractive, promptNumber = prevI, prevN })
+	t.Cleanup(func() { promptNumber = prev })
 	return &asked
 }
 
-// TestUnlistableTVAsksForSeasonAndEpisode checks that a TV selection whose primary cannot list seasons prompts for the numbers and reaches the fallback with them.
-func TestUnlistableTVAsksForSeasonAndEpisode(t *testing.T) {
+type unlistable struct {
+	sel media.SearchResult
+	fb  *recordingStreamProvider
+}
+
+func newUnlistable(t *testing.T) unlistable {
+	t.Helper()
 	playStreamHarness(t, &stubPlayerImpl{})
 	sel := media.SearchResult{ID: "tv/31910", Title: "Naruto", Type: media.TV}
 	fb := &recordingStreamProvider{result: sel, url: stubStreamServer(t)}
 	withFallbackChain(t, fb)
-	asked := withPromptNumber(t, true, map[string]string{"Season": "2", "Episode": "5"})
+	return unlistable{sel: sel, fb: fb}
+}
 
-	primary := &stubProvider{seasonsErr: errors.New("no seasons found")}
-	if err := resolveAndPlay(primary, sel, 0, 0); err != nil {
+func (u unlistable) play(season, episode int) error {
+	return resolveAndPlay(&stubProvider{seasonsErr: errors.New("no seasons found")}, u.sel, season, episode)
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestUnlistableTVAsksForSeasonAndEpisode checks that 0/0 prompts for both numbers, season first, and reaches the fallback with them.
+func TestUnlistableTVAsksForSeasonAndEpisode(t *testing.T) {
+	u := newUnlistable(t)
+	withTTY(t, true, false)
+	asked := withAnswers(t, map[string][]string{"Season": {"2"}, "Episode": {"5"}})
+
+	if err := u.play(0, 0); err != nil {
 		t.Fatalf("resolveAndPlay = %v (prompts: %v)", err, *asked)
 	}
-	if got := fb.episodeAsked(); got != "31910:2:5" {
-		t.Fatalf("fallback asked for %q, want 31910:2:5 (prompts: %v)", got, *asked)
+	if got := u.fb.episodeAsked(); got != "31910:2:5" {
+		t.Fatalf("fallback asked for %q, want 31910:2:5", got)
+	}
+	if !equalStrings(*asked, []string{"Season", "Episode"}) {
+		t.Fatalf("prompts = %v, want [Season Episode]", *asked)
 	}
 }
 
-// TestUnlistableTVNonInteractiveRefusesClearly checks that without a prompt the run errors with the season/episode message and never reaches Watch.
-func TestUnlistableTVNonInteractiveRefusesClearly(t *testing.T) {
-	playStreamHarness(t, &stubPlayerImpl{})
-	sel := media.SearchResult{ID: "tv/31910", Title: "Naruto", Type: media.TV}
-	fb := &recordingStreamProvider{result: sel, url: stubStreamServer(t)}
-	withFallbackChain(t, fb)
-	asked := withPromptNumber(t, false, nil)
+// TestUnlistableTVWithSeasonAsksOnlyForEpisode checks a history-style S2E0 asks only for the episode and keeps the season.
+func TestUnlistableTVWithSeasonAsksOnlyForEpisode(t *testing.T) {
+	u := newUnlistable(t)
+	withTTY(t, true, false)
+	asked := withAnswers(t, map[string][]string{"Episode": {"7"}})
 
-	primary := &stubProvider{seasonsErr: errors.New("no seasons found")}
-	err := resolveAndPlay(primary, sel, 0, 0)
-	if err == nil || !strings.Contains(err.Error(), "--season and --episode") {
-		t.Fatalf("err = %v, want season/episode required message", err)
+	if err := u.play(2, 0); err != nil {
+		t.Fatalf("resolveAndPlay = %v (prompts: %v)", err, *asked)
 	}
-	if fb.watchCallCnt != 0 || len(*asked) != 0 {
-		t.Fatalf("watch calls %d, prompts %v; want none", fb.watchCallCnt, *asked)
+	if got := u.fb.episodeAsked(); got != "31910:2:7" {
+		t.Fatalf("fallback asked for %q, want 31910:2:7", got)
+	}
+	if !equalStrings(*asked, []string{"Episode"}) {
+		t.Fatalf("prompts = %v, want [Episode]", *asked)
 	}
 }
 
-// TestUnlistableTVWithFlagsDoesNotPrompt checks that explicit numbers skip the prompt.
+// TestUnlistableTVSpecialsAreLeftAlone checks season 0 with an episode (TMDB Specials) is a real request, not an unset one.
+func TestUnlistableTVSpecialsAreLeftAlone(t *testing.T) {
+	u := newUnlistable(t)
+	withTTY(t, true, false)
+	asked := withAnswers(t, nil)
+
+	if err := u.play(0, 5); err != nil {
+		t.Fatalf("resolveAndPlay = %v (prompts: %v)", err, *asked)
+	}
+	if got := u.fb.episodeAsked(); got != "31910:0:5" {
+		t.Fatalf("fallback asked for %q, want 31910:0:5", got)
+	}
+	if len(*asked) != 0 {
+		t.Fatalf("prompted %v for a Specials request", *asked)
+	}
+}
+
+// TestUnlistableTVWithFlagsDoesNotPrompt checks explicit numbers skip the prompt.
 func TestUnlistableTVWithFlagsDoesNotPrompt(t *testing.T) {
-	playStreamHarness(t, &stubPlayerImpl{})
-	sel := media.SearchResult{ID: "tv/31910", Title: "Naruto", Type: media.TV}
-	fb := &recordingStreamProvider{result: sel, url: stubStreamServer(t)}
-	withFallbackChain(t, fb)
-	asked := withPromptNumber(t, true, nil)
+	u := newUnlistable(t)
+	withTTY(t, true, false)
+	asked := withAnswers(t, nil)
 
-	primary := &stubProvider{seasonsErr: errors.New("no seasons found")}
-	if err := resolveAndPlay(primary, sel, 1, 3); err != nil {
+	if err := u.play(1, 3); err != nil {
 		t.Fatal(err)
 	}
-	if len(*asked) != 0 || fb.episodeAsked() != "31910:1:3" {
-		t.Fatalf("prompts %v, episode %q", *asked, fb.episodeAsked())
+	if len(*asked) != 0 || u.fb.episodeAsked() != "31910:1:3" {
+		t.Fatalf("prompts %v, episode %q", *asked, u.fb.episodeAsked())
+	}
+}
+
+// TestUnlistableTVRefusesWhereNobodyCanBeAsked checks --json (even on a terminal) and a missing terminal both refuse with a hint that names flags that exist, wraps the typed error, and never prompt or call Watch.
+func TestUnlistableTVRefusesWhereNobodyCanBeAsked(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		tty, json bool
+	}{
+		{"json on a terminal", true, true},
+		{"no terminal", false, false},
+		{"json and no terminal", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := newUnlistable(t)
+			withTTY(t, tc.tty, tc.json)
+			asked := withAnswers(t, map[string][]string{"Season": {"1"}, "Episode": {"1"}})
+
+			err := u.play(0, 0)
+			if !errors.Is(err, resolver.ErrSeasonEpisodeRequired) {
+				t.Fatalf("err = %v, want ErrSeasonEpisodeRequired", err)
+			}
+			for _, want := range []string{"Naruto", "without --json", "lobster play --ref", "--season N --episode M"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("err %q lacks %q", err, want)
+				}
+			}
+			if u.fb.watchCallCnt != 0 || len(*asked) != 0 {
+				t.Fatalf("watch calls %d, prompts %v; want none", u.fb.watchCallCnt, *asked)
+			}
+		})
+	}
+}
+
+// TestAskPositiveRetriesBadInputAndCancels checks 0, negatives and non-numbers are rejected and asked again, and a cancelled prompt returns its error.
+func TestAskPositiveRetriesBadInputAndCancels(t *testing.T) {
+	asked := withAnswers(t, map[string][]string{"Season": {"0", "-3", "abc", "", " 4 "}})
+	n, err := askPositive("Season")
+	if err != nil || n != 4 {
+		t.Fatalf("askPositive = (%d, %v), want 4", n, err)
+	}
+	if len(*asked) != 5 {
+		t.Fatalf("asked %d times, want 5 (4 rejected, 1 accepted)", len(*asked))
+	}
+
+	withAnswers(t, nil)
+	if n, err := askPositive("Season"); err == nil || n != 0 {
+		t.Fatalf("cancelled prompt = (%d, %v), want an error", n, err)
 	}
 }
 
@@ -79,7 +189,8 @@ func TestFallbackMovieNeverPrompts(t *testing.T) {
 	sel := media.SearchResult{ID: "movie/603", Title: "The Matrix", Type: media.Movie}
 	fb := &recordingStreamProvider{result: sel, url: stubStreamServer(t)}
 	withFallbackChain(t, fb)
-	asked := withPromptNumber(t, true, nil)
+	withTTY(t, true, false)
+	asked := withAnswers(t, nil)
 
 	if err := resolveAndPlay(&stubProvider{}, sel, 0, 0); err != nil {
 		t.Fatal(err)
