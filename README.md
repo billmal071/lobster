@@ -141,8 +141,9 @@ Provider health (query: "The Matrix")
 
 Only sources lobster still wires in are probed. Soap2Day, MovieBox, VidNest,
 FlixHQ (`flixhq.to`), KimCartoon, AllAnime and AniPub were retired on
-2026-11-07 after each was verified dead upstream with nothing to fix on
-lobster's side. A config file still naming one is treated as `auto` with a
+2026-11-07, and VaPlayer on 2026-11-13, after each was verified dead upstream
+with nothing to fix on lobster's side. A config file still naming one is
+replaced with `flixhq.ws` (`auto` when `torrent_fallback` is on) with a
 warning, so `lobster doctor` keeps working; an explicit `--base` naming one is
 an error that says so.
 

@@ -152,7 +152,7 @@ lobster episodes --ref "eyJpZCI6..." --season 2
 
 ```json
 {"schema": 1, "title": "Some Show", "seasons": [1, 2, 3], "season": 2,
- "provider": "flixhq.ws", "episodes": [{"number": 1, "title": "Pilot"}]}
+ "provider": "flixhqws", "episodes": [{"number": 1, "title": "Pilot"}]}
 ```
 
 `provider` names the source that answered. It is often not the base the ref
