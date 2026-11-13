@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,7 +16,11 @@ const (
 	ahKey3 = "26157af769349fba76fe4f17d6068eac"
 )
 
-const ahSearchPage = `<html><body><div class='linetitle c'>naruto</div>
+// ahChrome is the search form every real page of the site carries in its
+// header; a block page or captive portal does not.
+const ahChrome = `<form class='searchf bc2' action='search.php' method='get'></form>`
+
+const ahSearchPage = "<html><body>" + ahChrome + `<div class='linetitle c'>naruto</div>
 <div class='similarimg'><div class='p1'><a href='anime.php?t2py4'><img class='coverimg' src='image.php?rhoq3' alt='Boruto'></a><div class='similarname c'><a href='anime.php?t2py4' class='c'>Boruto: Naruto Next Generations</a></div></div></div>
 <div class='similarimg'><div class='p1'><a href='anime.php?ukr6y'><img class='coverimg' src='image.php?ez7kl' alt='Naruto'></a><div class='similarname c'><a href='anime.php?ukr6y' class='c'>Naruto &amp; Friends</a></div></div></div>
 <div class='similarimg'><div class='p1'><div class='similarname c'><a href='anime.php?ukr6y' class='c'>Naruto &amp; Friends</a></div></div></div>
@@ -28,7 +33,7 @@ func ahEpisodeLink(key, num string) string {
 
 // ahAnimePage is built from a var so a test can swap in a different listing.
 // The live page lists newest first.
-var ahAnimePage = `<html><body><div class='boldtext'> <div class='linetitle2 c2'>` +
+var ahAnimePage = "<html><body>" + ahChrome + `<div class='boldtext'> <div class='linetitle2 c2'>` +
 	ahEpisodeLink(ahKey1, "3") + ahEpisodeLink(ahKey2, "2") + ahEpisodeLink(ahKey3, "1") +
 	`</div></div></body></html>`
 
@@ -47,13 +52,13 @@ func ahStub(t *testing.T, gateBody string) (*AnimeHeaven, *string) {
 		switch r.URL.Path {
 		case "/search.php":
 			if r.URL.Query().Get("s") == "empty" {
-				_, _ = w.Write([]byte("<html><body>nothing</body></html>"))
+				_, _ = w.Write([]byte("<html><body>" + ahChrome + "No results</body></html>"))
 				return
 			}
 			_, _ = w.Write([]byte(ahSearchPage))
 		case "/anime.php":
 			if r.URL.RawQuery == "none" {
-				_, _ = w.Write([]byte("<html><body>no episodes</body></html>"))
+				_, _ = w.Write([]byte("<html><body>" + ahChrome + "</body></html>"))
 				return
 			}
 			_, _ = w.Write([]byte(ahAnimePage))
@@ -153,7 +158,7 @@ func TestAnimeHeavenWatchSendsKeyCookieAndSkipsComments(t *testing.T) {
 
 func TestAnimeHeavenWatchRejectsMalformedKeyAndMissingSource(t *testing.T) {
 	p, cookie := ahStub(t, "<html>gate closed</html>")
-	for _, k := range []string{"", "xyz", ahKey1 + "0", strings.ToUpper(ahKey1), ahKey1[:31] + ";"} {
+	for _, k := range []string{"xyz", ahKey1 + "0", strings.ToUpper(ahKey1), ahKey1[:31] + ";"} {
 		if _, err := p.Watch("ukr6y", k, "", ""); err == nil {
 			t.Errorf("key %q should be rejected", k)
 		}
@@ -193,7 +198,7 @@ func TestAnimeHeavenWatchSkipsError2Mirror(t *testing.T) {
 
 func TestAnimeHeavenSearchSkipsBlankTitles(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`<div class='similarname c'><a href='anime.php?abc12' class='c'>   </a></div>`))
+		_, _ = w.Write([]byte(ahChrome + `<div class='similarname c'><a href='anime.php?abc12' class='c'>   </a></div>`))
 	}))
 	defer srv.Close()
 	prev := animeHeavenBase
@@ -215,6 +220,8 @@ func TestAnimeHeavenHTTPErrorStatusIsAnError(t *testing.T) {
 	defer func() { animeHeavenBase = prev }()
 	if _, err := NewAnimeHeaven().Search("x"); err == nil {
 		t.Error("a 500 must surface as an error, not an empty result")
+	} else if !strings.Contains(err.Error(), "status 500") {
+		t.Errorf("error = %v, want the HTTP status named", err)
 	}
 }
 
@@ -232,5 +239,203 @@ func TestAnimeHeavenSeasonsAndEmbed(t *testing.T) {
 	}
 	if _, err := p.GetEmbedURL("x"); err == nil {
 		t.Error("GetEmbedURL must direct callers to Watch")
+	}
+}
+
+// Downloads and the fallback resolver call Watch with "" or
+// "<show>:<season>:<episode>", never with a gate key.
+func TestAnimeHeavenWatchAcceptsResolverEpisodeIDs(t *testing.T) {
+	p, cookie := ahStub(t, ahGatePage)
+	for _, id := range []string{"ukr6y:1:3", "ukr6y:1:03"} {
+		*cookie = ""
+		if _, err := p.Watch("ukr6y", id, "", ""); err != nil {
+			t.Fatalf("Watch(%q): %v", id, err)
+		}
+		if *cookie != ahKey1 {
+			t.Errorf("Watch(%q) sent key %q, want episode 3's key", id, *cookie)
+		}
+	}
+	*cookie = ""
+	if _, err := p.Watch("ukr6y", "", "", ""); err != nil {
+		t.Fatalf("Watch with empty episode id: %v", err)
+	}
+	if *cookie != ahKey3 {
+		t.Errorf("empty episode id sent key %q, want episode 1's key", *cookie)
+	}
+	for _, bad := range []string{"ukr6y:2:1", "ukr6y:1:99", "ukr6y:x:1", "nonsense"} {
+		if _, err := p.Watch("ukr6y", bad, "", ""); err == nil {
+			t.Errorf("Watch(%q) should fail", bad)
+		}
+	}
+}
+
+func TestAnimeHeavenBlockPageIsUnrecognisedNotEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><title>Access Denied</title><body>blocked</body></html>`))
+	}))
+	defer srv.Close()
+	prev := animeHeavenBase
+	animeHeavenBase = srv.URL
+	defer func() { animeHeavenBase = prev }()
+	p := NewAnimeHeaven()
+	if _, err := p.Search("naruto"); !errors.Is(err, ErrUnrecognisedResponse) || errors.Is(err, ErrNoResults) {
+		t.Errorf("Search on a block page = %v, want ErrUnrecognisedResponse", err)
+	}
+	if _, err := p.GetEpisodes("ukr6y", "1"); !errors.Is(err, ErrUnrecognisedResponse) {
+		t.Errorf("GetEpisodes on a block page = %v, want ErrUnrecognisedResponse", err)
+	}
+}
+
+func TestAnimeHeavenWatchOnlyAcceptsHTTPSSources(t *testing.T) {
+	for _, src := range []string{
+		"file:///etc/passwd", "edl://%5Bx%5D", "ytdl://x", "lavf://x", "javascript:alert(1)",
+		"data:video/mp4;base64,AAAA", "https:///no-host.mp4", "http://cleartext.example/video.mp4?k", "ftp://x/y", "//x/y",
+	} {
+		p, _ := ahStub(t, `<source src='`+src+`' type='video/mp4'>`)
+		if st, err := p.Watch("ukr6y", ahKey1, "", ""); err == nil {
+			t.Errorf("source %q accepted as %q", src, st.URL)
+		}
+	}
+}
+
+func TestAnimeHeavenWatchUnterminatedCommentHidesRest(t *testing.T) {
+	gate := `<!-- <source src='https://dead.example/video.mp4?k' type='video/mp4'>
+<source src='https://rx.example/video.mp4?k' type='video/mp4'>`
+	p, _ := ahStub(t, gate)
+	if st, err := p.Watch("ukr6y", ahKey1, "", ""); err == nil {
+		t.Errorf("everything after an unterminated <!-- is a comment; got %q", st.URL)
+	}
+}
+
+func TestAnimeHeavenWatchFirstLiveMirrorWins(t *testing.T) {
+	gate := `<source src='https://a.example/video.mp4?k' type='video/mp4'>
+<source src='https://b.example/video.mp4?k' type='video/mp4'>`
+	p, _ := ahStub(t, gate)
+	st, err := p.Watch("ukr6y", ahKey1, "", "")
+	if err != nil || st.URL != "https://a.example/video.mp4?k" {
+		t.Errorf("got %+v, %v; want the first mirror", st, err)
+	}
+}
+
+func TestAnimeHeavenWatchStripsControlCharactersFromSource(t *testing.T) {
+	gate := `<source src='https://a.example/video.mp4?k&#10;&#13;&#0;&#127;x' type='video/mp4'>`
+	p, _ := ahStub(t, gate)
+	st, err := p.Watch("ukr6y", ahKey1, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.URL != "https://a.example/video.mp4?kx" {
+		t.Errorf("URL = %q, want control characters removed", st.URL)
+	}
+}
+
+func TestAnimeHeavenEpisodeZeroIsListed(t *testing.T) {
+	old := ahAnimePage
+	ahAnimePage = strings.Replace(old, "</div></div></body>", ahEpisodeLink("00000000000000000000000000000000", "0")+"</div></div></body>", 1)
+	t.Cleanup(func() { ahAnimePage = old })
+	p, _ := ahStub(t, ahGatePage)
+	eps, err := p.GetEpisodes("ukr6y", "1")
+	if err != nil || len(eps) != 4 || eps[0].Number != 0 {
+		t.Errorf("episode 0 (a prologue or special) must be listed first; got %+v, %v", eps, err)
+	}
+}
+
+// An anchor with a gate-looking id but no episode cell must not borrow the
+// number of the next episode's cell.
+func TestAnimeHeavenStrayAnchorDoesNotBorrowNextEpisodeNumber(t *testing.T) {
+	// Left unclosed, so the next episode's anchor follows it directly.
+	stray := `<a class='c' id ="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" href='x'>no cell `
+	old := ahAnimePage
+	ahAnimePage = strings.Replace(old, "<div class='linetitle2 c2'>", "<div class='linetitle2 c2'>"+stray, 1)
+	t.Cleanup(func() { ahAnimePage = old })
+	p, _ := ahStub(t, ahGatePage)
+	eps, err := p.GetEpisodes("ukr6y", "1")
+	if err != nil || len(eps) != 3 {
+		t.Fatalf("got %+v, %v", eps, err)
+	}
+	for _, e := range eps {
+		if e.ID == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+			t.Errorf("stray anchor listed as episode %d", e.Number)
+		}
+	}
+}
+
+func TestAnimeHeavenOversizedBodyIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(ahChrome))
+		_, _ = w.Write([]byte(strings.Repeat("x", animeHeavenMaxBody)))
+	}))
+	defer srv.Close()
+	prev := animeHeavenBase
+	animeHeavenBase = srv.URL
+	defer func() { animeHeavenBase = prev }()
+	if _, err := NewAnimeHeaven().Search("x"); err == nil {
+		t.Error("a body past the cap must be an error, not a silently truncated page")
+	}
+}
+
+func TestAnimeHeavenSendsBrowserHeaders(t *testing.T) {
+	var ua string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua = r.UserAgent()
+		_, _ = w.Write([]byte(ahChrome))
+	}))
+	defer srv.Close()
+	prev := animeHeavenBase
+	animeHeavenBase = srv.URL
+	defer func() { animeHeavenBase = prev }()
+	_, _ = NewAnimeHeaven().Search("x")
+	if !strings.HasPrefix(ua, "Mozilla/") {
+		t.Errorf("User-Agent = %q, want a browser one", ua)
+	}
+}
+
+func TestAnimeHeavenOverlongShowIDNotListedBySearch(t *testing.T) {
+	long := strings.Repeat("a", 33)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(ahChrome + `<div class='similarname c'><a href='anime.php?` + long + `' class='c'>Long</a></div>`))
+	}))
+	defer srv.Close()
+	prev := animeHeavenBase
+	animeHeavenBase = srv.URL
+	defer func() { animeHeavenBase = prev }()
+	got, err := NewAnimeHeaven().Search("x")
+	if err != nil || len(got) != 0 {
+		t.Errorf("a result GetEpisodes would refuse must not be listed; got %v, %v", got, err)
+	}
+}
+
+// TMDB titles carry diacritics ("Shippūden") that the site's search does not
+// fold, so it finds nothing for them.
+func TestAnimeHeavenSearchFoldsDiacriticsInQuery(t *testing.T) {
+	var gotQ string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQ = r.URL.Query().Get("s")
+		_, _ = w.Write([]byte(ahSearchPage))
+	}))
+	defer srv.Close()
+	prev := animeHeavenBase
+	animeHeavenBase = srv.URL
+	defer func() { animeHeavenBase = prev }()
+	got, err := NewAnimeHeaven().Search("Naruto Shippūden")
+	if err != nil || len(got) == 0 {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	if gotQ != "Naruto Shippuden" {
+		t.Errorf("query sent = %q, want the ASCII form", gotQ)
+	}
+}
+
+// A closed anchor with no number must not pick up a watch2 cell that follows
+// it elsewhere on the page.
+func TestAnimeHeavenClosedAnchorDoesNotReadPastItsClose(t *testing.T) {
+	old := ahAnimePage
+	tail := `<a class='c' id ="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" href='x'>no cell</a><div class=' watch2 bc '>9</div>`
+	ahAnimePage = strings.Replace(old, "</div></div></body>", tail+"</div></div></body>", 1)
+	t.Cleanup(func() { ahAnimePage = old })
+	p, _ := ahStub(t, ahGatePage)
+	eps, err := p.GetEpisodes("ukr6y", "1")
+	if err != nil || len(eps) != 3 {
+		t.Errorf("got %+v, %v; want only the 3 real episodes", eps, err)
 	}
 }

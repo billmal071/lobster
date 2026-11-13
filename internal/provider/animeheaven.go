@@ -10,10 +10,26 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 
 	"lobster/internal/httputil"
 	"lobster/internal/media"
 )
+
+// ahFoldDiacritics drops accents and macrons ("Shippūden" -> "Shippuden"),
+// which the site's search does not fold itself. Case and punctuation are kept.
+func ahFoldDiacritics(s string) string {
+	var b strings.Builder
+	for _, r := range norm.NFD.String(s) {
+		if !unicode.Is(unicode.Mn, r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 // animeHeavenBase is the AnimeHeaven site root. A var so tests can point it at
 // a stub.
@@ -23,14 +39,24 @@ var animeHeavenBase = "https://animeheaven.me"
 // is about 50 KB.
 const animeHeavenMaxBody = 4 << 20
 
+// animeHeavenUserAgent is sent on every request; the site serves its pages to
+// browsers.
+const animeHeavenUserAgent = "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/121.0"
+
 var (
+	// ahSiteRe matches the search form in every real page's header. A block
+	// page or captive portal answers 200 without it.
+	ahSiteRe = regexp.MustCompile(`action='search\.php'`)
 	// Search rows: <div class='similarname c'><a href='anime.php?KEY' class='c'>Title</a>.
-	ahSearchRe = regexp.MustCompile(`class='similarname c'><a href='anime\.php\?([a-z0-9]+)'[^>]*>([^<]+)</a>`)
-	// Episode rows: the anchor's id is the 32-hex gate key, and the episode
-	// number sits in the first watch2 cell after it.
-	ahEpisodeRe = regexp.MustCompile(`(?s)<a [^>]*?id\s*="([0-9a-f]{32})"[^>]*>.*?watch2[^>]*>\s*([0-9.]+)\s*<`)
-	ahCommentRe = regexp.MustCompile(`(?s)<!--.*?-->`)
-	ahSourceRe  = regexp.MustCompile(`<source\s+src=['"](https?://[^'"]+)['"]`)
+	ahSearchRe = regexp.MustCompile(`class='similarname c'><a href='anime\.php\?([a-z0-9]{1,32})'[^>]*>([^<]+)</a>`)
+	// Episode rows: the opening tag of an anchor whose id is the 32-hex gate
+	// key. The episode number sits in a watch2 cell before the anchor closes.
+	ahEpisodeRe = regexp.MustCompile(`<a\s[^>]*?\bid\s*="([0-9a-f]{32})"[^>]*>`)
+	ahNumberRe  = regexp.MustCompile(`watch2[^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*<`)
+	// A comment runs to its terminator, or to the end of the page when it has
+	// none, as a browser reads it.
+	ahCommentRe = regexp.MustCompile(`(?s)<!--.*?(?:-->|$)`)
+	ahSourceRe  = regexp.MustCompile(`<source\s+src=['"]([^'"]+)['"]`)
 	ahKeyRe     = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	ahShowIDRe  = regexp.MustCompile(`^[a-z0-9]{1,32}$`)
 )
@@ -52,11 +78,16 @@ type AnimeHeaven struct {
 func NewAnimeHeaven() *AnimeHeaven { return &AnimeHeaven{client: httputil.NewClient()} }
 
 // get fetches a page, optionally with the gate cookie, and returns its body.
+// The request is built here rather than through httputil.Get because the gate
+// needs a cookie. A body past animeHeavenMaxBody is an error: a truncated page
+// would parse as a shorter catalogue.
 func (a *AnimeHeaven) get(rawURL, gateKey string) (string, error) {
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", err
 	}
+	req.Header.Set("User-Agent", animeHeavenUserAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8")
 	if gateKey != "" {
 		req.AddCookie(&http.Cookie{Name: "key", Value: gateKey})
 	}
@@ -68,9 +99,12 @@ func (a *AnimeHeaven) get(rawURL, gateKey string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("animeheaven: unexpected status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, animeHeavenMaxBody))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, animeHeavenMaxBody+1))
 	if err != nil {
 		return "", fmt.Errorf("reading animeheaven response: %w", err)
+	}
+	if len(body) > animeHeavenMaxBody {
+		return "", fmt.Errorf("animeheaven: response larger than %d bytes", animeHeavenMaxBody)
 	}
 	return string(body), nil
 }
@@ -84,9 +118,12 @@ func (a *AnimeHeaven) Search(query string) ([]media.SearchResult, error) {
 	if query == "" {
 		return nil, nil
 	}
-	page, err := a.get(a.root()+"/search.php?s="+url.QueryEscape(query), "")
+	page, err := a.get(a.root()+"/search.php?s="+url.QueryEscape(ahFoldDiacritics(query)), "")
 	if err != nil {
 		return nil, err
+	}
+	if !ahSiteRe.MatchString(page) {
+		return nil, fmt.Errorf("animeheaven: %w", ErrUnrecognisedResponse)
 	}
 	seen := map[string]bool{}
 	var out []media.SearchResult
@@ -126,15 +163,32 @@ func (a *AnimeHeaven) GetEpisodes(id, seasonID string) ([]media.Episode, error) 
 	if err != nil {
 		return nil, err
 	}
+	if !ahSiteRe.MatchString(page) {
+		return nil, fmt.Errorf("animeheaven: %w", ErrUnrecognisedResponse)
+	}
 	seen := map[int]bool{}
 	out := []media.Episode{}
-	for _, m := range ahEpisodeRe.FindAllStringSubmatch(page, -1) {
-		n, err := strconv.Atoi(m[2])
-		if err != nil || n < 0 || seen[n] {
+	for _, loc := range ahEpisodeRe.FindAllStringSubmatchIndex(page, -1) {
+		key := page[loc[2]:loc[3]]
+		// The number must sit inside this anchor: stop at its close or at the
+		// next anchor, so an unclosed one cannot borrow a neighbour's cell.
+		seg := page[loc[1]:]
+		if i := strings.Index(seg, "</a>"); i >= 0 {
+			seg = seg[:i]
+		}
+		if i := strings.Index(seg, "<a "); i >= 0 {
+			seg = seg[:i]
+		}
+		nm := ahNumberRe.FindStringSubmatch(seg)
+		if nm == nil {
+			continue
+		}
+		n, err := strconv.Atoi(nm[1])
+		if err != nil || seen[n] {
 			continue
 		}
 		seen[n] = true
-		out = append(out, media.Episode{Number: n, ID: m[1], Title: fmt.Sprintf("Episode %d", n)})
+		out = append(out, media.Episode{Number: n, ID: key, Title: fmt.Sprintf("Episode %d", n)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Number < out[j].Number })
 	return out, nil
@@ -145,21 +199,38 @@ func (a *AnimeHeaven) GetServers(id string, episodeID string) ([]media.Server, e
 	return []media.Server{{Name: "AnimeHeaven", ID: episodeID}}, nil
 }
 
-// Watch resolves an episode's gate key to a direct mp4 URL. It returns the
-// first <source> outside an HTML comment that is not the page's error
-// fallback; the site lists mirrors in that order.
+// Watch resolves an episode to a direct mp4 URL. episodeID is a gate key from
+// GetEpisodes, or the fallback resolver's form ("" or "show:season:episode"),
+// which is looked up in the episode list first. It returns the first https
+// <source> outside an HTML comment that is not the page's error fallback; the
+// site lists mirrors in that order.
 func (a *AnimeHeaven) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
-	if !ahKeyRe.MatchString(episodeID) {
-		return nil, fmt.Errorf("animeheaven: invalid episode key")
+	key := episodeID
+	if !ahKeyRe.MatchString(key) {
+		var err error
+		if key, err = resolveNumericEpisodeID(a.GetEpisodes, mediaID, episodeID); err != nil {
+			return nil, fmt.Errorf("animeheaven: %w", err)
+		}
+		if !ahKeyRe.MatchString(key) {
+			return nil, fmt.Errorf("animeheaven: invalid episode key")
+		}
 	}
-	page, err := a.get(a.root()+"/gate.php", episodeID)
+	page, err := a.get(a.root()+"/gate.php", key)
 	if err != nil {
 		return nil, err
 	}
 	page = ahCommentRe.ReplaceAllString(page, "")
 	for _, m := range ahSourceRe.FindAllStringSubmatch(page, -1) {
-		src := html.UnescapeString(m[1])
+		src := strings.Map(func(r rune) rune {
+			if r < 0x20 || r == 0x7f || r == utf8.RuneError {
+				return -1
+			}
+			return r
+		}, html.UnescapeString(m[1]))
 		if strings.HasSuffix(src, "&error") || strings.HasSuffix(src, "&error2") {
+			continue
+		}
+		if u, err := url.Parse(src); err != nil || u.Scheme != "https" || u.Host == "" {
 			continue
 		}
 		return &media.Stream{URL: src}, nil

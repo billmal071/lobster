@@ -20,6 +20,7 @@ Lobster selects the content provider via the `base` setting in `config.toml` or 
    - `flixhq.ws` — scraper; browsing, trending, metadata
    - `tbcpl` / `1shows.org` — streaming via Vidzee
    - `animeonsen` — anime
+   - `animeheaven` — anime; only when named, never a fallback
    - `yts` — films over BitTorrent
    - `eztv` — TV series over BitTorrent, keyed by IMDb id
    - `nyaa` — anime over BitTorrent (English-translated category; the feed
