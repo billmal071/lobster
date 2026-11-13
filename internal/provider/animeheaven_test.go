@@ -166,6 +166,21 @@ func TestAnimeHeavenWatchRejectsMalformedKeyAndMissingSource(t *testing.T) {
 	}
 }
 
+// An attribute value may carry the separator as &amp;, so the error-mirror
+// check has to run on the decoded URL.
+func TestAnimeHeavenWatchSkipsEntityEncodedErrorMirror(t *testing.T) {
+	gate := `<source src='https://ct.example/video.mp4?` + ahKey1 + `&amp;tok&amp;error' type='video/mp4'>
+<source src='https://rx.example/video.mp4?` + ahKey1 + `&amp;tok' type='video/mp4'>`
+	p, _ := ahStub(t, gate)
+	st, err := p.Watch("ukr6y", ahKey1, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "https://rx.example/video.mp4?" + ahKey1 + "&tok"; st.URL != want {
+		t.Errorf("URL = %q, want %q", st.URL, want)
+	}
+}
+
 func TestAnimeHeavenSeasonsAndEmbed(t *testing.T) {
 	p, _ := ahStub(t, ahGatePage)
 	s, err := p.GetSeasons("ukr6y")

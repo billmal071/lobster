@@ -158,10 +158,11 @@ func (a *AnimeHeaven) Watch(mediaID, episodeID, server, quality string) (*media.
 	}
 	page = ahCommentRe.ReplaceAllString(page, "")
 	for _, m := range ahSourceRe.FindAllStringSubmatch(page, -1) {
-		if strings.HasSuffix(m[1], "&error") || strings.HasSuffix(m[1], "&error2") {
+		src := html.UnescapeString(m[1])
+		if strings.HasSuffix(src, "&error") || strings.HasSuffix(src, "&error2") {
 			continue
 		}
-		return &media.Stream{URL: html.UnescapeString(m[1])}, nil
+		return &media.Stream{URL: src}, nil
 	}
 	return nil, fmt.Errorf("animeheaven: no stream for episode")
 }
