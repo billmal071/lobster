@@ -56,6 +56,13 @@ func (rep *Report) add(res probeResult) {
 // The first probe that returns a valid stream wins; the rest are abandoned
 // (not cancelled — each goroutine's send is unblocked by the K-buffered channel).
 func (r *Resolver) Resolve(ctx context.Context, req Request) (*media.Stream, *Report, error) {
+	// A TV request with no season and no episode would reach providers as an
+	// empty episode ID, which they read as a film. Refuse before probing: no
+	// provider is searched, and none is scored for the caller's mistake.
+	if req.MediaType == media.TV && req.Season == 0 && req.Episode == 0 {
+		return nil, &Report{}, fmt.Errorf("%q is a TV title: %w", req.Title, ErrSeasonEpisodeRequired)
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, r.overallTimeout)
 	defer cancel()
 

@@ -1169,7 +1169,7 @@ func (p *AnimeOnsen) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
 //
 // Native episode IDs are bare episode numbers. The fallback resolver instead
 // passes "showID:season:episode" (resolver.tryStreamProviderFallback), and ""
-// for a film or a request with no season — parseFallbackEpisodeRef reads both,
+// for a film — parseFallbackEpisodeRef reads both,
 // and refuses season > 1, because here that is a different show.
 //
 // It reads them rather than looking them up, which is the correction this
