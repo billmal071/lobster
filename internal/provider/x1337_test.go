@@ -1,10 +1,12 @@
 package provider
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -106,6 +108,8 @@ func (s *x1337Site) handler(t *testing.T, hits *int32) http.Handler {
 				}
 				_, _ = fmt.Fprintf(w, `<table class="table-list"><tbody>%s</tbody></table>%s`,
 					x1337HTMLRow(5000+page, fmt.Sprintf("Endless S01E%02d 720p", page), 5), x1337Next(page+1))
+			case mode == "moviesdown" && cat == "Movies":
+				w.WriteHeader(http.StatusServiceUnavailable)
 			case mode == "flaky" && page > 1:
 				w.WriteHeader(http.StatusServiceUnavailable)
 			case mode == "paged" || mode == "flaky":
@@ -673,37 +677,188 @@ func TestX1337NonVideoRowsAreNotResults(t *testing.T) {
 	}
 }
 
-func TestX1337ReleaseYearIsTheReleaseNotATitleNumber(t *testing.T) {
-	for name, want := range map[string]string{
-		"Blade Runner 2049 2017 1080p BluRay": "2017",
-		"Dune 1984 1080p":                     "1984",
-		"2012 1080p BluRay":                   "",
-		"Dune (2021) 720p WEB":                "2021",
-		"The.Matrix.1999.1080p.BluRay":        "1999",
-		"Some Show S01E01 720p":               "",
+func TestX1337MatchReleaseAcceptsTheTitleWithAnyTagsAfterIt(t *testing.T) {
+	for _, c := range []struct{ query, name, year string }{
+		{"Severance", "Severance S01E01 720p", ""},
+		{"Spider-Man: No Way Home", "Spider.Man.No.Way.Home.2021.1080p", "2021"},
+		{"Spiderman No Way Home", "Spider-Man.No.Way.Home.2021.1080p", "2021"},
+		{"Mission: Impossible - Dead Reckoning Part One", "Mission.Impossible.Dead.Reckoning.Part.One.2023.2160p", "2023"},
+		{"Dune: Part Two", "Dune Part Two 2024 2160p", "2024"},
+		{"Dune Part Two", "Dune.Part.Two.2024.HDR.2160p.WEB.H265-GRP", "2024"},
+		{"Schindler's List", "Schindlers.List.1993.1080p", "1993"},
+		{"Blade Runner 2049", "Blade.Runner.2049.2017.1080p", "2017"},
+		{"Blade Runner 2049", "Blade.Runner.2049.1080p", ""},
+		{"Lost", "Lost.2004.S01E01.720p", "2004"},
+		{"It", "IT 2017 1080p", "2017"},
+		{"Shōgun", "Shogun.2024.S01E01.1080p.WEB.H264", "2024"},
+		{"Law & Order: Special Victims Unit", "Law.and.Order.Special.Victims.Unit.S25E01", ""},
+		{"Fast & Furious", "Fast.and.Furious.2009.1080p", "2009"},
+		{"Oppenheimer", "Oppenheimer.2023.IMAX.1080p", "2023"},
+		{"The Matrix", "The Matrix 1999 REMASTERED 1080p", "1999"},
+		{"Aliens", "Aliens.1986.Special.Edition", "1986"},
+		{"Barbie", "Barbie.2023.HDCAM", "2023"},
+		{"Barbie", "Barbie 2023 WEB H264-GROUP", "2023"},
+		{"Barbie", "Barbie (2023) Hindi Dubbed 720p", "2023"},
+		{"Dune", "Dune [2021] 1080p", "2021"},
+		{"Internal Affairs", "Internal.Affairs.1990.1080p", "1990"},
+		{"Proper", "Proper 2020 1080p", "2020"},
+		{"1917", "1917 2019 1080p", "2019"},
+		{"2001 A Space Odyssey", "2001 A Space Odyssey 1968 1080p", "1968"},
+		{"2012", "2012 1080p BluRay", ""},
+		{"Dune 2021", "Dune 2021 1080p", "2021"},
+		{"Greys Anatomy", "Grey's.Anatomy.S01E01.720p", ""},
+		{"Severance S02E10", "Severance S01E01 720p", ""},
+		{"Show", "Show Season 2 Complete 1080p", ""},
+		{"Show", "Show S02 COMPLETE 1080p", ""},
+		{"Dune", "Dune 720p", ""},
 	} {
-		if got := x1337ReleaseYear(name); got != want {
-			t.Errorf("x1337ReleaseYear(%q) = %q, want %q", name, got, want)
+		year, ok := x1337MatchRelease(c.query, c.name)
+		if !ok || year != c.year {
+			t.Errorf("x1337MatchRelease(%q, %q) = %q, %v; want %q, true", c.query, c.name, year, ok, c.year)
 		}
 	}
 }
 
-func TestX1337TitleMatchRequiresTheWholeTitle(t *testing.T) {
-	for _, c := range []struct {
-		query, name string
-		want        bool
-	}{
-		{"Lost", "Lost S01E01 720p", true},
-		{"Lost", "Lost in Space S01E01 1080p", false},
-		{"Blade Runner 2049", "Blade Runner 2049 2017 1080p BluRay", true},
-		{"Dune", "Dune 1984 1080p", true},
-		{"Dune", "Dune Messiah 1080p", false},
-		{"Greys Anatomy", "Grey's.Anatomy.S01E01.720p", true},
-		{"Severance S02E10", "Severance S01E01 720p", true},
+func TestX1337MatchReleaseRejectsOtherTitles(t *testing.T) {
+	for _, c := range []struct{ query, name string }{
+		{"Lost", "Lost in Space S01E01 1080p"},
+		{"Lost", "Lost.Girl.S01E01.720p"},
+		{"Lost", "The Lost City 2022 1080p"},
+		{"Dune", "Dune Messiah 1080p"},
+		{"It", "It Chapter Two 2019 1080p"},
+		{"Blade Runner", "Blade.Runner.2049.1080p"},
+		{"Dune 2021", "Dune 1984 1080p"},
+		{"Dune", "Dune Messiah EPUB"},
+		{"Agent", "Agent S1 Companion 1080p"},
 	} {
-		if got := x1337TitleMatches(c.query, c.name); got != c.want {
-			t.Errorf("x1337TitleMatches(%q, %q) = %v, want %v", c.query, c.name, got, c.want)
+		if year, ok := x1337MatchRelease(c.query, c.name); ok {
+			t.Errorf("x1337MatchRelease(%q, %q) = %q, true; want a rejection", c.query, c.name, year)
 		}
+	}
+}
+
+func TestX1337SeasonEvidence(t *testing.T) {
+	for name, want := range map[string][2]int{
+		"Show Season 2 Complete 1080p": {2, 0},
+		"Show S01 COMPLETE":            {1, 0},
+		"Show S01E04 720p":             {1, 4},
+		"Agent S1 Companion":           {0, 0},
+		"Dune 1984 1080p":              {0, 0},
+	} {
+		s, e := x1337SeasonEpisode(name)
+		if s != want[0] || e != want[1] {
+			t.Errorf("x1337SeasonEpisode(%q) = %d, %d; want %d, %d", name, s, e, want[0], want[1])
+		}
+	}
+}
+
+func TestX1337MagnetHashUppercasesBase32(t *testing.T) {
+	got, ok := x1337MagnetHash("magnet:?xt=urn:btih:abcdefghijklmnopqrstuvwxyz234567&dn=x")
+	if !ok || got != "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567" {
+		t.Fatalf("hash = %q, %v; anacrolix decodes base32 upper case only", got, ok)
+	}
+	hex, ok := x1337MagnetHash("magnet:?xt=urn:btih:" + strings.ToLower(x1337Hash(255)))
+	if !ok || hex != strings.ToLower(x1337Hash(255)) {
+		t.Fatalf("hex hash = %q, %v; want it unchanged", hex, ok)
+	}
+}
+
+func TestX1337IDYearIsValidated(t *testing.T) {
+	for id, wantErr := range map[string]bool{
+		"1337x/Dune?y=1984":  false,
+		"1337x/Dune?y=":      true,
+		"1337x/Dune?y=abc":   true,
+		"1337x/Dune?y=19845": true,
+		"1337x/Dune?y=1099":  true,
+		"1337x/Dune":         false,
+	} {
+		if _, _, err := x1337QueryFromID(id); (err != nil) != wantErr {
+			t.Errorf("x1337QueryFromID(%q) err = %v, want error: %v", id, err, wantErr)
+		}
+	}
+}
+
+func TestX1337FetchHonoursTheParentContext(t *testing.T) {
+	var hits int32
+	x := x1337Stub(t, &hits)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := x.fetch(ctx, "/category-search/x/Movies/1/", x1337IsSearchPage); err == nil {
+		t.Fatal("fetch succeeded on a cancelled context")
+	}
+	if hits != 0 {
+		t.Fatalf("a cancelled context still reached the network %d times", hits)
+	}
+}
+
+func TestX1337ADownCategoryIsAFailureNotAnEmptyCatalogue(t *testing.T) {
+	site := &x1337Site{mode: "moviesdown"}
+	x := x1337SiteStub(t, site)
+	_, err := x.Search("Nonexistent Title")
+	if err == nil || errors.Is(err, ErrNoResults) {
+		t.Fatalf("err = %v, want a failure that is not ErrNoResults: the Movies category was never read", err)
+	}
+}
+
+func TestX1337ASingleBudgetCoversTheWholeWatch(t *testing.T) {
+	release := make(chan struct{})
+	base := x1337Handler(t, nil)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/torrent/"):
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+		case strings.Contains(r.URL.Path, "/Movies/"):
+			time.Sleep(200 * time.Millisecond)
+			base.ServeHTTP(w, r)
+		default:
+			base.ServeHTTP(w, r)
+		}
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+	setX1337Bases(t, srv.URL)
+	prevReq, prevBudget := x1337RequestTimeout, x1337Budget
+	x1337RequestTimeout, x1337Budget = 350*time.Millisecond, 400*time.Millisecond
+	t.Cleanup(func() { x1337RequestTimeout, x1337Budget = prevReq, prevBudget })
+
+	x := NewX1337()
+	res, err := x.Search("The Matrix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	x.mu.Lock()
+	x.cache = map[string]x1337CacheEntry{}
+	x.mu.Unlock()
+	start := time.Now()
+	if _, err := x.Watch(res[0].ID, "", "", "1080"); err == nil {
+		t.Fatal("Watch succeeded against hung detail pages")
+	}
+	if d := time.Since(start); d > 520*time.Millisecond {
+		t.Fatalf("Watch took %v, want it inside the single %v budget", d, x1337Budget)
+	}
+}
+
+func TestX1337MagnetNameCannotInjectParameters(t *testing.T) {
+	site := &x1337Site{extraRows: x1337HTMLRow(9000, "Severance S02E10 1080p&amp;xs=http://evil.example/x", 9000)}
+	x := x1337SiteStub(t, site)
+	res, _ := x.Search("Severance")
+	st, err := x.Watch(res[0].ID, "2x10", x1337ServerID(9000), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := url.ParseQuery(strings.TrimPrefix(st.URL, "magnet:?"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key := range q {
+		if key != "xt" && key != "dn" && key != "tr" {
+			t.Fatalf("magnet carries parameter %q: %s", key, st.URL)
+		}
+	}
+	if got := q.Get("dn"); got != "Severance S02E10 1080p&xs=http://evil.example/x" {
+		t.Fatalf("dn = %q", got)
 	}
 }
 

@@ -14,12 +14,12 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/PuerkitoBio/goquery"
 
 	"lobster/internal/httputil"
 	"lobster/internal/media"
+	"lobster/internal/titlekey"
 )
 
 // x1337Bases are the 1337x mirrors, tried in order from the last one that answered.
@@ -84,6 +84,7 @@ type x1337Row struct {
 	Size    int64
 	Season  int
 	Episode int
+	Year    string
 }
 
 // fetch tries each mirror starting from the last that answered and returns the first page recognised accepts.
@@ -202,15 +203,13 @@ func x1337NormaliseQuery(q string) string {
 
 // rows searches each category up to x1337MaxPages pages and keeps the rows whose title matches the query.
 // A category or page that fails leaves the rest in use, uncached; every first page failing is an error.
-func (x *X1337) rows(query string) ([]x1337Row, error) {
+func (x *X1337) rows(ctx context.Context, query string) ([]x1337Row, error) {
 	x.mu.Lock()
 	if e, ok := x.cache[query]; ok && time.Since(e.at) < x1337CacheTTL {
 		x.mu.Unlock()
 		return e.rows, nil
 	}
 	x.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), x1337Budget)
-	defer cancel()
 	var rows []x1337Row
 	var errs []error
 	seen := map[string]bool{}
@@ -225,8 +224,10 @@ func (x *X1337) rows(query string) ([]x1337Row, error) {
 			}
 			reached = true
 			for _, r := range x1337ParseRows(doc) {
-				if !seen[r.Path] && len(rows) < x1337MaxRows && x1337TitleMatches(query, r.Name) {
+				year, ok := x1337MatchRelease(query, r.Name)
+				if ok && !seen[r.Path] && len(rows) < x1337MaxRows {
 					seen[r.Path] = true
+					r.Year = year
 					rows = append(rows, r)
 				}
 			}
@@ -235,7 +236,7 @@ func (x *X1337) rows(query string) ([]x1337Row, error) {
 			}
 		}
 	}
-	if !reached {
+	if !reached || (len(rows) == 0 && len(errs) > 0) {
 		return nil, errors.Join(errs...)
 	}
 	if complete {
@@ -266,7 +267,7 @@ func x1337SeasonEpisode(name string) (season, episode int) {
 		episode, _ = strconv.Atoi(e[2])
 		return season, episode
 	}
-	for _, re := range []*regexp.Regexp{nyaaSeasonWordRe, nyaaSeasonSRe} {
+	for _, re := range []*regexp.Regexp{nyaaSeasonWordRe, x1337SeasonOnlyRe} {
 		if m := re.FindStringSubmatch(name); m != nil {
 			season, _ = strconv.Atoi(m[1])
 			return season, 0
@@ -289,49 +290,71 @@ func x1337IsSeries(query string, rows []x1337Row) bool {
 }
 
 var (
-	x1337YearToken = regexp.MustCompile(`^(?:19|20)\d{2}$`)
-	x1337Separator = strings.NewReplacer(".", " ", "_", " ")
+	x1337YearToken    = regexp.MustCompile(`^(?:19|20)\d{2}$`)
+	x1337MarkerToken  = regexp.MustCompile(`^(?:s\d{2}|s\d{1,2}e\d{1,4}(?:v\d+)?)$`)
+	x1337SeasonNumber = regexp.MustCompile(`^\d{1,2}$`)
+	x1337SeasonOnlyRe = regexp.MustCompile(`(?i)\bS(\d{2})\b`)
+	x1337TagTokens    = map[string]bool{"web": true, "hdr": true, "imax": true, "hdcam": true, "brrip": true, "nf": true, "remastered": true, "extended": true}
 )
 
-// x1337TitleTokens is the normalised words of a release name or query up to its first season, episode or release tag.
-func x1337TitleTokens(s string) []string {
-	s = x1337Separator.Replace(s)
-	cut := len(s)
-	for _, re := range []*regexp.Regexp{nyaaSxxExxRe, nyaaSeasonWordRe, nyaaSeasonSRe, eztvReleaseTag} {
-		if loc := re.FindStringIndex(s); loc != nil && loc[0] < cut {
+func x1337PlausibleYear(token string) bool {
+	if !x1337YearToken.MatchString(token) {
+		return false
+	}
+	year, _ := strconv.Atoi(token)
+	return year <= time.Now().Year()+1
+}
+
+// x1337QueryTitle is the query up to its season or episode marker.
+func x1337QueryTitle(query string) string {
+	cut := len(query)
+	for _, re := range []*regexp.Regexp{nyaaSxxExxRe, nyaaSeasonWordRe, x1337SeasonOnlyRe} {
+		if loc := re.FindStringIndex(query); loc != nil && loc[0] < cut {
 			cut = loc[0]
 		}
 	}
-	if i := strings.Index(s, "["); i >= 0 && i < cut {
-		cut = i
-	}
-	s = strings.NewReplacer("'", "", "\u2019", "").Replace(s[:cut])
-	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	return query[:cut]
 }
 
-// x1337TitleMatches reports whether a release is the titled work: its words equal the query's, optionally followed by one year.
-func x1337TitleMatches(query, name string) bool {
-	q, p := x1337TitleTokens(query), x1337TitleTokens(name)
-	if len(q) == 0 || len(p) < len(q) || len(p) > len(q)+1 {
-		return false
+// x1337MatchRelease decides whether a release name is the work the query names, and returns its release year.
+// The name's words must start with the query's (compared as one run, so "Spiderman" meets "Spider-Man"). What follows decides:
+// the end of the name, a release year, a season or episode marker, or a release tag. Anything else is another title
+// ("Lost" against "Lost in Space"), and whatever comes after a year is ignored. A number right after the title only counts
+// as a year when it is one a release can have (up to next year), so "Blade Runner" does not meet "Blade Runner 2049".
+// A year ending the query itself is the year the release is for.
+func x1337MatchRelease(query, name string) (string, bool) {
+	q := strings.Fields(titlekey.Normalize(x1337QueryTitle(query)))
+	n := strings.Fields(titlekey.Normalize(name))
+	want := strings.Join(q, "")
+	if want == "" {
+		return "", false
 	}
-	for i := range q {
-		if q[i] != p[i] {
-			return false
-		}
+	got, i := "", 0
+	for i < len(n) && len(got) < len(want) {
+		got += n[i]
+		i++
 	}
-	return len(p) == len(q) || x1337YearToken.MatchString(p[len(q)])
-}
-
-// x1337ReleaseYear is the last year-shaped word of the title part of a release name, never the first word: "Blade Runner 2049 2017" is 2017.
-func x1337ReleaseYear(name string) string {
-	tokens := x1337TitleTokens(name)
-	for i := len(tokens) - 1; i > 0; i-- {
-		if x1337YearToken.MatchString(tokens[i]) {
-			return tokens[i]
-		}
+	if got != want {
+		return "", false
 	}
-	return ""
+	year := ""
+	if len(q) > 1 && x1337PlausibleYear(q[len(q)-1]) {
+		year = q[len(q)-1]
+	}
+	rest := n[i:]
+	if len(rest) == 0 {
+		return year, true
+	}
+	t := rest[0]
+	switch {
+	case x1337PlausibleYear(t):
+		return t, true
+	case x1337MarkerToken.MatchString(t), x1337TagTokens[t], eztvReleaseTag.MatchString(t):
+		return year, true
+	case t == "season" && len(rest) > 1 && x1337SeasonNumber.MatchString(rest[1]):
+		return year, true
+	}
+	return "", false
 }
 
 func x1337QueryFromID(id string) (query, year string, err error) {
@@ -348,19 +371,23 @@ func x1337QueryFromID(id string) (query, year string, err error) {
 	return q, year, nil
 }
 
-func (x *X1337) catalogue(id string) (string, []x1337Row, error) {
+func x1337Context() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), x1337Budget)
+}
+
+func (x *X1337) catalogue(ctx context.Context, id string) (string, []x1337Row, error) {
 	q, year, err := x1337QueryFromID(id)
 	if err != nil {
 		return "", nil, err
 	}
-	rows, err := x.rows(q)
+	rows, err := x.rows(ctx, q)
 	if err != nil {
 		return "", nil, err
 	}
 	if year != "" {
 		var kept []x1337Row
 		for _, r := range rows {
-			if x1337ReleaseYear(r.Name) == year {
+			if r.Year == year {
 				kept = append(kept, r)
 			}
 		}
@@ -381,7 +408,9 @@ func (x *X1337) Search(query string) ([]media.SearchResult, error) {
 	if len(q) > x1337MaxQueryLen {
 		return nil, fmt.Errorf("1337x: query longer than %d characters", x1337MaxQueryLen)
 	}
-	rows, err := x.rows(q)
+	ctx, cancel := x1337Context()
+	defer cancel()
+	rows, err := x.rows(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("1337x search: %w", err)
 	}
@@ -395,7 +424,7 @@ func (x *X1337) Search(query string) ([]media.SearchResult, error) {
 	seeds := map[string]int{}
 	var years []string
 	for _, r := range rows {
-		y := x1337ReleaseYear(r.Name)
+		y := r.Year
 		if y == "" {
 			continue
 		}
@@ -416,7 +445,9 @@ func (x *X1337) Search(query string) ([]media.SearchResult, error) {
 }
 
 func (x *X1337) GetSeasons(id string) ([]media.Season, error) {
-	q, rows, err := x.catalogue(id)
+	ctx, cancel := x1337Context()
+	defer cancel()
+	q, rows, err := x.catalogue(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -444,7 +475,9 @@ func (x *X1337) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("1337x: invalid season ID %q", seasonID)
 	}
-	_, rows, err := x.catalogue(id)
+	ctx, cancel := x1337Context()
+	defer cancel()
+	_, rows, err := x.catalogue(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -472,8 +505,8 @@ type x1337Candidate struct {
 
 // candidates returns every release of the request, ordered like EZTV's (quality, then seeds), and the best-seeded one of each quality.
 // A series with no episode in the request takes it from the query's SxxEyy marker; without one it is refused.
-func (x *X1337) candidates(id, episodeID string) (all, perQuality []x1337Candidate, err error) {
-	q, rows, err := x.catalogue(id)
+func (x *X1337) candidates(ctx context.Context, id, episodeID string) (all, perQuality []x1337Candidate, err error) {
+	q, rows, err := x.catalogue(ctx, id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -524,7 +557,9 @@ func (x *X1337) candidates(id, episodeID string) (all, perQuality []x1337Candida
 func x1337ServerID(torrentID int) string { return "r" + strconv.Itoa(torrentID) }
 
 func (x *X1337) GetServers(id string, episodeID string) ([]media.Server, error) {
-	_, best, err := x.candidates(id, episodeID)
+	ctx, cancel := x1337Context()
+	defer cancel()
+	_, best, err := x.candidates(ctx, id, episodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -542,6 +577,9 @@ func x1337MagnetHash(magnet string) (string, bool) {
 	m := x1337MagnetRe.FindStringSubmatch(magnet)
 	if m == nil {
 		return "", false
+	}
+	if len(m[1]) == 32 {
+		return strings.ToUpper(m[1]), true
 	}
 	return m[1], true
 }
@@ -580,7 +618,9 @@ func x1337Magnet(hash, title string) string {
 // Watch resolves a release's magnet. The release is the one the server ID names, else the pick for the quality; a release whose
 // detail page has no magnet is passed over for the other releases of its quality by seeds, then for the other qualities.
 func (x *X1337) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
-	all, best, err := x.candidates(mediaID, episodeID)
+	ctx, cancel := x1337Context()
+	defer cancel()
+	all, best, err := x.candidates(ctx, mediaID, episodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -618,8 +658,6 @@ func (x *X1337) Watch(mediaID, episodeID, server, quality string) (*media.Stream
 	if len(ordered) > x1337MaxDetailTries {
 		ordered = ordered[:x1337MaxDetailTries]
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), x1337Budget)
-	defer cancel()
 	var lastErr error
 	for _, c := range ordered {
 		if ctx.Err() != nil {
