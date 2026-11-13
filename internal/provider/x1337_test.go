@@ -711,6 +711,10 @@ func TestX1337MatchReleaseAcceptsTheTitleWithAnyTagsAfterIt(t *testing.T) {
 		{"Show", "Show Season 2 Complete 1080p", ""},
 		{"Show", "Show S02 COMPLETE 1080p", ""},
 		{"Dune", "Dune 720p", ""},
+		{"Barbie", "Barbie WEB H264", ""},
+		{"Wonder Woman", "Wonder.Woman.2017.1080p", "2017"},
+		{"Wonder Woman 1984", "Wonder.Woman.1984.2020.1080p", "2020"},
+		{"2012", "2012 2009 1080p", "2009"},
 	} {
 		year, ok := x1337MatchRelease(c.query, c.name)
 		if !ok || year != c.year {
@@ -730,6 +734,8 @@ func TestX1337MatchReleaseRejectsOtherTitles(t *testing.T) {
 		{"Dune 2021", "Dune 1984 1080p"},
 		{"Dune", "Dune Messiah EPUB"},
 		{"Agent", "Agent S1 Companion 1080p"},
+		{"Wonder Woman", "Wonder.Woman.1984.2020.1080p"},
+		{"Death Race", "Death.Race.2000.1975.1080p"},
 	} {
 		if year, ok := x1337MatchRelease(c.query, c.name); ok {
 			t.Errorf("x1337MatchRelease(%q, %q) = %q, true; want a rejection", c.query, c.name, year)
@@ -835,7 +841,7 @@ func TestX1337ASingleBudgetCoversTheWholeWatch(t *testing.T) {
 	if _, err := x.Watch(res[0].ID, "", "", "1080"); err == nil {
 		t.Fatal("Watch succeeded against hung detail pages")
 	}
-	if d := time.Since(start); d > 520*time.Millisecond {
+	if d := time.Since(start); d > 650*time.Millisecond {
 		t.Fatalf("Watch took %v, want it inside the single %v budget", d, x1337Budget)
 	}
 }

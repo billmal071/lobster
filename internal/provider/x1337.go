@@ -202,7 +202,7 @@ func x1337NormaliseQuery(q string) string {
 }
 
 // rows searches each category up to x1337MaxPages pages and keeps the rows whose title matches the query.
-// A category or page that fails leaves the rest in use, uncached; every first page failing is an error.
+// A category or page that fails leaves the rest in use, uncached; it is an error when every first page failed, or when nothing matched and any category failed.
 func (x *X1337) rows(ctx context.Context, query string) ([]x1337Row, error) {
 	x.mu.Lock()
 	if e, ok := x.cache[query]; ok && time.Since(e.at) < x1337CacheTTL {
@@ -348,6 +348,9 @@ func x1337MatchRelease(query, name string) (string, bool) {
 	t := rest[0]
 	switch {
 	case x1337PlausibleYear(t):
+		if len(rest) > 1 && x1337PlausibleYear(rest[1]) {
+			return "", false
+		}
 		return t, true
 	case x1337MarkerToken.MatchString(t), x1337TagTokens[t], eztvReleaseTag.MatchString(t):
 		return year, true
@@ -660,9 +663,6 @@ func (x *X1337) Watch(mediaID, episodeID, server, quality string) (*media.Stream
 	}
 	var lastErr error
 	for _, c := range ordered {
-		if ctx.Err() != nil {
-			break
-		}
 		hash, err := x.infoHash(ctx, c.path)
 		if err != nil {
 			lastErr = err
