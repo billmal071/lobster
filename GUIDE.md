@@ -261,7 +261,7 @@ player = "mpv"
 # torrent swarm:
 #   base = "vaplayer"
 # Available: auto, vaplayer, flixhq.ws, tbcpl, 1shows.org, animeonsen, yts,
-# nyaa, eztv (the last three are BitTorrent — see "Content sources")
+# nyaa, eztv, 1337x (the last four are BitTorrent — see "Content sources")
 # Retired (treated as "auto" with a warning here; an error as --base):
 # soap2day, moviebox, vidnest, flixhq.to, kimcartoon, allanime, anipub.
 # See "Content sources" below for what each one covers.
@@ -312,21 +312,21 @@ download_dir = "~/Videos/lobster"
 # "Where torrent data lands".
 # torrent_dir = "/mnt/scratch/lobster"
 
-# Fall back to torrents (EZTV for series, Nyaa for anime, YTS for films) when
-# every streaming provider fails.
+# Fall back to torrents (EZTV for series, Nyaa for anime, YTS for films, 1337x
+# for either) when every streaming provider fails.
 #
 # This is NOT the swarm opt-in, and leaving it false does not keep you out of
 # a swarm: the default `base = "auto"` already plays movies from YTS, so a
 # default install joins one for films. To never join a swarm, choose an
 # explicit non-torrent source instead — `base = "vaplayer"` — and leave this
-# false. `yts`, `nyaa` and `eztv` are swarms even with this false.
+# false. `yts`, `nyaa`, `eztv` and `1337x` are swarms even with this false.
 #
 # What this setting controls is the other direction: letting a *failed* stream
 # resolution end up on a torrent — for a series, for a film YTS does not
 # carry, and under a base you chose explicitly. Off by default because a swarm
 # reached by choosing "auto" is documented, while one reached because a
-# scraper broke is not. `--base yts`, `--base eztv` and `--base nyaa` always
-# work without this.
+# scraper broke is not. `--base yts`, `--base eztv`, `--base nyaa` and `--base 1337x`
+# always work without this.
 #
 # Torrent sources can be downloaded as well as played: lobster serves the
 # torrent over loopback and --download fetches from there. Note that
@@ -390,6 +390,7 @@ and where the others break"). Run it before concluding a source is broken.
 | `yts` | Films only | No TV catalogue at all, so a series named under `--base yts` is played from the fallback chain instead — for playback, `--base yts` pins nothing for a series. `lobster episodes` under it can still fail outright, per the note above. Resolves to a **magnet**, so playback joins a BitTorrent swarm and your IP is visible to its peers; lobster serves it over loopback, so `--download` works too, but the swarm is joined either way. If no peer answers within 90 seconds the run gives up with "the swarm may be dead". |
 | `eztv` | Series only | TV series torrents, keyed by IMDb id: a title is looked up on TMDB and its IMDb id read from there, so a show TMDB does not know is not found. Seasons and episodes are real (episode IDs are `<season>x<episode>`), and `--quality` and `-q best` pick among the releases on offer; when nothing is at or below the requested quality, the best available release is picked rather than failing. lobster pages through a show's whole release list, stopping at an empty or short page or once EZTV's reported total is reached, but never past 100 pages (10,000 releases) or 20 seconds. When a page fails or either limit cuts the walk short, the season and episode lists come back with what was found together with an incomplete-list error and are not treated as complete (`episodes` adds a `season_list_incomplete` or `episode_list_incomplete` warning), so a season or episode missing from them is not proof it does not exist. The same holds when EZTV is a fallback whose incomplete list was one of those consulted: a season absent from every list, with any of them incomplete, makes `episodes --season N` exit 3 (`providers_failed`) rather than 2, and `play` goes on to ask the fallback chain for it. Resolves to a **magnet** like `yts`: playback joins a swarm and your IP is visible to its peers. Never reached automatically — a series stays on the scraping sources unless you name this base, or set `torrent_fallback`, which tries it only after every streaming source has failed. |
 | `nyaa` | Anime only | Anime torrents from the English-translated category. Releases there can be dubbed and carry no usable subtitle track, so you may still need `subdl_api_key` or `opensubtitles_api_key`; playback continues without subtitles when none turn up. Nyaa has no notion of a series: the feed only exposes the **75 newest torrents per query**, so older episodes of a long-running show may be missing, and an entry opened later re-searches by the bare title, so a narrower query's older hits can drop out of its episode list, and a sequel season appears as its own entry ("Title Season N") rather than under the first. A name whose only number is a trailing year (`Show 2010`) is read as a release year, not episode 2010, and a name whose only numbers are a year span (`Show 1990-2010`) is read as a pack; both are skipped. One season per entry; `--quality` and `-q best` pick among the release groups' resolutions; when nothing is at or below the requested quality, the best available release is picked rather than failing. Resolves to a **magnet** like `yts`, with the same swarm and IP exposure, and is never reached automatically: name it, or set `torrent_fallback`, which tries it only after every streaming source, `animeonsen` included, has failed. |
+| `1337x` | Films and series | Torrents scraped from 1337x's search pages, with the magnet read from each release's page. A search gives one entry for the query you typed, not one per title: type the title (and `S02E05` for an episode) as precisely as you can. Seasons and episodes are read from the `SxxEyy` in release names, so a series only lists what the first page of results carries. For the episode or film asked for, the best-seeded release of each quality is offered, and `--quality` and `-q best` pick among them; when nothing is at or below the requested quality, the best available is used. Several mirrors are tried in turn (`1337x.to`, `1337xx.to`, `x1337x.eu`); a mirror that is down or answers with a challenge or block page is skipped. lobster does not solve challenges, so when every mirror challenges, the source fails. Resolves to a **magnet** like `yts`: playback joins a swarm and your IP is visible to its peers. Never reached automatically — only when you name this base, or under `torrent_fallback`, which tries it last, after every other source has failed. |
 
 **Retired sources.** `soap2day`, `moviebox`, `vidnest`, `flixhq.to`,
 `kimcartoon`, `allanime` and `anipub` were each verified dead upstream on
@@ -548,8 +549,8 @@ tbcpl_include_untrusted = false
 -x, --debug                 Debug logging to stderr
     --base <source>         Content source (default: auto — YTS for movies,
                             a scraping source for series). An explicit value
-                            is used for both types; nyaa (anime) and eztv
-                            (series) are torrent sources only ever used by
+                            is used for both types; nyaa (anime), eztv
+                            (series) and 1337x are torrent sources only ever used by
                             name or under torrent_fallback. See "Content
                             sources" above for what each value covers.
 ```

@@ -38,6 +38,8 @@ func providerBase(p provider.Provider) string {
 		return "nyaa"
 	case *provider.EZTV:
 		return "eztv"
+	case *provider.X1337:
+		return "1337x"
 	}
 	// TBCPLEmbed and Consumet fall through deliberately. No base value reaches
 	// them: they are not in newProvider's chain (Consumet is selected by
