@@ -38,12 +38,13 @@ func TestNewProviderStillHonoursAnExplicitBase(t *testing.T) {
 	resolveDomain = func(configured, _ string, _ map[string][]string) string { return configured }
 	t.Cleanup(func() { resolveDomain = prevResolve })
 	for base, want := range map[string]string{
-		"yts":        "*provider.YTS",
-		"vaplayer":   "*provider.VaPlayer",
-		"flixhq.ws":  "*provider.FlixHQWS",
-		"tbcpl":      "*provider.TBCPL",
-		"1shows.org": "*provider.TBCPL",
-		"animeonsen": "*provider.AnimeOnsen",
+		"yts":         "*provider.YTS",
+		"vaplayer":    "*provider.VaPlayer",
+		"flixhq.ws":   "*provider.FlixHQWS",
+		"tbcpl":       "*provider.TBCPL",
+		"1shows.org":  "*provider.TBCPL",
+		"animeonsen":  "*provider.AnimeOnsen",
+		"animeheaven": "*provider.AnimeHeaven",
 	} {
 		withBase(t, base)
 		if got := fmt.Sprintf("%T", newProvider()); got != want {
@@ -212,6 +213,7 @@ func TestEveryReaderOfBaseAgreesAboutYTS(t *testing.T) {
 		{base: "tbcpl"},
 		{base: "1shows.org"},
 		{base: "animeonsen"},
+		{base: "animeheaven"},
 		// Not a base anyone types; the point is that a value merely reading
 		// like a typo of a YTS domain is still treated as YTS by both, rather
 		// than by one of them.
