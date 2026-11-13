@@ -194,7 +194,7 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 		}
 	}
 
-	// YTS, then 1337x, last, and only when torrent_fallback is set.
+	// YTS and 1337x, only when torrent_fallback is set; they race in the torrent tier.
 	//
 	// Be precise about what that setting does and does not decide. It is NOT
 	// what makes lobster join a swarm: under the default base = "auto" every

@@ -48,8 +48,8 @@ func TestX1337IsAMagnetSourceForTheDownloadQueue(t *testing.T) {
 }
 
 // 1337x joins a swarm: it must be absent from the chain unless torrent_fallback
-// is set, and when present must come after every HTTP source.
-func TestX1337IsReachableOnlyThroughTorrentFallbackAndLast(t *testing.T) {
+// is set, and then belongs to the torrent tier.
+func TestX1337IsReachableOnlyThroughTorrentFallbackInTheTorrentTier(t *testing.T) {
 	prev := cfg
 	t.Cleanup(func() { cfg = prev })
 
@@ -67,8 +67,8 @@ func TestX1337IsReachableOnlyThroughTorrentFallbackAndLast(t *testing.T) {
 	if !hasProvider[*provider.X1337](got) {
 		t.Fatalf("1337x missing under torrent_fallback: %v", providerNames(got))
 	}
-	if _, ok := got[len(got)-1].(*provider.X1337); !ok {
-		t.Fatalf("1337x is not last: %v", providerNames(got))
+	if !hasProvider[*provider.X1337](onlyMagnetSources(got)) || hasProvider[*provider.X1337](withoutMagnetSources(got)) {
+		t.Fatalf("1337x is not in the torrent tier, which tryFallbackStreamFrom races only after every streaming source fails: %v", providerNames(got))
 	}
 	if got := fallbackProviders(provider.NewX1337()); hasProvider[*provider.X1337](got) {
 		t.Errorf("1337x primary is in its own chain: %v", providerNames(got))

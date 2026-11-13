@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/PuerkitoBio/goquery"
 
@@ -21,7 +22,7 @@ import (
 	"lobster/internal/media"
 )
 
-// x1337Bases are the 1337x mirrors, tried in order from the last one that answered. A var so tests can point it at stubs.
+// x1337Bases are the 1337x mirrors, tried in order from the last one that answered.
 var x1337Bases = []string{"https://1337x.to", "https://1337xx.to", "https://x1337x.eu"}
 
 const x1337MaxPages = 3
@@ -36,7 +37,19 @@ const (
 	x1337UserAgent      = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 )
 
-var x1337RequestTimeout = 10 * time.Second
+var (
+	x1337RequestTimeout = 10 * time.Second
+	x1337Budget         = 30 * time.Second
+)
+
+var x1337Trackers = []string{
+	"udp://tracker.opentrackr.org:1337/announce",
+	"udp://open.stealth.si:80/announce",
+	"udp://exodus.desync.com:6969/announce",
+	"udp://tracker.torrent.eu.org:451/announce",
+}
+
+var x1337Categories = []string{"Movies", "TV"}
 
 var (
 	x1337TorrentPath = regexp.MustCompile(`^/torrent/(\d{1,12})/[A-Za-z0-9._%~+-]{1,200}/$`)
@@ -74,7 +87,7 @@ type x1337Row struct {
 }
 
 // fetch tries each mirror starting from the last that answered and returns the first page recognised accepts.
-func (x *X1337) fetch(path string, recognised func(*goquery.Document) bool) (*goquery.Document, error) {
+func (x *X1337) fetch(ctx context.Context, path string, recognised func(*goquery.Document) bool) (*goquery.Document, error) {
 	n := len(x1337Bases)
 	if n == 0 {
 		return nil, errors.New("1337x: no mirrors configured")
@@ -83,9 +96,9 @@ func (x *X1337) fetch(path string, recognised func(*goquery.Document) bool) (*go
 	start := x.good
 	x.mu.Unlock()
 	var errs []error
-	for i := 0; i < n; i++ {
+	for i := 0; i < n && ctx.Err() == nil; i++ {
 		idx := (start + i) % n
-		doc, err := x.fetchFrom(x1337Bases[idx], path, recognised)
+		doc, err := x.fetchFrom(ctx, x1337Bases[idx], path, recognised)
 		if err == nil {
 			x.mu.Lock()
 			x.good = idx
@@ -94,11 +107,14 @@ func (x *X1337) fetch(path string, recognised func(*goquery.Document) bool) (*go
 		}
 		errs = append(errs, err)
 	}
+	if err := ctx.Err(); err != nil {
+		errs = append(errs, fmt.Errorf("1337x: gave up after %v: %w", x1337Budget, err))
+	}
 	return nil, errors.Join(errs...)
 }
 
-func (x *X1337) fetchFrom(base, path string, recognised func(*goquery.Document) bool) (*goquery.Document, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), x1337RequestTimeout)
+func (x *X1337) fetchFrom(parent context.Context, base, path string, recognised func(*goquery.Document) bool) (*goquery.Document, error) {
+	ctx, cancel := context.WithTimeout(parent, x1337RequestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+path, nil)
 	if err != nil {
@@ -173,10 +189,7 @@ func x1337ParseRows(doc *goquery.Document) []x1337Row {
 			ID: id, Path: href, Name: name, Seeds: seeds,
 			Size: x1337Size(tr.Find("td.size").First().Contents().First().Text()),
 		}
-		if e := nyaaSxxExxRe.FindStringSubmatch(name); e != nil {
-			row.Season, _ = strconv.Atoi(e[1])
-			row.Episode, _ = strconv.Atoi(e[2])
-		}
+		row.Season, row.Episode = x1337SeasonEpisode(name)
 		rows = append(rows, row)
 		return len(rows) < x1337MaxRows
 	})
@@ -187,6 +200,8 @@ func x1337NormaliseQuery(q string) string {
 	return strings.TrimSpace(x1337SpaceRe.ReplaceAllString(q, " "))
 }
 
+// rows searches each category up to x1337MaxPages pages and keeps the rows whose title matches the query.
+// A category or page that fails leaves the rest in use, uncached; every first page failing is an error.
 func (x *X1337) rows(query string) ([]x1337Row, error) {
 	x.mu.Lock()
 	if e, ok := x.cache[query]; ok && time.Since(e.at) < x1337CacheTTL {
@@ -194,27 +209,34 @@ func (x *X1337) rows(query string) ([]x1337Row, error) {
 		return e.rows, nil
 	}
 	x.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), x1337Budget)
+	defer cancel()
 	var rows []x1337Row
+	var errs []error
 	seen := map[string]bool{}
-	complete := true
-	for page := 1; page <= x1337MaxPages && len(rows) < x1337MaxRows; page++ {
-		doc, err := x.fetch(fmt.Sprintf("/search/%s/%d/", url.PathEscape(query), page), x1337IsSearchPage)
-		if err != nil {
-			if page == 1 {
-				return nil, err
+	complete, reached := true, false
+	for _, category := range x1337Categories {
+		for page := 1; page <= x1337MaxPages && len(rows) < x1337MaxRows; page++ {
+			doc, err := x.fetch(ctx, fmt.Sprintf("/category-search/%s/%s/%d/", url.PathEscape(query), category, page), x1337IsSearchPage)
+			if err != nil {
+				errs = append(errs, err)
+				complete = false
+				break
 			}
-			complete = false
-			break
-		}
-		for _, r := range x1337ParseRows(doc) {
-			if !seen[r.Path] && len(rows) < x1337MaxRows {
-				seen[r.Path] = true
-				rows = append(rows, r)
+			reached = true
+			for _, r := range x1337ParseRows(doc) {
+				if !seen[r.Path] && len(rows) < x1337MaxRows && x1337TitleMatches(query, r.Name) {
+					seen[r.Path] = true
+					rows = append(rows, r)
+				}
+			}
+			if !x1337HasNextPage(doc, page+1) {
+				break
 			}
 		}
-		if !x1337HasNextPage(doc, page+1) {
-			break
-		}
+	}
+	if !reached {
+		return nil, errors.Join(errs...)
 	}
 	if complete {
 		x.mu.Lock()
@@ -232,30 +254,82 @@ func x1337HasNextPage(doc *goquery.Document, next int) bool {
 	found := false
 	doc.Find(".pagination a").EachWithBreak(func(_ int, a *goquery.Selection) bool {
 		href, _ := a.Attr("href")
-		found = strings.HasPrefix(href, "/search/") && strings.HasSuffix(href, suffix)
+		found = strings.HasPrefix(href, "/category-search/") && strings.HasSuffix(href, suffix)
 		return !found
 	})
 	return found
 }
 
-func x1337IsSeries(query string, rows []x1337Row) bool {
-	if nyaaSxxExxRe.MatchString(query) {
-		return true
+func x1337SeasonEpisode(name string) (season, episode int) {
+	if e := nyaaSxxExxRe.FindStringSubmatch(name); e != nil {
+		season, _ = strconv.Atoi(e[1])
+		episode, _ = strconv.Atoi(e[2])
+		return season, episode
 	}
-	episodes := 0
-	for _, r := range rows {
-		if r.Episode > 0 {
-			episodes++
+	for _, re := range []*regexp.Regexp{nyaaSeasonWordRe, nyaaSeasonSRe} {
+		if m := re.FindStringSubmatch(name); m != nil {
+			season, _ = strconv.Atoi(m[1])
+			return season, 0
 		}
 	}
-	return episodes*2 > len(rows)
+	return 0, 0
 }
 
-var x1337YearRe = regexp.MustCompile(`\b((?:19|20)\d{2})\b`)
+func x1337IsSeries(query string, rows []x1337Row) bool {
+	if s, _ := x1337SeasonEpisode(query); s > 0 {
+		return true
+	}
+	seasons := 0
+	for _, r := range rows {
+		if r.Season > 0 {
+			seasons++
+		}
+	}
+	return seasons*2 > len(rows)
+}
 
+var (
+	x1337YearToken = regexp.MustCompile(`^(?:19|20)\d{2}$`)
+	x1337Separator = strings.NewReplacer(".", " ", "_", " ")
+)
+
+// x1337TitleTokens is the normalised words of a release name or query up to its first season, episode or release tag.
+func x1337TitleTokens(s string) []string {
+	s = x1337Separator.Replace(s)
+	cut := len(s)
+	for _, re := range []*regexp.Regexp{nyaaSxxExxRe, nyaaSeasonWordRe, nyaaSeasonSRe, eztvReleaseTag} {
+		if loc := re.FindStringIndex(s); loc != nil && loc[0] < cut {
+			cut = loc[0]
+		}
+	}
+	if i := strings.Index(s, "["); i >= 0 && i < cut {
+		cut = i
+	}
+	s = strings.NewReplacer("'", "", "\u2019", "").Replace(s[:cut])
+	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+}
+
+// x1337TitleMatches reports whether a release is the titled work: its words equal the query's, optionally followed by one year.
+func x1337TitleMatches(query, name string) bool {
+	q, p := x1337TitleTokens(query), x1337TitleTokens(name)
+	if len(q) == 0 || len(p) < len(q) || len(p) > len(q)+1 {
+		return false
+	}
+	for i := range q {
+		if q[i] != p[i] {
+			return false
+		}
+	}
+	return len(p) == len(q) || x1337YearToken.MatchString(p[len(q)])
+}
+
+// x1337ReleaseYear is the last year-shaped word of the title part of a release name, never the first word: "Blade Runner 2049 2017" is 2017.
 func x1337ReleaseYear(name string) string {
-	if m := x1337YearRe.FindStringSubmatch(name); m != nil {
-		return m[1]
+	tokens := x1337TitleTokens(name)
+	for i := len(tokens) - 1; i > 0; i-- {
+		if x1337YearToken.MatchString(tokens[i]) {
+			return tokens[i]
+		}
 	}
 	return ""
 }
@@ -268,7 +342,7 @@ func x1337QueryFromID(id string) (query, year string, err error) {
 	rest, year, hasYear := strings.Cut(rest, "?y=")
 	q, err := url.QueryUnescape(rest)
 	q = x1337NormaliseQuery(q)
-	if err != nil || q == "" || len(q) > x1337MaxQueryLen || (hasYear && x1337ReleaseYear(year) != year) {
+	if err != nil || q == "" || len(q) > x1337MaxQueryLen || (hasYear && !x1337YearToken.MatchString(year)) {
 		return "", "", fmt.Errorf("1337x: invalid ID %q", id)
 	}
 	return q, year, nil
@@ -472,22 +546,35 @@ func x1337MagnetHash(magnet string) (string, bool) {
 	return m[1], true
 }
 
-// magnet reads a release's magnet from its detail page; "" when the page carries none.
-func (x *X1337) magnet(path string) (string, error) {
-	doc, err := x.fetch(path, x1337IsDetailPage)
+// infoHash reads a release's info hash from its detail page; "" when the page carries no valid magnet.
+func (x *X1337) infoHash(ctx context.Context, path string) (string, error) {
+	doc, err := x.fetch(ctx, path, x1337IsDetailPage)
 	if err != nil {
 		return "", err
 	}
 	found := ""
 	doc.Find(`a[href^="magnet:?"]`).EachWithBreak(func(_ int, a *goquery.Selection) bool {
 		href, _ := a.Attr("href")
-		if _, ok := x1337MagnetHash(href); ok {
-			found = href
+		if hash, ok := x1337MagnetHash(href); ok {
+			found = hash
 			return false
 		}
 		return true
 	})
 	return found, nil
+}
+
+func x1337Magnet(hash, title string) string {
+	var b strings.Builder
+	b.WriteString("magnet:?xt=urn:btih:")
+	b.WriteString(hash)
+	b.WriteString("&dn=")
+	b.WriteString(url.QueryEscape(title))
+	for _, tr := range x1337Trackers {
+		b.WriteString("&tr=")
+		b.WriteString(url.QueryEscape(tr))
+	}
+	return b.String()
 }
 
 // Watch resolves a release's magnet. The release is the one the server ID names, else the pick for the quality; a release whose
@@ -531,16 +618,25 @@ func (x *X1337) Watch(mediaID, episodeID, server, quality string) (*media.Stream
 	if len(ordered) > x1337MaxDetailTries {
 		ordered = ordered[:x1337MaxDetailTries]
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), x1337Budget)
+	defer cancel()
 	var lastErr error
 	for _, c := range ordered {
-		magnet, err := x.magnet(c.path)
+		if ctx.Err() != nil {
+			break
+		}
+		hash, err := x.infoHash(ctx, c.path)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		if magnet != "" {
-			return &media.Stream{URL: magnet, Quality: eztvQualityLabel(c.torrent.releaseName())}, nil
+		if hash != "" {
+			name := c.torrent.releaseName()
+			return &media.Stream{URL: x1337Magnet(hash, name), Quality: eztvQualityLabel(name)}, nil
 		}
+	}
+	if lastErr == nil && ctx.Err() != nil {
+		lastErr = ctx.Err()
 	}
 	if lastErr != nil {
 		return nil, fmt.Errorf("1337x: no magnet for %s: %w", mediaID, lastErr)
