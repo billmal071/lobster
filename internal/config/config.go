@@ -390,12 +390,12 @@ func IsTorrentBase(base string) bool {
 // retiredBases lists the sources lobster no longer wires in, each verified
 // dead upstream (VaPlayer on 2026-11-13, the rest on 2026-11-07) with no fix
 // available on lobster's side. Their provider code stays under
-// internal/provider; what is gone is every path that could select them (cmd.newProvider, cmd.fallbackProviders, the doctor
-// table, the TUI). A base naming one is not silently routed elsewhere: a
-// config file's value is downgraded to "flixhq.ws" — "auto" under
-// torrent_fallback — with a warning (Load), an
-// explicit --base is an error (cmd.applyConfig), and a ref stamped with one
-// is ignored with a warning (cmd.applyRefBase).
+// internal/provider; what is gone is every path that could select them
+// (cmd.newProvider, cmd.fallbackProviders, the doctor table, the TUI). A base
+// naming one is not silently routed elsewhere: a config file's value is
+// downgraded to "flixhq.ws" — "auto" under torrent_fallback — with a warning
+// (Load), an explicit --base is an error (cmd.applyConfig), and a ref stamped
+// with one is ignored with a warning (cmd.applyRefBase).
 //
 // Matching is by substring, the same way cmd.newProvider selects a provider,
 // so `base = "soap2days"` is caught like `base = "soap2day"` was accepted.

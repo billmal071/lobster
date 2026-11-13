@@ -235,7 +235,6 @@ func streamChain(primary provider.Provider) []provider.Provider {
 	if _, ok := primary.(*provider.FlixHQWS); !ok {
 		return chain
 	}
-	chain = withoutProvider(chain, primary)
 	at := len(chain)
 	for i, p := range chain {
 		switch p.(type) {
