@@ -24,11 +24,13 @@ import (
 // x1337Bases are the 1337x mirrors, tried in order from the last one that answered. A var so tests can point it at stubs.
 var x1337Bases = []string{"https://1337x.to", "https://1337xx.to", "https://x1337x.eu"}
 
+const x1337MaxPages = 3
+
 const (
 	x1337MaxPageBytes   = 5 << 20
 	x1337MaxRows        = 200
 	x1337MaxQueryLen    = 200
-	x1337MaxDetailTries = 3
+	x1337MaxDetailTries = 5
 	x1337CacheTTL       = 5 * time.Minute
 	x1337CacheMax       = 32
 	x1337UserAgent      = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -192,18 +194,48 @@ func (x *X1337) rows(query string) ([]x1337Row, error) {
 		return e.rows, nil
 	}
 	x.mu.Unlock()
-	doc, err := x.fetch("/search/"+url.PathEscape(query)+"/1/", x1337IsSearchPage)
-	if err != nil {
-		return nil, err
+	var rows []x1337Row
+	seen := map[string]bool{}
+	complete := true
+	for page := 1; page <= x1337MaxPages && len(rows) < x1337MaxRows; page++ {
+		doc, err := x.fetch(fmt.Sprintf("/search/%s/%d/", url.PathEscape(query), page), x1337IsSearchPage)
+		if err != nil {
+			if page == 1 {
+				return nil, err
+			}
+			complete = false
+			break
+		}
+		for _, r := range x1337ParseRows(doc) {
+			if !seen[r.Path] && len(rows) < x1337MaxRows {
+				seen[r.Path] = true
+				rows = append(rows, r)
+			}
+		}
+		if !x1337HasNextPage(doc, page+1) {
+			break
+		}
 	}
-	rows := x1337ParseRows(doc)
-	x.mu.Lock()
-	if len(x.cache) >= x1337CacheMax {
-		x.cache = map[string]x1337CacheEntry{}
+	if complete {
+		x.mu.Lock()
+		if len(x.cache) >= x1337CacheMax {
+			x.cache = map[string]x1337CacheEntry{}
+		}
+		x.cache[query] = x1337CacheEntry{rows: rows, at: time.Now()}
+		x.mu.Unlock()
 	}
-	x.cache[query] = x1337CacheEntry{rows: rows, at: time.Now()}
-	x.mu.Unlock()
 	return rows, nil
+}
+
+func x1337HasNextPage(doc *goquery.Document, next int) bool {
+	suffix := fmt.Sprintf("/%d/", next)
+	found := false
+	doc.Find(".pagination a").EachWithBreak(func(_ int, a *goquery.Selection) bool {
+		href, _ := a.Attr("href")
+		found = strings.HasPrefix(href, "/search/") && strings.HasSuffix(href, suffix)
+		return !found
+	})
+	return found
 }
 
 func x1337IsSeries(query string, rows []x1337Row) bool {
@@ -325,67 +357,67 @@ type x1337Candidate struct {
 	path    string
 }
 
-// candidates returns the best-seeded release of each quality for the request, ordered like EZTV's: quality first, then seeds.
+// candidates returns every release of the request, ordered like EZTV's (quality, then seeds), and the best-seeded one of each quality.
 // A series with no episode in the request takes it from the query's SxxEyy marker; without one it is refused.
-func (x *X1337) candidates(id, episodeID string) ([]x1337Candidate, error) {
+func (x *X1337) candidates(id, episodeID string) (all, perQuality []x1337Candidate, err error) {
 	q, rows, err := x.catalogue(id)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	series := x1337IsSeries(q, rows)
 	season, episode := 0, 0
 	switch {
 	case strings.TrimSpace(episodeID) != "":
 		if season, episode, err = eztvEpisodeRef(episodeID); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	case series:
 		m := nyaaSxxExxRe.FindStringSubmatch(q)
 		if m == nil {
-			return nil, fmt.Errorf("1337x: %q is a series, pick an episode", q)
+			return nil, nil, fmt.Errorf("1337x: %q is a series, pick an episode", q)
 		}
 		season, _ = strconv.Atoi(m[1])
 		episode, _ = strconv.Atoi(m[2])
 	}
 
-	best := map[int]x1337Row{}
+	var torrents []eztvTorrent
+	paths := map[int]string{}
 	for _, r := range rows {
 		if r.Season != season || r.Episode != episode {
 			continue
 		}
-		h := eztvQualityHeight(r.Name)
-		if cur, ok := best[h]; !ok || r.Seeds > cur.Seeds {
-			best[h] = r
-		}
-	}
-	if len(best) == 0 {
-		return nil, fmt.Errorf("1337x: no releases for %q S%02dE%02d: %w", q, season, episode, ErrNoResults)
-	}
-	torrents := make([]eztvTorrent, 0, len(best))
-	paths := map[int]string{}
-	for _, r := range best {
 		torrents = append(torrents, eztvTorrent{
 			ID: r.ID, Title: r.Name, Filename: r.Name, Season: eztvInt(r.Season), Episode: eztvInt(r.Episode),
 			Seeds: eztvInt(r.Seeds), SizeBytes: eztvInt(r.Size),
 		})
 		paths[r.ID] = r.Path
 	}
-	sort.Slice(torrents, func(i, j int) bool { return torrents[i].ID < torrents[j].ID })
-	out := make([]x1337Candidate, 0, len(torrents))
-	for _, t := range sortedEZTVTorrents(torrents) {
-		out = append(out, x1337Candidate{torrent: t, path: paths[t.ID]})
+	if len(torrents) == 0 {
+		return nil, nil, fmt.Errorf("1337x: no releases for %q S%02dE%02d: %w", q, season, episode, ErrNoResults)
 	}
-	return out, nil
+	sort.Slice(torrents, func(i, j int) bool { return torrents[i].ID < torrents[j].ID })
+	seenHeight := map[int]bool{}
+	for _, t := range sortedEZTVTorrents(torrents) {
+		c := x1337Candidate{torrent: t, path: paths[t.ID]}
+		all = append(all, c)
+		if h := eztvQualityHeight(t.releaseName()); !seenHeight[h] {
+			seenHeight[h] = true
+			perQuality = append(perQuality, c)
+		}
+	}
+	return all, perQuality, nil
 }
 
+func x1337ServerID(torrentID int) string { return "r" + strconv.Itoa(torrentID) }
+
 func (x *X1337) GetServers(id string, episodeID string) ([]media.Server, error) {
-	cands, err := x.candidates(id, episodeID)
+	_, best, err := x.candidates(id, episodeID)
 	if err != nil {
 		return nil, err
 	}
-	servers := make([]media.Server, 0, len(cands))
-	for i, c := range cands {
-		servers = append(servers, media.Server{Name: eztvServerName(c.torrent), ID: strconv.Itoa(i)})
+	servers := make([]media.Server, 0, len(best))
+	for _, c := range best {
+		servers = append(servers, media.Server{Name: eztvServerName(c.torrent), ID: x1337ServerID(c.torrent.ID)})
 	}
 	return servers, nil
 }
@@ -419,25 +451,41 @@ func (x *X1337) magnet(path string) (string, error) {
 	return found, nil
 }
 
-// Watch resolves the picked release's magnet; a release whose detail page has none is passed over for the next best.
+// Watch resolves a release's magnet. The release is the one the server ID names, else the pick for the quality; a release whose
+// detail page has no magnet is passed over for the other releases of its quality by seeds, then for the other qualities.
 func (x *X1337) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
-	cands, err := x.candidates(mediaID, episodeID)
+	all, best, err := x.candidates(mediaID, episodeID)
 	if err != nil {
 		return nil, err
 	}
-	torrents := make([]eztvTorrent, len(cands))
-	for i, c := range cands {
-		torrents[i] = c.torrent
+	var first *x1337Candidate
+	for i := range all {
+		if server != "" && server == x1337ServerID(all[i].torrent.ID) {
+			first = &all[i]
+			break
+		}
 	}
-	picked := pickEZTVTorrent(torrents, server, quality)
-	ordered := []x1337Candidate{}
-	for _, c := range cands {
-		if c.torrent.ID == picked.ID {
+	if first == nil {
+		torrents := make([]eztvTorrent, len(best))
+		for i, c := range best {
+			torrents[i] = c.torrent
+		}
+		picked := pickEZTVTorrent(torrents, server, quality)
+		for i := range all {
+			if all[i].torrent.ID == picked.ID {
+				first = &all[i]
+			}
+		}
+	}
+	height := eztvQualityHeight(first.torrent.releaseName())
+	ordered := []x1337Candidate{*first}
+	for _, c := range all {
+		if c.torrent.ID != first.torrent.ID && eztvQualityHeight(c.torrent.releaseName()) == height {
 			ordered = append(ordered, c)
 		}
 	}
-	for _, c := range cands {
-		if c.torrent.ID != picked.ID {
+	for _, c := range all {
+		if eztvQualityHeight(c.torrent.releaseName()) != height {
 			ordered = append(ordered, c)
 		}
 	}

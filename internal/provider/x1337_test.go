@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -25,8 +26,31 @@ func x1337Fixture(t *testing.T, name string) string {
 
 func x1337Hash(id int) string { return fmt.Sprintf("%040x", id) }
 
-func x1337Handler(t *testing.T, hits *int32) http.Handler {
+type x1337Site struct {
+	mu          sync.Mutex
+	noMagnet    map[int]bool
+	extraRows   string
+	detailPaths []string
+	searchPaths []string
+}
+
+func (s *x1337Site) detailRequests() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.detailPaths...)
+}
+
+func x1337HTMLRow(id int, name string, seeds int) string {
+	return fmt.Sprintf(`<tr><td class="coll-1 name"><a href="/torrent/%d/r%d/">%s</a></td><td class="coll-2 seeds">%d</td><td class="coll-4 size">1.0 GB</td></tr>`, id, id, name, seeds)
+}
+
+func x1337Next(page int) string {
+	return fmt.Sprintf(`<div class="pagination"><ul><li><a href="/search/x/%d/">%d</a></li></ul></div>`, page, page)
+}
+
+func (s *x1337Site) handler(t *testing.T, hits *int32) http.Handler {
 	series := x1337Fixture(t, "x1337_search_series.html")
+	seriesP2 := x1337Fixture(t, "x1337_search_series_p2.html")
 	movie := x1337Fixture(t, "x1337_search_movie.html")
 	empty := x1337Fixture(t, "x1337_search_empty.html")
 	detail := x1337Fixture(t, "x1337_detail.html")
@@ -37,7 +61,15 @@ func x1337Handler(t *testing.T, hits *int32) http.Handler {
 		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/search/"):
+			s.mu.Lock()
+			s.searchPaths = append(s.searchPaths, r.URL.Path)
+			extra := s.extraRows
+			s.mu.Unlock()
 			q := strings.ToLower(r.URL.Path)
+			page := 1
+			if parts := strings.Split(strings.Trim(q, "/"), "/"); len(parts) == 3 {
+				page, _ = strconv.Atoi(parts[2])
+			}
 			switch {
 			case strings.Contains(q, "matrix"):
 				_, _ = w.Write([]byte(movie))
@@ -45,13 +77,28 @@ func x1337Handler(t *testing.T, hits *int32) http.Handler {
 				_, _ = w.Write([]byte(empty))
 			case strings.Contains(q, "garbage"):
 				_, _ = w.Write([]byte("<div><p>unclosed <b>tags <table><tr><td"))
+			case strings.Contains(q, "endless"):
+				_, _ = fmt.Fprintf(w, `<table class="table-list"><tbody>%s</tbody></table>%s`,
+					x1337HTMLRow(5000+page, fmt.Sprintf("Endless S01E%02d 720p", page), 5), x1337Next(page+1))
+			case strings.Contains(q, "flaky") && page > 1:
+				w.WriteHeader(http.StatusServiceUnavailable)
+			case strings.Contains(q, "paged") || strings.Contains(q, "flaky"):
+				if page == 1 {
+					_, _ = w.Write([]byte(strings.Replace(series, "</body>", x1337Next(2)+"</body>", 1)))
+				} else {
+					_, _ = w.Write([]byte(seriesP2))
+				}
 			default:
-				_, _ = w.Write([]byte(series))
+				_, _ = w.Write([]byte(strings.Replace(series, "</tbody>", extra+"</tbody>", 1)))
 			}
 		case strings.HasPrefix(r.URL.Path, "/torrent/"):
 			parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 			id, _ := strconv.Atoi(parts[1])
-			if id == 1006 {
+			s.mu.Lock()
+			s.detailPaths = append(s.detailPaths, r.URL.Path)
+			none := id == 1006 || s.noMagnet[id]
+			s.mu.Unlock()
+			if none {
 				_, _ = w.Write([]byte(noMagnet))
 				return
 			}
@@ -60,6 +107,18 @@ func x1337Handler(t *testing.T, hits *int32) http.Handler {
 			http.NotFound(w, r)
 		}
 	})
+}
+
+func x1337Handler(t *testing.T, hits *int32) http.Handler {
+	return (&x1337Site{}).handler(t, hits)
+}
+
+func x1337SiteStub(t *testing.T, site *x1337Site) *X1337 {
+	t.Helper()
+	srv := httptest.NewServer(site.handler(t, nil))
+	t.Cleanup(srv.Close)
+	setX1337Bases(t, srv.URL)
+	return NewX1337()
 }
 
 func x1337Stub(t *testing.T, hits *int32) *X1337 {
@@ -403,5 +462,101 @@ func TestX1337Size(t *testing.T) {
 		if got := x1337Size(in); got != want {
 			t.Errorf("x1337Size(%q) = %d, want %d", in, got, want)
 		}
+	}
+}
+
+func TestX1337ServerIDsSurviveACacheExpiryThatReordersReleases(t *testing.T) {
+	site := &x1337Site{}
+	x := x1337SiteStub(t, site)
+	res, _ := x.Search("Severance")
+	servers, err := x.GetServers(res[0].ID, "2x10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chosen := servers[1]
+	if !strings.HasPrefix(chosen.Name, "1080p ") {
+		t.Fatalf("servers[1] = %+v, want the 1080p server", chosen)
+	}
+
+	site.mu.Lock()
+	site.extraRows = x1337HTMLRow(1007, "Severance S02E10 2160p 4K-Z", 900) + x1337HTMLRow(1008, "Severance S02E10 1080p x265-Z", 500)
+	site.mu.Unlock()
+	x.mu.Lock()
+	x.cache = map[string]x1337CacheEntry{}
+	x.mu.Unlock()
+
+	st, err := x.Watch(res[0].ID, "2x10", chosen.ID, "best")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(st.URL, x1337Hash(1002)) {
+		t.Fatalf("server %q resolved to a different release after the list changed: %s", chosen.ID, st.URL)
+	}
+}
+
+func TestX1337WatchTriesSameQualityAlternativesBeforeChangingQuality(t *testing.T) {
+	site := &x1337Site{noMagnet: map[int]bool{1002: true}}
+	x := x1337SiteStub(t, site)
+	res, _ := x.Search("Severance")
+	st, err := x.Watch(res[0].ID, "2x10", "", "1080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(st.URL, x1337Hash(1001)) || st.Quality != "1080p" {
+		t.Fatalf("stream = %+v, want the other 1080p release 1001", st)
+	}
+	got := site.detailRequests()
+	if len(got) != 2 || !strings.HasPrefix(got[0], "/torrent/1002/") || !strings.HasPrefix(got[1], "/torrent/1001/") {
+		t.Fatalf("detail pages asked = %v, want 1002 then 1001", got)
+	}
+}
+
+func TestX1337ListsEpisodesFromLaterSearchPages(t *testing.T) {
+	site := &x1337Site{}
+	x := x1337SiteStub(t, site)
+	res, err := x.Search("Severance paged")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seasons, _ := x.GetSeasons(res[0].ID)
+	if len(seasons) != 3 || seasons[2].Number != 3 {
+		t.Fatalf("seasons = %+v, want season 3 from page 2", seasons)
+	}
+	eps, _ := x.GetEpisodes(res[0].ID, "3")
+	if len(eps) != 1 || eps[0].ID != "3x4" {
+		t.Fatalf("episodes = %+v", eps)
+	}
+	st, err := x.Watch(res[0].ID, "3x4", "", "best")
+	if err != nil || !strings.Contains(st.URL, x1337Hash(1010)) {
+		t.Fatalf("stream = %+v, err = %v", st, err)
+	}
+}
+
+func TestX1337SearchPagesAreCapped(t *testing.T) {
+	site := &x1337Site{}
+	x := x1337SiteStub(t, site)
+	if _, err := x.Search("endless"); err != nil {
+		t.Fatal(err)
+	}
+	site.mu.Lock()
+	n := len(site.searchPaths)
+	site.mu.Unlock()
+	if n != x1337MaxPages {
+		t.Fatalf("search pages fetched = %d, want the cap %d", n, x1337MaxPages)
+	}
+}
+
+func TestX1337KeepsEarlierPagesWhenALaterPageFailsAndDoesNotCacheThem(t *testing.T) {
+	site := &x1337Site{}
+	x := x1337SiteStub(t, site)
+	res, err := x.Search("Severance flaky")
+	if err != nil || len(res) != 1 {
+		t.Fatalf("results = %v, err = %v; page 1 should still answer", res, err)
+	}
+	x.mu.Lock()
+	cached := len(x.cache)
+	x.mu.Unlock()
+	if cached != 0 {
+		t.Fatal("a partially fetched result list was cached")
 	}
 }
