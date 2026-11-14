@@ -147,7 +147,8 @@ replaced with `flixhq.ws` (`auto` when `torrent_fallback` is on) with a
 warning, so `lobster doctor` keeps working; an explicit `--base` naming one is
 an error that says so. Both apply only when `api_url` is unset: with `api_url`
 configured, `base` is never read, so a retired value is left alone with no
-warning, `--base` accepts it, and the API provider is used.
+warning, `--base` accepts it, and the API provider is used. (A ref stamped with
+a retired source still warns and is ignored.)
 
 A failure at `search` usually means a moved domain or a renamed field. A failure
 at `watch` or `embed` means the player changed. Pass a title to probe with
