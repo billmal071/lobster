@@ -145,7 +145,9 @@ FlixHQ (`flixhq.to`), KimCartoon, AllAnime and AniPub were retired on
 with nothing to fix on lobster's side. A config file still naming one is
 replaced with `flixhq.ws` (`auto` when `torrent_fallback` is on) with a
 warning, so `lobster doctor` keeps working; an explicit `--base` naming one is
-an error that says so.
+an error that says so. Both apply only when `api_url` is unset: with `api_url`
+configured, `base` is never read, so a retired value is left alone with no
+warning, `--base` accepts it, and the API provider is used.
 
 A failure at `search` usually means a moved domain or a renamed field. A failure
 at `watch` or `embed` means the player changed. Pass a title to probe with
@@ -294,7 +296,8 @@ never mentioned `--base`:
   searches the fallback providers, so some rows can come from them). Fix the spelling rather than retrying. (A base
   naming a retired source — `soap2day`, `vaplayer` — is rejected outright
   when passed as `--base`; in the config file it is replaced with `flixhq.ws`
-  (`auto` under `torrent_fallback`) with a warning.)
+  (`auto` under `torrent_fallback`) with a warning; neither happens when
+  `api_url` is set.)
 
 `episodes` carries the same array for a different question — whether the
 listing is the whole season:
@@ -402,8 +405,8 @@ download_dir = "~/Videos/lobster"
 # All other providers are automatically used as fallbacks (the torrent ones
 # only with torrent_fallback = true).
 # Retired (replaced with "flixhq.ws" — "auto" under torrent_fallback — with a
-# warning here; an error as --base): soap2day, moviebox, vidnest, flixhq.to,
-# kimcartoon, allanime, anipub, vaplayer.
+# warning here; an error as --base; neither when api_url is set): soap2day,
+# moviebox, vidnest, flixhq.to, kimcartoon, allanime, anipub, vaplayer.
 # What each value covers, and which of them cannot list a series' episodes, is
 # in GUIDE.md -> "Content sources"; `lobster doctor` reports which are working
 # right now. Changing base loses in-progress resume positions, because history

@@ -263,8 +263,8 @@ player = "mpv"
 # Available: auto, flixhq.ws, tbcpl, 1shows.org, animeonsen, yts,
 # nyaa, eztv (the last three are BitTorrent — see "Content sources")
 # Retired (replaced with "flixhq.ws" — "auto" under torrent_fallback — with a
-# warning here; an error as --base): soap2day, moviebox, vidnest, flixhq.to,
-# kimcartoon, allanime, anipub, vaplayer.
+# warning here; an error as --base; neither when api_url is set): soap2day,
+# moviebox, vidnest, flixhq.to, kimcartoon, allanime, anipub, vaplayer.
 # See "Content sources" below for what each one covers.
 base = "auto"
 
@@ -401,7 +401,9 @@ left in the config file is replaced with `flixhq.ws` (`auto` when
 `torrent_fallback` is on) with a one-line warning naming it, so no command (least of all `lobster doctor`, which lists what still
 works) is locked out by a stale file; a ref stamped with one plays on the
 configured source with a one-line warning, since `play` re-searches by title
-anyway.
+anyway. None of the above applies when `api_url` is set: `base` is never read then,
+so a retired value is left alone with no warning, `--base` accepts it, and the
+API provider is used.
 
 **Any other value lobster does not recognise is not an error.** Values are
 matched by substring, so anything still containing a known name works —
