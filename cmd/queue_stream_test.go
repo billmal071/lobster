@@ -42,7 +42,7 @@ func (p *slowWatch) Watch(a, b, c, d string) (*media.Stream, error) {
 // TestMakeStreamResolverTriesNextProviderWhenWinnerIsUnqueueable checks that the queue resolver moves on to a downloadable HLS source when the first provider answers with a DASH manifest.
 func TestMakeStreamResolverTriesNextProviderWhenWinnerIsUnqueueable(t *testing.T) {
 	prev := cfg
-	cfg = &config.Config{Base: "vaplayer", Quality: "1080"}
+	cfg = &config.Config{Base: "flixhq.ws", Quality: "1080"}
 	t.Cleanup(func() { cfg = prev })
 
 	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusPartialContent) }))
@@ -64,7 +64,7 @@ func TestMakeStreamResolverTriesNextProviderWhenWinnerIsUnqueueable(t *testing.T
 // TestMakeStreamResolverTriesThePrimaryProvider checks that the queue resolver tries the primary provider, so a download whose only source is the primary still resolves.
 func TestMakeStreamResolverTriesThePrimaryProvider(t *testing.T) {
 	prev := cfg
-	cfg = &config.Config{Base: "vaplayer", Quality: "1080"}
+	cfg = &config.Config{Base: "flixhq.ws", Quality: "1080"}
 	t.Cleanup(func() { cfg = prev })
 
 	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusPartialContent) }))

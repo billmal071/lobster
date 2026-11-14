@@ -408,7 +408,7 @@ func listSeasonEpisodes(p provider.Provider, src seasonAnswer, sel media.Season)
 // providerLabel names a provider for the JSON envelope. provider.Provider has
 // no Name method — cmd/fallback_providers_test.go reaches for %T for the same
 // reason — so the concrete type is reduced to a lowercase token:
-// *provider.VaPlayer becomes "vaplayer".
+// *provider.TBCPL becomes "tbcpl".
 //
 // It is an attribution, not a --base value: episodes answers from whichever
 // provider could enumerate the ref, which is often not the configured primary

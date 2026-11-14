@@ -105,7 +105,7 @@ func applyRefBase(cmd *cobra.Command, r playRef) {
 	base := config.NormalizeBase(r.Base)
 	// A ref stamped with a retired source (config.RetiredBase) still names
 	// the work: play re-searches by title through the chain (cmd/ref.go), and
-	// older soap2day refs carry TMDB IDs VaPlayer reads. Ignore the stamp,
+	// older soap2day and vaplayer refs carry TMDB IDs. Ignore the stamp,
 	// stay on the configured base, and say so once. The play envelope has no
 	// warnings field, so this is stderr in --json mode too.
 	if name, reason, ok := config.RetiredBase(base); ok {

@@ -3,18 +3,15 @@ package config
 import "testing"
 
 // The default Base is what every invocation uses when there is no config.toml
-// and no --base, so it has to be a source that can actually answer.
+// and no --base. It is the sentinel "auto", not a named source: cmd/provider.go
+// maps it to the general-purpose source (flixhq.ws), and cmd/typeroute.go reads
+// it as "no preference expressed", so lobster may pick per content type (films
+// to YTS where it has them, since YTS has no TV catalogue). Any explicit
+// value — flag or config file — is left alone.
 //
-// flixhq.ws cannot. Measured 2026-09-09 against Marvel's Agents of
-// S.H.I.E.L.D. (tv/1403, 22 episodes in season 1), `episodes --season 1`
-// returned HTTP 404 from flixhq.ws while soap2day, vaplayer and tbcpl each
-// returned the correct 22 — so with no config.toml on disk the default
-// invocation was pointed at a source that cannot enumerate a series at all.
-//
-// The replacement is the sentinel "auto", which cmd/provider.go maps to a live
-// general-purpose source and cmd/typeroute.go uses as the signal that the user
-// has expressed no preference, so lobster may pick per content type. Any
-// explicit value — flag or config file — is left alone.
+// flixhq.ws returned HTTP 404 on TV season listing on 2026-09-09; on
+// 2026-11-13 one show (Severance) listed its season through it again. That is
+// a single measurement, so this test pins "auto", not the source behind it.
 func TestDefaultBaseIsAuto(t *testing.T) {
 	got := Default().Base
 	if got == "flixhq.ws" {
