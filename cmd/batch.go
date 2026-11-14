@@ -178,7 +178,7 @@ func openBatchStream(chainPrimary provider.Provider, selected media.SearchResult
 		return served, closeTorrent, nil
 	}
 	debugf("torrent setup failed for %s S%dE%d, trying streaming providers: %v", selected.Title, seasonNum, ep.Number, err)
-	fb, fbErr := tryFallbackStreamFrom(withoutMagnetSources(agentFallbackProviders(chainPrimary)), selected, seasonNum, ep.Number)
+	fb, fbErr := tryFallbackStreamFrom(withoutMagnetSources(streamChain(chainPrimary)), selected, seasonNum, ep.Number)
 	if fbErr != nil {
 		return nil, nil, fmt.Errorf("%w; streaming fallback: %v", err, fbErr)
 	}

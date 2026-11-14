@@ -38,7 +38,7 @@ func (*torrentDouble) ServesMagnets() {}
 // (validation on), so this is the cmd-level guard for that path.
 func TestTryFallbackStreamYieldsAMagnetWhenScrapersFail(t *testing.T) {
 	prev := cfg
-	cfg = &config.Config{Base: "vaplayer", Quality: "1080", TorrentFallback: true}
+	cfg = &config.Config{Base: "flixhq.ws", Quality: "1080", TorrentFallback: true}
 	t.Cleanup(func() { cfg = prev })
 
 	const magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Show"
@@ -71,17 +71,17 @@ func TestTryFallbackStreamYieldsAMagnetWhenScrapersFail(t *testing.T) {
 // torrent sources must not be in its race at all: a magnet winning fails the
 // download while a scraper that could have served it is abandoned.
 func TestWithoutMagnetSourcesDropsTorrentProviders(t *testing.T) {
-	chain := []provider.Provider{provider.NewEZTV(), provider.NewVaPlayer(), provider.NewNyaa(), provider.NewYTS(), provider.NewFlixHQWS("flixhq.ws")}
+	chain := []provider.Provider{provider.NewEZTV(), provider.NewTBCPL("tbcpl"), provider.NewNyaa(), provider.NewYTS(), provider.NewFlixHQWS("flixhq.ws")}
 	got := withoutMagnetSources(chain)
-	if len(got) != 2 || !hasProvider[*provider.VaPlayer](got) || !hasProvider[*provider.FlixHQWS](got) {
-		t.Fatalf("withoutMagnetSources = %v, want VaPlayer and FlixHQWS only", providerNames(got))
+	if len(got) != 2 || !hasProvider[*provider.TBCPL](got) || !hasProvider[*provider.FlixHQWS](got) {
+		t.Fatalf("withoutMagnetSources = %v, want TBCPL and FlixHQWS only", providerNames(got))
 	}
 }
 
 // TestMakeStreamResolverSkipsTorrentSourcesForTheQueue checks that the queue resolver returns the downloadable scraper's stream and never asks the torrent source for one.
 func TestMakeStreamResolverSkipsTorrentSourcesForTheQueue(t *testing.T) {
 	prev := cfg
-	cfg = &config.Config{Base: "vaplayer", Quality: "1080", TorrentFallback: true}
+	cfg = &config.Config{Base: "flixhq.ws", Quality: "1080", TorrentFallback: true}
 	t.Cleanup(func() { cfg = prev })
 
 	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusPartialContent) }))
@@ -113,7 +113,7 @@ func TestMakeStreamResolverSkipsTorrentSourcesForTheQueue(t *testing.T) {
 // TestMakeStreamResolverDoesNotFallBackToTheTorrentTierWhenScrapersFail checks that the queue resolver fails without asking a torrent source for a stream when every scraper fails, instead of running the torrent tier.
 func TestMakeStreamResolverDoesNotFallBackToTheTorrentTierWhenScrapersFail(t *testing.T) {
 	prev := cfg
-	cfg = &config.Config{Base: "vaplayer", Quality: "1080", TorrentFallback: true}
+	cfg = &config.Config{Base: "flixhq.ws", Quality: "1080", TorrentFallback: true}
 	t.Cleanup(func() { cfg = prev })
 
 	torrent := &watchCountingTorrent{torrentDouble: &torrentDouble{magnetProvider{
@@ -155,7 +155,7 @@ func TestResolveBatchStreamAsksTheSelectedTorrentSourceFirst(t *testing.T) {
 	}
 
 	// A streaming base keeps the chain-only behaviour.
-	cfg.Base = "vaplayer"
+	cfg.Base = "flixhq.ws"
 	if _, err := resolveBatchStream(primary, sel, media.Episode{Number: 2, ID: "2"}, 1); err == nil {
 		t.Fatal("a non-torrent primary was asked directly; want the chain's failure")
 	}
@@ -209,7 +209,7 @@ func TestOpenBatchStreamFallsBackWhenTorrentSetupFails(t *testing.T) {
 // TestTryFallbackStreamPrefersASlowScraperOverAFastMagnet checks that a slow scraper wins over an instant magnet, because the torrent tier runs only after every scraper fails.
 func TestTryFallbackStreamPrefersASlowScraperOverAFastMagnet(t *testing.T) {
 	prev := cfg
-	cfg = &config.Config{Base: "vaplayer", Quality: "1080", TorrentFallback: true}
+	cfg = &config.Config{Base: "flixhq.ws", Quality: "1080", TorrentFallback: true}
 	t.Cleanup(func() { cfg = prev })
 
 	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -241,7 +241,7 @@ func TestTryFallbackStreamPrefersASlowScraperOverAFastMagnet(t *testing.T) {
 // TestTryFallbackStreamFallsBackToMagnetWhenEveryScraperFails checks that the torrent tier supplies the magnet when every scraper fails.
 func TestTryFallbackStreamFallsBackToMagnetWhenEveryScraperFails(t *testing.T) {
 	prev := cfg
-	cfg = &config.Config{Base: "vaplayer", Quality: "1080", TorrentFallback: true}
+	cfg = &config.Config{Base: "flixhq.ws", Quality: "1080", TorrentFallback: true}
 	t.Cleanup(func() { cfg = prev })
 
 	const magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Show"
@@ -264,9 +264,9 @@ func TestTryFallbackStreamFallsBackToMagnetWhenEveryScraperFails(t *testing.T) {
 
 // TestOnlyMagnetSourcesKeepsTorrentProviders checks that onlyMagnetSources keeps the torrent providers of a chain and drops the rest.
 func TestOnlyMagnetSourcesKeepsTorrentProviders(t *testing.T) {
-	chain := []provider.Provider{provider.NewEZTV(), provider.NewVaPlayer(), provider.NewNyaa(), provider.NewYTS()}
+	chain := []provider.Provider{provider.NewEZTV(), provider.NewTBCPL("tbcpl"), provider.NewNyaa(), provider.NewYTS()}
 	got := onlyMagnetSources(chain)
-	if len(got) != 3 || hasProvider[*provider.VaPlayer](got) {
+	if len(got) != 3 || hasProvider[*provider.TBCPL](got) {
 		t.Fatalf("onlyMagnetSources = %v, want the three torrent providers", providerNames(got))
 	}
 }
@@ -274,7 +274,7 @@ func TestOnlyMagnetSourcesKeepsTorrentProviders(t *testing.T) {
 // TestResolveStreamSkipsTheTorrentTierUnderJSON checks that under --json the torrent providers are never probed.
 func TestResolveStreamSkipsTheTorrentTierUnderJSON(t *testing.T) {
 	prev, prevJSON := cfg, flagJSON
-	cfg = &config.Config{Base: "vaplayer", Quality: "1080", TorrentFallback: true}
+	cfg = &config.Config{Base: "flixhq.ws", Quality: "1080", TorrentFallback: true}
 	flagJSON = true
 	t.Cleanup(func() { cfg, flagJSON = prev, prevJSON })
 

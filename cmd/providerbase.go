@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"lobster/internal/config"
 	"lobster/internal/provider"
 )
 
@@ -28,8 +29,6 @@ func providerBase(p provider.Provider) string {
 		return "flixhq.ws"
 	case *provider.TBCPL:
 		return "tbcpl"
-	case *provider.VaPlayer:
-		return "vaplayer"
 	case *provider.YTS:
 		return "yts"
 	case *provider.AnimeOnsen:
@@ -54,15 +53,15 @@ var searchProviderBase = providerBase
 
 // fallThroughBase is the token of the provider newProvider builds when no arm
 // matches the configured base. newProvider has no unknown-base arm: it ends in
-// an unconditional VaPlayer, so `--base sopa2day` silently searches VaPlayer.
+// an unconditional FlixHQWS, so `--base sopa2day` silently searches FlixHQWS.
 //
 // It is derived from providerBase rather than written out, so the spelling
 // cannot drift from the table above, and
 // TestFallThroughBaseIsWhatAnUnrecognisedBaseActuallySelects pins the
-// remaining half — that VaPlayer is still what an unrecognised base reaches —
+// remaining half — that FlixHQWS is still what an unrecognised base reaches —
 // against newProvider itself. A second switch mirroring newProvider's arms is
 // what that test exists to make unnecessary.
-var fallThroughBase = providerBase(provider.NewVaPlayer())
+var fallThroughBase = providerBase(provider.NewFlixHQWS(autoBase))
 
 // baseNamedThePrimary reports whether the configured base token actually
 // selected the provider that answered, rather than being a value newProvider
@@ -77,14 +76,13 @@ var fallThroughBase = providerBase(provider.NewVaPlayer())
 //
 // The fall-through is the one primary that cannot be read that way, because
 // it is where every unrecognised value lands, and there the configured value
-// has to be that exact token. Containment is not enough: "notvaplayer"
-// reaches VaPlayer through the same default branch "sopa2day" does, so
-// matching it by substring would call a base that selected nothing an
-// explicit VaPlayer base — and would then stamp "notvaplayer", a source that
-// does not exist, onto rows VaPlayer produced.
+// has to be that exact token or a spelling newProvider's own FlixHQWS arm
+// accepts (config.IsFlixHQWSBase). Anything else reaches FlixHQWS through the
+// same default branch "sopa2day" does, so calling it an explicit FlixHQWS
+// base would stamp a source that does not exist onto rows FlixHQWS produced.
 func baseNamedThePrimary(configured, primaryBase string) bool {
 	if primaryBase != fallThroughBase {
 		return true
 	}
-	return configured == fallThroughBase
+	return configured == fallThroughBase || config.IsFlixHQWSBase(configured)
 }

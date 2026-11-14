@@ -125,8 +125,8 @@ func TestFallbackProvidersOmitsConsumetWithNilConfig(t *testing.T) {
 	}
 }
 
-// The chain is exactly the sources verified working on 2026-11-07, in
-// priority order: VaPlayer, TBCPL, FlixHQWS, AnimeOnsen. (TBCPLEmbed joins
+// The chain is exactly the sources verified working on 2026-11-13, in
+// priority order: TBCPL, FlixHQWS, AnimeOnsen. (TBCPLEmbed joins
 // when the catalog feed is on, Consumet when api_url is set, YTS when
 // torrent_fallback is set — none of which this fixture enables.)
 func TestFallbackProvidersIsExactlyTheWorkingSources(t *testing.T) {
@@ -134,7 +134,7 @@ func TestFallbackProvidersIsExactlyTheWorkingSources(t *testing.T) {
 	cfg = &config.Config{}
 	t.Cleanup(func() { cfg = prev })
 
-	want := []string{"*provider.VaPlayer", "*provider.TBCPL", "*provider.FlixHQWS", "*provider.AnimeOnsen"}
+	want := []string{"*provider.TBCPL", "*provider.FlixHQWS", "*provider.AnimeOnsen"}
 	got := providerNames(fallbackProviders(nil))
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("fallbackProviders(nil) = %v, want %v", got, want)
@@ -142,16 +142,16 @@ func TestFallbackProvidersIsExactlyTheWorkingSources(t *testing.T) {
 }
 
 // The primary is excluded from its own chain, so under the default
-// (autoBase = VaPlayer) the resolver's chain starts at TBCPL.
-func TestFallbackProvidersExcludesTheVaPlayerPrimary(t *testing.T) {
+// (autoBase = FlixHQWS) the resolver's chain starts at TBCPL.
+func TestFallbackProvidersExcludesTheFlixHQWSPrimary(t *testing.T) {
 	prev := cfg
 	cfg = &config.Config{}
 	t.Cleanup(func() { cfg = prev })
 
-	want := []string{"*provider.TBCPL", "*provider.FlixHQWS", "*provider.AnimeOnsen"}
-	got := providerNames(fallbackProviders(provider.NewVaPlayer()))
+	want := []string{"*provider.TBCPL", "*provider.AnimeOnsen"}
+	got := providerNames(fallbackProviders(provider.NewFlixHQWS("flixhq.ws")))
 	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("fallbackProviders(VaPlayer) = %v, want %v", got, want)
+		t.Fatalf("fallbackProviders(FlixHQWS) = %v, want %v", got, want)
 	}
 }
 
@@ -171,6 +171,7 @@ func TestFallbackProvidersNeverIncludesARetiredSource(t *testing.T) {
 		"KimCartoon": hasProvider[*provider.KimCartoon](got),
 		"AllAnime":   hasProvider[*provider.AllAnime](got),
 		"AniPub":     hasProvider[*provider.AniPub](got),
+		"VaPlayer":   hasProvider[*provider.VaPlayer](got),
 	} {
 		if present {
 			t.Errorf("%s is retired and must not be in the fallback chain: %v", name, providerNames(got))

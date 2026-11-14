@@ -131,19 +131,19 @@ Provider health (query: "The Matrix")
   ok   FlixHQWS       3.815s           4 results, 3 servers, embed via Vidmoly
   ok   TBCPL          1.912s           18 results, stream resolved
   ok   TBCPL(1shows)  2.102s           18 results, stream resolved
-  ok   VaPlayer       1.204s           20 results, stream resolved
   ok   YTS            0.871s           12 results, magnet resolved
   ok   EZTV           1.530s           5 results, magnet resolved
   ok   Nyaa           0.912s           8 results, magnet resolved
   FAIL AnimeOnsen     4.310s  search   no results for "One Punch Man"
 
-7 of 8 providers usable.
+6 of 7 providers usable.
 ```
 
 Only sources lobster still wires in are probed. Soap2Day, MovieBox, VidNest,
 FlixHQ (`flixhq.to`), KimCartoon, AllAnime and AniPub were retired on
-2026-11-07 after each was verified dead upstream with nothing to fix on
-lobster's side. A config file still naming one is treated as `auto` with a
+2026-11-07, and VaPlayer on 2026-11-13, after each was verified dead upstream
+with nothing to fix on lobster's side. A config file still naming one is
+replaced with `flixhq.ws` (`auto` when `torrent_fallback` is on) with a
 warning, so `lobster doctor` keeps working; an explicit `--base` naming one is
 an error that says so.
 
@@ -289,12 +289,12 @@ never mentioned `--base`:
   source's rows.
 - `{"code": "base_unknown", "base": "sopa2day", "results_from_base": 0,
   "results_total": 20}` — the value passed to `--base` names no source at all.
-  An unrecognised base is not rejected; it falls through to VaPlayer, the
-  primary (when VaPlayer returns fewer than three results, `find` also
+  An unrecognised base is not rejected; it falls through to FlixHQWS, the
+  primary (when FlixHQWS returns fewer than three results, `find` also
   searches the fallback providers, so some rows can come from them). Fix the spelling rather than retrying. (A base
-  naming a retired source — `soap2day`, `moviebox` — is rejected outright
-  when passed as `--base`; in the config file it is downgraded to `auto` with
-  a warning.)
+  naming a retired source — `soap2day`, `vaplayer` — is rejected outright
+  when passed as `--base`; in the config file it is replaced with `flixhq.ws`
+  (`auto` under `torrent_fallback`) with a warning.)
 
 `episodes` carries the same array for a different question — whether the
 listing is the whole season:
@@ -395,14 +395,15 @@ download_dir = "~/Videos/lobster"
 # Provider selection (default: auto)
 # "auto" means "no preference": movies play from YTS where YTS carries them,
 # series always go to a scraping source (YTS has no TV catalogue), and
-# anything YTS does not carry falls back to vaplayer. Any other value is an
+# anything YTS does not carry falls back to flixhq.ws. Any other value is an
 # explicit choice and is used for both content types.
-# Available: auto, vaplayer, flixhq.ws, tbcpl, 1shows.org, animeonsen, yts,
+# Available: auto, flixhq.ws, tbcpl, 1shows.org, animeonsen, yts,
 # nyaa (anime torrents), eztv (TV series torrents)
 # All other providers are automatically used as fallbacks (the torrent ones
 # only with torrent_fallback = true).
-# Retired (treated as "auto" with a warning here; an error as --base):
-# soap2day, moviebox, vidnest, flixhq.to, kimcartoon, allanime, anipub.
+# Retired (replaced with "flixhq.ws" — "auto" under torrent_fallback — with a
+# warning here; an error as --base): soap2day, moviebox, vidnest, flixhq.to,
+# kimcartoon, allanime, anipub, vaplayer.
 # What each value covers, and which of them cannot list a series' episodes, is
 # in GUIDE.md -> "Content sources"; `lobster doctor` reports which are working
 # right now. Changing base loses in-progress resume positions, because history
@@ -414,7 +415,7 @@ download_dir = "~/Videos/lobster"
 # downloading, but also make you a participant in the swarm: your IP is visible to every peer
 # and to the monitoring firms that sit in them, which ordinary streaming never
 # does. This applies to the default install, because "auto" plays movies from
-# YTS — set base = "vaplayer" (or another explicit non-torrent source, or
+# YTS — set base = "flixhq.ws" (or another explicit non-torrent source, or
 # api_url) and leave torrent_fallback false to never join a swarm. Naming yts,
 # nyaa or eztv joins one even with torrent_fallback false. Otherwise use a VPN.
 # Needs a 64-bit build, or the classic storage backend, which lobster selects
