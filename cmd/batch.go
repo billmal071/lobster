@@ -200,7 +200,7 @@ func resolveBatchStream(chainPrimary provider.Provider, selected media.SearchRes
 	debugf("resolving stream via fallback providers for %s S%dE%d", selected.Title, seasonNum, ep.Number)
 	stream, err := tryFallbackStream(chainPrimary, selected, seasonNum, ep.Number)
 	if err != nil {
-		return nil, fmt.Errorf("all providers failed: %w", err)
+		return nil, allProvidersFailed(err)
 	}
 	return stream, nil
 }
