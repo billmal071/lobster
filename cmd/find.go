@@ -190,10 +190,10 @@ func baseBroadeningWarnings(configured, primaryBase string, results []media.Sear
 		return nil
 	}
 	// A base that selected nothing. newProvider has no unknown-base arm, so
-	// `--base sopa2day` searches VaPlayer and primaryBase becomes "vaplayer";
+	// `--base sopa2day` searches FlixHQWS and primaryBase becomes "flixhq.ws";
 	// tallying rows against it would count another provider's answers as the
 	// requested base's and, when it answered in full, say nothing at all —
-	// while every ref in the same response honestly reads "vaplayer".
+	// while every ref in the same response honestly reads "flixhq.ws".
 	if !baseNamedThePrimary(configured, primaryBase) {
 		return []map[string]any{{
 			"code":              "base_unknown",
@@ -253,15 +253,15 @@ func baseBroadeningWarnings(configured, primaryBase string, results []media.Sear
 //     primary until FlixHQ was retired) would be restamped with the primary's
 //     spelling and replay against the wrong source.
 //   - "still names that provider" — newProvider has no unknown-base arm and
-//     falls through to VaPlayer, so `--base nonesuch` yields VaPlayer rows.
+//     falls through to FlixHQWS, so `--base nonesuch` yields FlixHQWS rows.
 //     Echoing "nonesuch" back would name a source that does not exist;
-//     "vaplayer" is what actually answered. config.BaseAuto is excluded by the
+//     "flixhq.ws" is what actually answered. config.BaseAuto is excluded by the
 //     same test, which is what it deserves: "auto" names no provider, it
 //     licenses routing movies to YTS and opening a magnet (cmd/typeroute.go,
 //     cmd/root.go).
 //
 // Containment alone does not settle the second half, which is why
-// baseNamedThePrimary is asked as well: "notvaplayer" contains the
+// baseNamedThePrimary is asked as well: a value can contain the
 // fall-through's token while selecting nothing, and the two tests disagree
 // only there. Keeping both is deliberate — containment is what says the
 // caller's spelling is a more precise form of the same token and so worth

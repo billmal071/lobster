@@ -15,19 +15,22 @@ func withBase(t *testing.T, b string) {
 	prev := cfg
 	cfg = &config.Config{Base: b, Quality: "1080", Player: "mpv"}
 	t.Cleanup(func() { cfg = prev })
+	prevResolve := resolveDomain
+	resolveDomain = func(configured, _ string, _ map[string][]string) string { return configured }
+	t.Cleanup(func() { resolveDomain = prevResolve })
 }
 
 // "auto" is the default Base, so whatever newProvider returns for it is the
 // primary every plain `lobster <query>` uses to search and, for a series, to
 // enumerate seasons. It has to be a source that is alive and enumerates
-// seasons truthfully: VaPlayer since 2026-11-07 (Soap2Day, the previous pick,
-// lost its backend and is retired — config.RetiredBase).
+// seasons truthfully: FlixHQWS since 2026-11-13 (VaPlayer, the previous pick,
+// stopped returning stream URLs and is retired — config.RetiredBase).
 func TestNewProviderMapsAutoBaseToALiveGeneralSource(t *testing.T) {
 	withBase(t, "auto")
 
 	p := newProvider()
-	if _, ok := p.(*provider.VaPlayer); !ok {
-		t.Fatalf("newProvider() under base=auto = %T, want *provider.VaPlayer", p)
+	if _, ok := p.(*provider.FlixHQWS); !ok {
+		t.Fatalf("newProvider() under base=auto = %T, want *provider.FlixHQWS", p)
 	}
 }
 
@@ -39,7 +42,6 @@ func TestNewProviderStillHonoursAnExplicitBase(t *testing.T) {
 	t.Cleanup(func() { resolveDomain = prevResolve })
 	for base, want := range map[string]string{
 		"yts":        "*provider.YTS",
-		"vaplayer":   "*provider.VaPlayer",
 		"flixhq.ws":  "*provider.FlixHQWS",
 		"tbcpl":      "*provider.TBCPL",
 		"1shows.org": "*provider.TBCPL",
@@ -89,25 +91,25 @@ func TestALoudlySpelledAutoIsAutoForEveryReaderOfBase(t *testing.T) {
 	if !baseIsAuto() {
 		t.Errorf("baseIsAuto(base=%q) = false; a loudly spelled auto is still no preference, so movies must route to YTS", c.Base)
 	}
-	if p := newProvider(); func() bool { _, ok := p.(*provider.VaPlayer); return !ok }() {
-		t.Errorf("newProvider(base=%q) = %T, want *provider.VaPlayer (autoBase)", c.Base, p)
+	if p := newProvider(); func() bool { _, ok := p.(*provider.FlixHQWS); return !ok }() {
+		t.Errorf("newProvider(base=%q) = %T, want *provider.FlixHQWS (autoBase)", c.Base, p)
 	}
 }
 
 // newProvider matches by substring and has no "unknown base" arm, so a typo
-// does not fail — it falls through to VaPlayer, the same source autoBase
+// does not fail — it falls through to FlixHQWS, the same source autoBase
 // names. GUIDE.md's "Content sources" table warns about exactly this, so pin
 // the behaviour the warning describes. (A typo that still contains a retired
 // source's name — "soap2days" — is a different case: config.RetiredBase
 // matches it, see TestRetiredBaseSpellings in internal/config.)
-func TestAnUnrecognisedBaseFallsThroughToVaPlayer(t *testing.T) {
+func TestAnUnrecognisedBaseFallsThroughToFlixHQWS(t *testing.T) {
 	// Chosen not to contain any recognised name as a substring: "flixhq.xx"
 	// would still match FlixHQ's retired token, because the test is
 	// Contains, not equality.
 	for _, base := range []string{"sopa2day", "flixq.to", "nonesuch"} {
 		withBase(t, base)
-		if _, ok := newProvider().(*provider.VaPlayer); !ok {
-			t.Fatalf("newProvider(base=%q) = %T, want *provider.VaPlayer", base, newProvider())
+		if _, ok := newProvider().(*provider.FlixHQWS); !ok {
+			t.Fatalf("newProvider(base=%q) = %T, want *provider.FlixHQWS", base, newProvider())
 		}
 	}
 }
@@ -119,7 +121,7 @@ func TestAnUnrecognisedBaseFallsThroughToVaPlayer(t *testing.T) {
 // config file is downgraded to auto by config.Load (asserted below), since
 // refusing it there locked the user out of every command, `doctor` included.
 func TestARetiredBaseFlagIsRejectedLoudly(t *testing.T) {
-	for _, base := range []string{"soap2day", "moviebox", "vidnest", "kimcartoon", "allanime", "anipub", "flixhq.to", "flixhq", "SOAP2DAY", "soap2days"} {
+	for _, base := range []string{"soap2day", "moviebox", "vidnest", "kimcartoon", "allanime", "anipub", "flixhq.to", "flixhq", "SOAP2DAY", "soap2days", "vaplayer", "VAPLAYER", " vaplayer ", "vaplayer.ru"} {
 		t.Run(base, func(t *testing.T) {
 			r := runCLI(t, "--base", base, "version")
 			if r.err == nil {
@@ -140,7 +142,7 @@ func TestARetiredBaseFlagIsRejectedLoudly(t *testing.T) {
 }
 
 // A config file naming a retired source must not fail every command: the
-// value is downgraded to vaplayer (auto only under torrent_fallback) with one
+// value is downgraded to flixhq.ws (auto only under torrent_fallback) with one
 // warning (config.Load), so `doctor` and `version` still run, and --base can
 // still pick a working source over it.
 func TestARetiredConfigBaseWarnsAndDoesNotLockTheUserOut(t *testing.T) {
@@ -149,19 +151,19 @@ func TestARetiredConfigBaseWarnsAndDoesNotLockTheUserOut(t *testing.T) {
 	if r.err != nil {
 		t.Fatalf("`version` under base = soap2day failed: %v", r.err)
 	}
-	if cfg.Base != config.BaseVaPlayer {
-		t.Errorf("base = %q after Load, want %q", cfg.Base, config.BaseVaPlayer)
+	if cfg.Base != config.BaseFlixHQWS {
+		t.Errorf("base = %q after Load, want %q", cfg.Base, config.BaseFlixHQWS)
 	}
-	if len(*warnings) != 1 || !strings.Contains((*warnings)[0], "Soap2Day") || !strings.Contains((*warnings)[0], "lobster doctor") || !strings.Contains((*warnings)[0], `"vaplayer"`) {
+	if len(*warnings) != 1 || !strings.Contains((*warnings)[0], "Soap2Day") || !strings.Contains((*warnings)[0], "lobster doctor") || !strings.Contains((*warnings)[0], `"flixhq.ws"`) {
 		t.Errorf("warnings = %q, want one line naming Soap2Day and `lobster doctor`", *warnings)
 	}
 
-	r = runCLIWithConfig(t, "base = \"soap2day\"\n", "--base", "vaplayer", "version")
+	r = runCLIWithConfig(t, "base = \"soap2day\"\n", "--base", "flixhq.ws", "version")
 	if r.err != nil {
-		t.Fatalf("`--base vaplayer version` under base = soap2day failed: %v", r.err)
+		t.Fatalf("`--base flixhq.ws version` under base = soap2day failed: %v", r.err)
 	}
-	if cfg.Base != "vaplayer" {
-		t.Errorf("base = %q, want the flag's vaplayer to win over the file", cfg.Base)
+	if cfg.Base != "flixhq.ws" {
+		t.Errorf("base = %q, want the flag's flixhq.ws to win over the file", cfg.Base)
 	}
 }
 
@@ -207,7 +209,6 @@ func TestEveryReaderOfBaseAgreesAboutYTS(t *testing.T) {
 		{base: "  yts  ", wantYTS: true},
 		{base: "yts.mx", wantYTS: true},
 		{base: "  YTS.MX  ", wantYTS: true},
-		{base: "vaplayer"},
 		{base: "flixhq.ws", probesNetwork: true},
 		{base: "tbcpl"},
 		{base: "1shows.org"},
@@ -242,5 +243,36 @@ func TestEveryReaderOfBaseAgreesAboutYTS(t *testing.T) {
 				t.Errorf("mayStreamTorrent(base=%q) = %v, want %v; it must agree with newProvider about whether this run can open a magnet", normalized, got, c.wantYTS)
 			}
 		})
+	}
+}
+
+func TestAVaPlayerConfigBaseWarnsAndLandsOnFlixHQWS(t *testing.T) {
+	prevResolve := resolveDomain
+	resolveDomain = func(configured, _ string, _ map[string][]string) string { return configured }
+	t.Cleanup(func() { resolveDomain = prevResolve })
+	warnings := captureConfigWarn(t)
+	r := runCLIWithConfig(t, "base = \"vaplayer\"\n", "version")
+	if r.err != nil {
+		t.Fatalf("`version` under base = vaplayer failed: %v", r.err)
+	}
+	if cfg.Base != config.BaseFlixHQWS {
+		t.Errorf("base = %q, want %q", cfg.Base, config.BaseFlixHQWS)
+	}
+	if len(*warnings) != 1 || !strings.Contains((*warnings)[0], "VaPlayer") {
+		t.Errorf("warnings = %q, want one line naming VaPlayer", *warnings)
+	}
+	if _, ok := newProvider().(*provider.FlixHQWS); !ok {
+		t.Errorf("newProvider() = %T, want *provider.FlixHQWS", newProvider())
+	}
+}
+
+func TestAVaPlayerConfigBaseUnderTorrentFallbackLandsOnAuto(t *testing.T) {
+	warnings := captureConfigWarn(t)
+	r := runCLIWithConfig(t, "base = \"vaplayer\"\ntorrent_fallback = true\n", "version")
+	if r.err != nil {
+		t.Fatalf("`version` failed: %v", r.err)
+	}
+	if cfg.Base != config.BaseAuto || len(*warnings) != 1 {
+		t.Errorf("base = %q warnings = %q, want auto and one warning", cfg.Base, *warnings)
 	}
 }

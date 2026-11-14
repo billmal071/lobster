@@ -59,7 +59,7 @@ can mix sources, and three entries say how that went:
   source, and do not present the whole list as that source's.
 - `{"code": "base_unknown", "base": "sopa2day", "results_from_base": 0,
   "results_total": 20}` — what they asked for names no source; an unrecognised
-  base is not rejected, it quietly falls through to VaPlayer. Tell them the
+  base is not rejected, it quietly falls through to FlixHQWS. Tell them the
   name was not recognised and ask which source they meant, rather than
   presenting the results as theirs.
 
@@ -152,7 +152,7 @@ lobster episodes --ref "eyJpZCI6..." --season 2
 
 ```json
 {"schema": 1, "title": "Some Show", "seasons": [1, 2, 3], "season": 2,
- "provider": "vaplayer", "episodes": [{"number": 1, "title": "Pilot"}]}
+ "provider": "flixhqws", "episodes": [{"number": 1, "title": "Pilot"}]}
 ```
 
 `provider` names the source that answered. It is often not the base the ref
@@ -214,7 +214,7 @@ the resolver recorded them:
 ```json
 {"schema": 1, "error": {"code": "providers_failed",
   "message": "no source could stream season 1 episode 1 of \"Some Show\": 9 providers tried, none produced a playable stream (per-provider reasons in error.providers)",
-  "providers": [{"provider": "VaPlayer", "stage": "resolve", "error": "status 404", "duration_ms": 812}]}}
+  "providers": [{"provider": "TBCPL", "stage": "resolve", "error": "status 404", "duration_ms": 812}]}}
 ```
 
 `stage` is the actionable half:

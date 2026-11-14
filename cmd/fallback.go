@@ -129,7 +129,7 @@ func fallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 }
 
 // fallbackProviders returns all available fallback providers, excluding the primary.
-// Both StreamProviders (VaPlayer, TBCPL) and regular Providers (FlixHQWS) are
+// Both StreamProviders (TBCPL) and regular Providers (FlixHQWS) are
 // included so the app tries every source before giving up. Consumet joins
 // them only when api_url is configured.
 //
@@ -137,10 +137,6 @@ func fallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 // cost a probe timeout per resolve for an answer that could only be a failure.
 func fallbackProviders(primary provider.Provider) []provider.Provider {
 	var fallbacks []provider.Provider
-
-	if _, ok := primary.(*provider.VaPlayer); !ok {
-		fallbacks = append(fallbacks, provider.NewVaPlayer())
-	}
 
 	if _, ok := primary.(*provider.TBCPL); !ok {
 		tb := provider.NewTBCPL("tbcpl")
@@ -208,7 +204,7 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 	// because a scraper broke is not, which is why this stays off until asked.
 	//
 	// Opting out of swarming altogether is a source, not this flag:
-	// `base = "vaplayer"` — or any explicit non-torrent base, or an api_url,
+	// `base = "flixhq.ws"` — or any explicit non-torrent base, or an api_url,
 	// which overrides base entirely — with torrent_fallback off never
 	// reaches a magnet. An explicit yts, nyaa or eztv base still does: the
 	// user named the torrent source outright.
@@ -226,7 +222,32 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 // content carries the ID and year of the work the user actually selected so the
 // resolver can tell a franchise entry apart from its sequels.
 func tryFallbackStream(primary provider.Provider, content media.SearchResult, season, episode int) (*media.Stream, error) {
-	return tryFallbackStreamFrom(agentFallbackProviders(primary), content, season, episode)
+	return tryFallbackStreamFrom(streamChain(primary), content, season, episode)
+}
+
+// streamChain is the fallback chain for resolving an episode's stream. A
+// primary without a Watch (FlixHQWS) is never asked for the stream by its
+// caller, and fallbackProviders leaves it out of its own chain, so the one
+// source that listed the show would go unasked: it rejoins here, ahead of the
+// anime and torrent sources as in fallbackProviders' own order.
+func streamChain(primary provider.Provider) []provider.Provider {
+	chain := agentFallbackProviders(primary)
+	if _, ok := primary.(*provider.FlixHQWS); !ok {
+		return chain
+	}
+	at := len(chain)
+	for i, p := range chain {
+		switch p.(type) {
+		case *provider.AnimeOnsen, *provider.Nyaa, *provider.YTS:
+			at = i
+		}
+		if at != len(chain) {
+			break
+		}
+	}
+	out := append([]provider.Provider{}, chain[:at]...)
+	out = append(out, primary)
+	return append(out, chain[at:]...)
 }
 
 // servesMagnets reports whether p's Watch answers with a magnet URI, which

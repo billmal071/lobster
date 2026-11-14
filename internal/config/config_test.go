@@ -75,7 +75,7 @@ func TestLoadFromTOML(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "config.toml")
 
 	content := `
-base = "vaplayer"
+base = "flixhq.ws"
 player = "vlc"
 provider = "Default"
 quality = "720"
@@ -102,8 +102,8 @@ history = false
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	if cfg.Base != "vaplayer" {
-		t.Errorf("base = %q, want vaplayer", cfg.Base)
+	if cfg.Base != "flixhq.ws" {
+		t.Errorf("base = %q, want flixhq.ws", cfg.Base)
 	}
 	if cfg.Player != "vlc" {
 		t.Errorf("player = %q, want vlc", cfg.Player)
@@ -372,6 +372,7 @@ func TestValidateNormalizesBase(t *testing.T) {
 		{"YTS", "yts"},
 		{"FlixHQ.WS", "flixhq.ws"},
 		{"VaPlayer", "vaplayer"},
+		{"  VAPLAYER.RU  ", "vaplayer.ru"},
 	} {
 		c := Default()
 		c.Base = tc.in
@@ -539,10 +540,10 @@ func captureWarn(t *testing.T) *[]string {
 // command — `lobster doctor` is the one that tells them what to switch to, and
 // `--base` cannot override a value Load already refused. So Load downgrades it
 // with a warning that names the source, and only an explicit --base flag
-// (cmd.applyConfig) is still an error. The downgrade target is "vaplayer", not
+// (cmd.applyConfig) is still an error. The downgrade target is "flixhq.ws", not
 // "auto": "auto" routes movies to YTS, and a file with torrent_fallback off
 // never opted into a swarm.
-func TestLoadDowngradesARetiredBaseToVaPlayerWithAWarning(t *testing.T) {
+func TestLoadDowngradesARetiredBaseToFlixHQWSWithAWarning(t *testing.T) {
 	writeConfig(t, "base = \"soap2day\"\n")
 	warnings := captureWarn(t)
 
@@ -550,13 +551,13 @@ func TestLoadDowngradesARetiredBaseToVaPlayerWithAWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() with base = soap2day = %v, want nil: a retired base in the file must not fail every command", err)
 	}
-	if cfg.Base != BaseVaPlayer {
-		t.Fatalf("Load() left base %q, want %q", cfg.Base, BaseVaPlayer)
+	if cfg.Base != BaseFlixHQWS {
+		t.Fatalf("Load() left base %q, want %q", cfg.Base, BaseFlixHQWS)
 	}
 	if len(*warnings) != 1 {
 		t.Fatalf("Load() warned %d times, want exactly one line: %q", len(*warnings), *warnings)
 	}
-	for _, want := range []string{"Soap2Day", "lobster doctor", "vaplayer"} {
+	for _, want := range []string{"Soap2Day", "lobster doctor", "flixhq.ws"} {
 		if !strings.Contains((*warnings)[0], want) {
 			t.Errorf("warning %q does not mention %q", (*warnings)[0], want)
 		}
@@ -613,20 +614,79 @@ func TestValidateAcceptsARetiredBase(t *testing.T) {
 // every spelling that says "ws" after "flixhq" means it.
 func TestRetiredBaseSpellings(t *testing.T) {
 	for base, retired := range map[string]bool{
-		"flixhq":     true,
-		"flixhq.to":  true,
-		"FLIXHQ.TO":  true,
-		"flixhq.ws":  false,
-		"flixhqws":   false,
-		"flixhq-ws":  false,
-		"FlixHQ.WS":  false,
-		"soap2days":  true,
-		"vaplayer":   false,
-		"auto":       false,
-		"kimcartoon": true,
+		"flixhq":      true,
+		"flixhq.to":   true,
+		"FLIXHQ.TO":   true,
+		"flixhq.ws":   false,
+		"flixhqws":    false,
+		"flixhq-ws":   false,
+		"FlixHQ.WS":   false,
+		"soap2days":   true,
+		"vaplayer":    true,
+		"VAPLAYER":    true,
+		" vaplayer ":  true,
+		"vaplayer.ru": true,
+		"tbcpl":       false,
+		"tbcplembed":  false,
+		"auto":        false,
+		"kimcartoon":  true,
 	} {
 		if _, _, got := RetiredBase(base); got != retired {
 			t.Errorf("RetiredBase(%q) = %v, want %v", base, got, retired)
 		}
+	}
+}
+
+func TestLoadDowngradesAVaPlayerBaseToFlixHQWSWithAWarning(t *testing.T) {
+	for _, base := range []string{"vaplayer", "VAPLAYER", " vaplayer ", "vaplayer.ru"} {
+		t.Run(base, func(t *testing.T) {
+			writeConfig(t, "base = \""+base+"\"\n")
+			warnings := captureWarn(t)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() = %v, want nil", err)
+			}
+			if cfg.Base != BaseFlixHQWS {
+				t.Fatalf("Load() left base %q, want %q", cfg.Base, BaseFlixHQWS)
+			}
+			if len(*warnings) != 1 || !strings.Contains((*warnings)[0], "VaPlayer") || !strings.Contains((*warnings)[0], "session-bound") {
+				t.Fatalf("warnings = %q, want one line naming VaPlayer and why", *warnings)
+			}
+		})
+	}
+}
+
+func TestLoadDowngradesAVaPlayerBaseToAutoUnderTorrentFallback(t *testing.T) {
+	writeConfig(t, "base = \"vaplayer\"\ntorrent_fallback = true\n")
+	warnings := captureWarn(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	if cfg.Base != BaseAuto {
+		t.Fatalf("Load() left base %q, want %q", cfg.Base, BaseAuto)
+	}
+	if len(*warnings) != 1 {
+		t.Fatalf("warnings = %q, want exactly one", *warnings)
+	}
+}
+
+func TestLoadWithNoConfigFileUsesAutoAndDoesNotWarn(t *testing.T) {
+	tmp := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Setenv("APPDATA", tmp)
+	} else {
+		t.Setenv("XDG_CONFIG_HOME", tmp)
+	}
+	warnings := captureWarn(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	if cfg.Base != BaseAuto || len(*warnings) != 0 {
+		t.Fatalf("base = %q warnings = %q, want auto and none", cfg.Base, *warnings)
 	}
 }

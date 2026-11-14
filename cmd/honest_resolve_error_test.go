@@ -19,8 +19,7 @@ import (
 // GetSeasons answers nil/nil on purpose: fallbackSeasonHits must find no hit,
 // because a hit would make the season-existence gate at cmd/search.go the
 // thing under test rather than the resolver. nil/nil is also what the real
-// StreamProviders in the chain do (recordingStreamProvider above, and
-// *provider.VaPlayer, which has no season index at all).
+// StreamProviders in the chain do (recordingStreamProvider above).
 type deadStreamer struct {
 	*stubProvider
 	err error

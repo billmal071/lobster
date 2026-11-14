@@ -96,7 +96,6 @@ func TestRefBaseForKeepsNonDottedFlixHQWSMirror(t *testing.T) {
 		"flixhqws":          "flixhqws",
 		"flixhq.ws.xx":      "flixhq.ws.xx",
 		"flixhq.ws":         "flixhq.ws",
-		"vaplayer":          "flixhq.ws",
 	} {
 		if got := refBaseFor(row, "flixhq.ws", configured); got != want {
 			t.Errorf("refBaseFor(flixhq.ws row, configured %q) = %q, want %q", configured, got, want)
@@ -448,5 +447,14 @@ func TestFindTypeMovieFilters(t *testing.T) {
 	}
 	if len(got.Results) != 1 || got.Results[0].Type != "movie" {
 		t.Fatalf("results = %+v, want only the film", got.Results)
+	}
+}
+
+func TestRefBaseForStampsTheProviderTokenNotAnUnselectingBase(t *testing.T) {
+	row := media.SearchResult{ID: "movie/1", Title: "X", Provider: "flixhq.ws"}
+	for _, configured := range []string{"auto", "sopa2day", "nonesuch"} {
+		if got := refBaseFor(row, "flixhq.ws", configured); got != "flixhq.ws" {
+			t.Errorf("refBaseFor(flixhq.ws row, configured %q) = %q, want %q: the typed value selected nothing, the row came from FlixHQWS", configured, got, "flixhq.ws")
+		}
 	}
 }
