@@ -114,7 +114,7 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 		return nil, "search", fmt.Errorf("search failed: %w", err)
 	}
 
-	candidates := admittedCandidates(candidatesFor(results, req), req, log)
+	candidates := truncateCandidates(admittedCandidates(rankedCandidates(results, req), req, log))
 	if len(candidates) == 0 {
 		return nil, "match", fmt.Errorf("no matching result for %q", req.Title)
 	}
@@ -170,7 +170,9 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 func admittedCandidates(candidates []media.SearchResult, req Request, log func(string, ...any)) []media.SearchResult {
 	out := make([]media.SearchResult, 0, len(candidates))
 	for _, c := range candidates {
-		if Matches(c, req) {
+		sameWork := req
+		sameWork.MediaType = c.Type
+		if Matches(c, sameWork) || sequelSeason(req.Title, c.ID, 1) != 1 {
 			out = append(out, c)
 			continue
 		}
@@ -429,8 +431,13 @@ func dedupeByType(results []media.SearchResult, mediaType media.MediaType) []med
 // by how well they match the work the user actually picked, best first. The
 // provider's own relevance ordering is only the tiebreaker.
 func candidatesFor(results []media.SearchResult, req Request) []media.SearchResult {
-	// Rank before capping at MaxCandidates: the right match is often outside a
-	// provider's own top five for a franchise title.
+	return truncateCandidates(rankedCandidates(results, req))
+}
+
+// rankedCandidates is candidatesFor before the MaxCandidates cap. Rank before
+// capping: the right match is often outside a provider's own top five for a
+// franchise title.
+func rankedCandidates(results []media.SearchResult, req Request) []media.SearchResult {
 	candidates := dedupeByType(results, req.MediaType)
 
 	scored := make([]struct {
@@ -447,7 +454,7 @@ func candidatesFor(results []media.SearchResult, req Request) []media.SearchResu
 	for i, s := range scored {
 		ranked[i] = s.result
 	}
-	return truncateCandidates(ranked)
+	return ranked
 }
 
 // candidateScore rates how confidently a search result is the requested work.

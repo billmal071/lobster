@@ -136,3 +136,38 @@ func TestResolveWithProviderLogsAnUnmatchedSearch(t *testing.T) {
 		t.Fatalf("refused candidate missing from the debug log: %q", logged)
 	}
 }
+
+func TestResolveWithProviderAdmitsTheExactTitleBeyondTheTopFiveUnrelatedRows(t *testing.T) {
+	var rows []media.SearchResult
+	for i := 0; i < 6; i++ {
+		rows = append(rows, media.SearchResult{ID: fmt.Sprintf("x/%d", i), Title: fmt.Sprintf("Lost Boys %d", i), Type: media.TV, Year: "2025"})
+	}
+	rows = append(rows, media.SearchResult{ID: "x/exact", Title: "Lost", Type: media.TV})
+	p := &watchCountingSP{fakeSP: &fakeSP{searchResults: rows, stream: &media.Stream{URL: "https://cdn/lost.m3u8"}}}
+	got, _, err := resolveWithProvider(p, Request{Title: "Lost", Year: "2025", MediaType: media.TV, Season: 1, Episode: 1}, func(string, ...any) {})
+	if err != nil || got == nil {
+		t.Fatalf("got %v / %v, want the exact-title row to survive the cap", got, err)
+	}
+}
+
+func TestResolveWithProviderAdmitsANyaaSequelRow(t *testing.T) {
+	p := &watchCountingSP{fakeSP: &fakeSP{
+		searchResults: []media.SearchResult{{ID: "nyaa/One-Punch+Man?s=2", Title: "One Punch Man Season 2", Type: media.TV}},
+		stream:        &media.Stream{URL: "magnet:?xt=urn:btih:abc"},
+	}}
+	got, _, err := resolveWithProvider(p, Request{Title: "One Punch Man 2nd Season", MediaType: media.TV, Season: 1, Episode: 1}, func(string, ...any) {})
+	if err != nil || got == nil {
+		t.Fatalf("got %v / %v, want the sequel row admitted", got, err)
+	}
+}
+
+func TestResolveWithProviderKeepsTheCrossTypeFallback(t *testing.T) {
+	p := &watchCountingSP{fakeSP: &fakeSP{
+		searchResults: []media.SearchResult{{ID: "cartoon/foo", Title: "Foo", Type: media.TV}},
+		stream:        &media.Stream{URL: "https://cdn/foo.m3u8"},
+	}}
+	got, _, err := resolveWithProvider(p, Request{Title: "Foo", MediaType: media.Movie}, func(string, ...any) {})
+	if err != nil || got == nil {
+		t.Fatalf("got %v / %v, want a same-title row of the other media type still tried", got, err)
+	}
+}
