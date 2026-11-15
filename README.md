@@ -128,16 +128,18 @@ broke, which is the difference between a cheap fix and a rewrite:
 $ lobster doctor
 Provider health (query: "The Matrix")
 
-  ok   AnimeHeaven     1.21s           3 results, stream resolved
-  ok   AnimeOnsen     4.197s           17 results, stream resolved
-  ok   EZTV            4.17s           1 results, magnet resolved
-  ok   FlixHQWS       2.538s           5 results, 3 servers, embed via Vidmoly
-  ok   Nyaa            927ms           2 results, magnet resolved
-  ok   TBCPL          3.752s           20 results, stream resolved
-  ok   TBCPL(1shows)  3.281s           20 results, stream resolved
-  ok   YTS            1.498s           7 results, magnet resolved
+  ok   AnimeHeaven    1.207s           3 results, stream resolved
+  ok   AnimeOnsen      3.31s           17 results, stream resolved
+  ok   EZTV           2.165s           1 results, magnet resolved
+  ok   FlixHQWS       1.759s           5 results, 3 servers, embed via Vidmoly
+  ok   Nyaa            703ms           2 results, magnet resolved
+  ok   TBCPL          1.159s           20 results, stream resolved
+  ok   TBCPL(1shows)  1.927s           20 results, stream resolved
+  ok   YTS            1.107s           7 results, magnet resolved
+  FAIL 1337x          10.939s  search   1337x search: 1337x: https://1337x.to answered status 403
+(further per-mirror 403 lines trimmed here)
 
-8 of 8 providers usable.
+8 of 9 providers usable.
 ```
 
 Only sources lobster still wires in are probed. Soap2Day, MovieBox, VidNest,
@@ -152,6 +154,10 @@ A failure at `search` usually means a moved domain or a renamed field. A failure
 at `watch` or `embed` means the player changed. Pass a title to probe with
 something else; anime providers are probed with an anime title automatically.
 Exits non-zero when nothing is usable, so it works as a check.
+
+In the sample above 1337x reads FAIL: every mirror answered 403, which is the
+Cloudflare challenge lobster's own HTTP client cannot pass. That was observed from
+one network on one day.
 ## Live TV and Sports
 
 Live TV streams free, public IPTV playlists — by default the community-maintained
