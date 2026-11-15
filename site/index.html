@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lobster: a security-hardened terminal media streamer</title>
+<meta name="description" content="lobster is a security-hardened Go CLI that searches and plays or downloads movies, series and anime with mpv, vlc or ffmpeg, straight from your terminal.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="canonical" href="https://billmal071.github.io/lobster/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="lobster: a security-hardened terminal media streamer">
+<meta property="og:description" content="Search in your terminal. Play in mpv or vlc, or download with ffmpeg. A Go CLI with no shell interpolation.">
+<meta property="og:url" content="https://billmal071.github.io/lobster/">
+<meta property="og:image" content="https://billmal071.github.io/lobster/og.svg">
+<meta name="twitter:card" content="summary_large_image">
+<script>
+(function(){try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}})();
+</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top">
+  <a class="brand" href="#top" aria-label="lobster home"><img src="favicon.svg" alt="" width="28" height="28"><span>lobster</span></a>
+  <nav aria-label="Primary">
+    <a href="#features">Features</a>
+    <a href="#install">Install</a>
+    <a href="#quickstart">Quick start</a>
+    <a href="#sources">Sources</a>
+    <a href="https://github.com/billmal071/lobster">GitHub</a>
+  </nav>
+  <button class="theme" id="theme" type="button" aria-label="Toggle colour theme" aria-pressed="false"><span aria-hidden="true" id="theme-icon">&#9680;</span></button>
+</header>
+
+<main id="main">
+<section class="hero" id="top">
+  <div class="hero-copy">
+    <p class="eyebrow">Go &middot; mpv &middot; vlc &middot; ffmpeg</p>
+    <h1>Search in your terminal.<br><em>Play in your player.</em></h1>
+    <p class="lede">lobster is a security-hardened terminal media streamer. It searches movies, series and anime, then plays them in mpv, vlc, iina or celluloid, or downloads them with ffmpeg. Every unsafe shell <code>eval</code> from the original script is replaced with structured Go.</p>
+    <p class="cta">
+      <a class="btn primary" href="#install">Install</a>
+      <a class="btn" href="https://github.com/billmal071/lobster">View on GitHub</a>
+    </p>
+  </div>
+  <figure class="term">
+    <div class="term-bar" aria-hidden="true"><i></i><i></i><i></i><span>~ lobster</span></div>
+<pre class="term-body" id="demo" tabindex="0" role="img" aria-label="Terminal demo: lobster doctor lists each source as ok or FAIL; lobster trending opens a menu; lobster find prints JSON results."><span class="p">$</span> lobster doctor
+Provider health (query: "your search")
+
+  <span class="ok">ok  </span> AnimeHeaven    1.2s   results, stream resolved
+  <span class="ok">ok  </span> Nyaa           0.7s   results, magnet resolved
+  <span class="ok">ok  </span> TBCPL          1.2s   results, stream resolved
+  <span class="bad">FAIL</span> 1337x         10.9s  search: answered status 403
+
+<span class="p">$</span> lobster trending
+<span class="dim">fzf menu opens; pick a title, then play</span>
+<span class="p">$</span> lobster find "your search" --limit 3
+<span class="dim">prints JSON results, each with a ref</span></pre>
+    <figcaption>Illustrative output. Availability varies; run <code>lobster doctor</code> for the live picture.</figcaption>
+  </figure>
+</section>
+
+<section id="features" class="reveal">
+  <h2>What it does</h2>
+  <ul class="cards">
+    <li><h3>Search and trending</h3><p>Search by name, or browse trending and recently added content, in an fzf menu.</p></li>
+    <li><h3>Your player</h3><p>Stream in mpv, vlc, iina or celluloid. Pick with <code>--player</code>.</p></li>
+    <li><h3>Continuous playback</h3><p>Auto-plays the next episode after a 10 second countdown, with next, previous, replay and cross-season navigation.</p></li>
+    <li><h3>Downloads</h3><p>Save for offline viewing with ffmpeg using <code>--download</code>.</p></li>
+    <li><h3>Subtitles and quality</h3><p>Automatic subtitle language matching, and 360, 480, 720 or 1080 quality selection with <code>-q</code>.</p></li>
+    <li><h3>Scriptable</h3><p>JSON output and prompt-free <code>find</code>, <code>episodes</code> and <code>play</code> commands for scripts and agents.</p></li>
+    <li><h3>Hardened</h3><p>Structured, auditable Go in place of shell interpolation. Runs on macOS, Linux and Windows.</p></li>
+    <li><h3>Health checks</h3><p><code>lobster doctor</code> probes each source and names the stage that broke.</p></li>
+  </ul>
+</section>
+
+<section id="install" class="reveal">
+  <h2>Install</h2>
+  <p class="sub">Linux and macOS. The script detects your OS and architecture and installs dependencies such as fzf.</p>
+  <div class="cmd"><pre><code>curl -sSfL https://raw.githubusercontent.com/billmal071/lobster/main/install.sh | sh</code></pre><button type="button" class="copy" aria-label="Copy Linux and macOS install command">Copy</button></div>
+  <p class="sub">Windows, in PowerShell. Installs mpv, fzf and ffmpeg too.</p>
+  <div class="cmd"><pre><code>irm https://raw.githubusercontent.com/billmal071/lobster/main/install.ps1 | iex</code></pre><button type="button" class="copy" aria-label="Copy Windows install command">Copy</button></div>
+  <p class="sub">From source on macOS or Linux.</p>
+  <div class="cmd"><pre><code>brew install go fzf mpv
+git clone https://github.com/billmal071/lobster &amp;&amp; cd lobster
+go build -o lobster .
+sudo make install</code></pre><button type="button" class="copy" aria-label="Copy build from source commands">Copy</button></div>
+  <p class="note">You need fzf and a player (mpv by default). ffmpeg is required only for <code>--download</code>. Prefer a binary? Grab one from <a href="https://github.com/billmal071/lobster/releases/latest">Releases</a>.</p>
+</section>
+
+<section id="quickstart" class="reveal">
+  <h2>Quick start</h2>
+  <dl class="qs">
+    <div><dt><code>lobster</code></dt><dd>Open the interactive search.</dd></div>
+    <div><dt><code>lobster doctor</code></dt><dd>Check which sources work right now, and where the others break.</dd></div>
+    <div><dt><code>lobster trending</code></dt><dd>Browse trending content.</dd></div>
+    <div><dt><code>lobster find &lt;query&gt;</code></dt><dd>Search and print JSON, no prompts. Each result has a ref.</dd></div>
+    <div><dt><code>lobster play --ref &lt;ref&gt;</code></dt><dd>Play the exact title a ref names. Series also need <code>--season</code> and <code>--episode</code>.</dd></div>
+    <div><dt><code>--base &lt;source&gt;</code></dt><dd>Choose the content source for a run.</dd></div>
+    <div><dt><code>--download &lt;path&gt;</code></dt><dd>Download instead of playing.</dd></div>
+  </dl>
+</section>
+
+<section id="sources" class="reveal">
+  <h2>Sources</h2>
+  <p class="sub">Select one with <code>--base</code> or <code>base</code> in config. The default, <code>auto</code>, picks per content type and tries HTTP sources first. Availability varies from week to week: <code>lobster doctor</code> is the live answer.</p>
+  <div class="two">
+    <div>
+      <h3>HTTP streaming</h3>
+      <ul class="plain">
+        <li><code>flixhq.ws</code> <span>films and series, the general source <code>auto</code> maps to</span></li>
+        <li><code>tbcpl</code>, <code>1shows.org</code> <span>films and series</span></li>
+        <li><code>animeonsen</code> <span>anime</span></li>
+        <li><code>animeheaven</code> <span>anime, only when you name it</span></li>
+      </ul>
+    </div>
+    <div class="warn">
+      <h3>BitTorrent, opt-in</h3>
+      <ul class="plain">
+        <li><code>yts</code> <span>films</span></li>
+        <li><code>eztv</code> <span>series</span></li>
+        <li><code>nyaa</code> <span>anime</span></li>
+        <li><code>1337x</code> <span>films and series</span></li>
+      </ul>
+      <p><strong>These join a torrent swarm and expose your IP address to its peers.</strong> They are used only if you set <code>torrent_fallback = true</code> or name one with <code>--base</code>, and under the fallback only after every HTTP source has failed.</p>
+    </div>
+  </div>
+  <p class="note">lobster is a tool for finding and playing media. You are responsible for using it only with content you have the right to access.</p>
+</section>
+
+<section id="docs" class="reveal">
+  <h2>Read more</h2>
+  <p class="cta">
+    <a class="btn" href="https://github.com/billmal071/lobster/blob/main/GUIDE.md">User guide</a>
+    <a class="btn" href="https://github.com/billmal071/lobster/releases">Releases</a>
+    <a class="btn" href="https://github.com/billmal071/lobster">Source on GitHub</a>
+  </p>
+</section>
+</main>
+
+<footer>
+  <p>lobster is open source under GPL-2.0. A Go rewrite of <a href="https://github.com/justchokingaround/lobster">lobster.sh</a>.</p>
+</footer>
+<script src="script.js"></script>
+</body>
+</html>
