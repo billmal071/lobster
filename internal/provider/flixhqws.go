@@ -69,7 +69,7 @@ func (f *FlixHQWS) Search(query string) ([]media.SearchResult, error) {
 		// evidence about the connection, not about the catalog: report it as
 		// such so cmd/multisearch.go does not count this provider as reached
 		// and turn a dead network into "nothing matched, check the spelling".
-		if !hasResultContainer(doc) {
+		if !hasResultContainer(doc) && !isWSSearchPage(doc) {
 			return nil, fmt.Errorf("%w: searching for %q on %s", ErrUnrecognisedResponse, query, f.BaseURL())
 		}
 		return nil, fmt.Errorf("%w for %q", ErrNoResults, query)
@@ -311,16 +311,16 @@ func (f *FlixHQWS) Trending(mediaType media.MediaType) ([]media.SearchResult, er
 	return results, nil
 }
 
-// Recent returns recently added content from /movie or /series pages.
+// Recent returns the first page of the /movies/ or /tv-series/ listing.
 func (f *FlixHQWS) Recent(mediaType media.MediaType) ([]media.SearchResult, error) {
 	var url string
 	switch mediaType {
 	case media.Movie:
-		url = fmt.Sprintf("%s/movie/", f.BaseURL())
+		url = fmt.Sprintf("%s/movies/", f.BaseURL())
 	case media.TV:
-		url = fmt.Sprintf("%s/series/", f.BaseURL())
+		url = fmt.Sprintf("%s/tv-series/", f.BaseURL())
 	default:
-		url = fmt.Sprintf("%s/movie/", f.BaseURL())
+		url = fmt.Sprintf("%s/movies/", f.BaseURL())
 	}
 
 	doc, err := f.fetchDocument(url)
@@ -335,6 +335,16 @@ func (f *FlixHQWS) Recent(mediaType media.MediaType) ([]media.SearchResult, erro
 		}
 	}
 	return results, nil
+}
+
+// isWSSearchPage reports whether a document is flixhq.ws's own search page.
+// For a query with no match the site answers 200 with its landing page: no
+// .film_list-wrap, but a canonical link to /search/ and the keyword form.
+// Both must be present so a challenge or truncated page does not qualify.
+func isWSSearchPage(doc *goquery.Document) bool {
+	canonical, _ := doc.Find(`link[rel="canonical"]`).First().Attr("href")
+	return strings.HasSuffix(canonical, "/search/") &&
+		doc.Find(`form input[name="keyword"]`).Length() > 0
 }
 
 // fetchDocument fetches a URL and parses it into a goquery Document.
