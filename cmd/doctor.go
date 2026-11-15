@@ -47,6 +47,7 @@ func doctorProviders() []doctor.Named {
 		// Anime catalogues need an anime title, or they report broken for being
 		// asked about the wrong film.
 		{Name: "AnimeOnsen", Provider: provider.NewAnimeOnsen(), Query: doctorAnimeOnsenQuery},
+		{Name: "AnimeHeaven", Provider: provider.NewAnimeHeaven(), Query: doctorAnimeOnsenQuery},
 		{Name: "Nyaa", Provider: provider.NewNyaa(), Query: doctorAnimeOnsenQuery},
 		// A TV-only catalogue needs a series title, for the same reason.
 		{Name: "EZTV", Provider: provider.NewEZTV(), Query: doctorEZTVQuery},
@@ -54,7 +55,7 @@ func doctorProviders() []doctor.Named {
 	}
 }
 
-// doctorRun probes a fixed list of providers, each with query (the first argument, or a well-known default) except AnimeOnsen, Nyaa and EZTV, which use their own fixed queries, prints the health table to stdout, and fails only when no provider is usable.
+// doctorRun probes a fixed list of providers, each with query (the first argument, or a well-known default) except AnimeOnsen, AnimeHeaven, Nyaa, EZTV and 1337x, which use their own fixed queries, prints the health table to stdout, and fails only when no provider is usable.
 func doctorRun(cmd *cobra.Command, args []string) error {
 	query := doctorDefaultQuery
 	if len(args) > 0 && args[0] != "" {

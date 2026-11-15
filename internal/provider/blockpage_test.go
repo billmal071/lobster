@@ -35,6 +35,9 @@ func TestScrapersReportABlockPageAsUnreachableNotAsAnEmptyCatalog(t *testing.T) 
 	}))
 	t.Cleanup(blockPage.Close)
 	host := strings.TrimPrefix(blockPage.URL, "https://")
+	prevAH := animeHeavenBase
+	animeHeavenBase = blockPage.URL
+	t.Cleanup(func() { animeHeavenBase = prevAH })
 
 	for _, tc := range []struct {
 		name string
@@ -42,6 +45,7 @@ func TestScrapersReportABlockPageAsUnreachableNotAsAnEmptyCatalog(t *testing.T) 
 	}{
 		{"flixhq", &FlixHQ{base: host, client: blockPage.Client()}},
 		{"flixhqws", &FlixHQWS{base: host, client: blockPage.Client()}},
+		{"animeheaven", &AnimeHeaven{client: blockPage.Client()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := tc.p.Search("zzzznotathing")

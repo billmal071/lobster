@@ -128,16 +128,16 @@ broke, which is the difference between a cheap fix and a rewrite:
 $ lobster doctor
 Provider health (query: "The Matrix")
 
-  ok   FlixHQWS       3.815s           4 results, 3 servers, embed via Vidmoly
-  ok   TBCPL          1.912s           18 results, stream resolved
-  ok   TBCPL(1shows)  2.102s           18 results, stream resolved
-  ok   YTS            0.871s           12 results, magnet resolved
-  ok   EZTV           1.530s           5 results, magnet resolved
-  ok   Nyaa           0.912s           8 results, magnet resolved
-  ok   1337x          1.204s           1 results, magnet resolved
-  FAIL AnimeOnsen     4.310s  search   no results for "One Punch Man"
+  ok   AnimeHeaven     1.21s           3 results, stream resolved
+  ok   AnimeOnsen     4.197s           17 results, stream resolved
+  ok   EZTV            4.17s           1 results, magnet resolved
+  ok   FlixHQWS       2.538s           5 results, 3 servers, embed via Vidmoly
+  ok   Nyaa            927ms           2 results, magnet resolved
+  ok   TBCPL          3.752s           20 results, stream resolved
+  ok   TBCPL(1shows)  3.281s           20 results, stream resolved
+  ok   YTS            1.498s           7 results, magnet resolved
 
-7 of 8 providers usable.
+8 of 8 providers usable.
 ```
 
 Only sources lobster still wires in are probed. Soap2Day, MovieBox, VidNest,
@@ -398,11 +398,12 @@ download_dir = "~/Videos/lobster"
 # series always go to a scraping source (YTS has no TV catalogue), and
 # anything YTS does not carry falls back to flixhq.ws. Any other value is an
 # explicit choice and is used for both content types.
-# Available: auto, flixhq.ws, tbcpl, 1shows.org, animeonsen, yts,
+# Available: auto, flixhq.ws, tbcpl, 1shows.org, animeonsen, animeheaven, yts,
 # nyaa (anime torrents), eztv (TV series torrents), 1337x (film and series
 # torrents)
-# All other providers are automatically used as fallbacks (the torrent ones
-# only with torrent_fallback = true).
+# All other providers except animeheaven (used only when named) are
+# automatically used as fallbacks (the torrent ones only with
+# torrent_fallback = true).
 # Retired (replaced with "flixhq.ws" — "auto" under torrent_fallback — with a
 # warning here; an error as --base): soap2day, moviebox, vidnest, flixhq.to,
 # kimcartoon, allanime, anipub, vaplayer.
