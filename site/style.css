@@ -19,9 +19,9 @@ code{font-size:.88em;background:var(--bg2);padding:.1em .38em;border-radius:5px}
 .top{display:flex;align-items:center;gap:1rem;padding:.9rem clamp(1rem,4vw,3rem);position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:.5rem;font:700 1.2rem var(--mono);color:var(--ink);text-decoration:none}
 .top nav{margin-left:auto;display:flex;gap:1.2rem;flex-wrap:wrap;font-size:.95rem}
-.top nav a{color:var(--ink);text-decoration:none}
+.top nav a{color:var(--ink);text-decoration:none;display:inline-block;padding:.6rem .1rem}
 .top nav a:hover{color:var(--accent)}
-.theme{border:1px solid var(--line);background:var(--card);color:var(--ink);width:2.4rem;height:2.4rem;border-radius:50%;cursor:pointer;font-size:1.1rem;transition:transform .25s}
+.theme{border:1px solid var(--muted);background:var(--card);color:var(--ink);width:2.75rem;height:2.75rem;border-radius:50%;cursor:pointer;font-size:1.1rem;transition:transform .25s}
 .theme:hover{transform:rotate(25deg)}
 @media(max-width:700px){.top{flex-wrap:wrap}.top nav{order:3;width:100%;margin:0;gap:.9rem;font-size:.9rem}.theme{margin-left:auto}}
 main{max-width:70rem;margin:0 auto;padding:0 clamp(1rem,4vw,3rem)}
@@ -31,7 +31,7 @@ h1,h2,h3{line-height:1.12;font-weight:600;letter-spacing:-.01em}
 h1{font-size:clamp(2.3rem,6.4vw,4.4rem);margin:.3em 0}
 h1 em{color:var(--accent);font-style:italic}
 h2{font-size:clamp(1.7rem,3.6vw,2.4rem);margin:0 0 1rem}
-h2::before{content:"$ ";font-family:var(--mono);color:var(--accent);font-weight:400}
+h2::before{content:"$ " / "";font-family:var(--mono);color:var(--accent);font-weight:400}
 h3{font-size:1.15rem;margin:0 0 .4rem}
 .eyebrow{font:.85rem var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0}
 .lede{font-size:1.2rem;max-width:36rem;color:var(--muted)}
@@ -60,7 +60,8 @@ h3{font-size:1.15rem;margin:0 0 .4rem}
 .cmd{position:relative;background:#0b0d0f;border:1px solid #2a2f33;border-radius:12px}
 .cmd pre{margin:0;padding:1rem 5.5rem 1rem 1.1rem;overflow-x:auto;color:#e6e1d6;font-size:.84rem;line-height:1.6}
 .cmd code{background:none;padding:0;color:inherit;font-size:inherit}
-.copy{position:absolute;top:.55rem;right:.55rem;font:600 .75rem var(--mono);background:#1d2226;color:#e6e1d6;border:1px solid #3a4046;border-radius:8px;padding:.4rem .7rem;cursor:pointer;min-height:2rem}
+.copy{position:absolute;top:.55rem;right:.55rem;font:600 .75rem var(--mono);background:#1d2226;color:#e6e1d6;border:1px solid #7d868d;border-radius:8px;padding:.4rem .8rem;cursor:pointer;min-height:2.75rem;min-width:2.75rem}
+.cmd :focus-visible{outline-color:#ff7a6b}
 .copy:hover{border-color:#ff7a6b}
 .copy.done{background:#7ee0a0;color:#0b0d0f;border-color:#7ee0a0}
 .note{color:var(--muted);font-size:.95rem;margin-top:1.2rem}
@@ -87,3 +88,4 @@ footer{border-top:1px solid var(--line);padding:2rem clamp(1rem,4vw,3rem);color:
   *,*::before,*::after{animation:none!important;transition:none!important}
   .js .reveal{opacity:1;transform:none}
 }
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}

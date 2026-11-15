@@ -29,6 +29,7 @@
       var code = b.parentNode.querySelector("code");
       var reset = function (label) {
         b.textContent = label;
+        document.getElementById("copy-status").textContent = label === "Copied" ? "Copied to clipboard" : label;
         setTimeout(function () { b.textContent = "Copy"; b.classList.remove("done"); }, 1800);
       };
       if (navigator.clipboard && navigator.clipboard.writeText) {
