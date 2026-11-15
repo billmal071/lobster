@@ -15,7 +15,7 @@ func TestDoctorProbesExactlyTheReachableSources(t *testing.T) {
 			t.Errorf("doctor probes VaPlayer under %q, a retired source", n.Name)
 		}
 	}
-	want := []string{"TBCPL", "FlixHQWS", "TBCPL(1shows)", "YTS", "AnimeOnsen", "Nyaa", "EZTV"}
+	want := []string{"TBCPL", "FlixHQWS", "TBCPL(1shows)", "YTS", "AnimeOnsen", "AnimeHeaven", "Nyaa", "EZTV"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("doctorProviders = %v, want %v", got, want)
 	}

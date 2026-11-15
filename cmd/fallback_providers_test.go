@@ -181,3 +181,18 @@ func TestFallbackProvidersNeverIncludesARetiredSource(t *testing.T) {
 		t.Errorf("FlixHQWS is a different, working provider and must stay: %v", providerNames(got))
 	}
 }
+
+// AnimeHeaven is reachable only by naming it (newProvider); no fallback or
+// stream chain may hold it, however the config is set.
+func TestFallbackProvidersAndStreamChainNeverIncludeAnimeHeaven(t *testing.T) {
+	prev := cfg
+	cfg = &config.Config{TorrentFallback: true}
+	t.Cleanup(func() { cfg = prev })
+
+	if got := fallbackProviders(nil); hasProvider[*provider.AnimeHeaven](got) {
+		t.Errorf("fallbackProviders holds AnimeHeaven: %v", providerNames(got))
+	}
+	if got := streamChain(provider.NewFlixHQWS("flixhq.ws")); hasProvider[*provider.AnimeHeaven](got) {
+		t.Errorf("streamChain holds AnimeHeaven: %v", providerNames(got))
+	}
+}

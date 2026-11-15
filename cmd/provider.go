@@ -77,6 +77,10 @@ func newProvider() provider.Provider {
 	if strings.Contains(base, "animeonsen") {
 		return provider.NewAnimeOnsen()
 	}
+	// AnimeHeaven is reachable only by naming it; it is not in the fallback chain.
+	if strings.Contains(base, "animeheaven") {
+		return provider.NewAnimeHeaven()
+	}
 	// Default: FlixHQWS on its own domain; fallThroughBase
 	// (cmd/providerbase.go) is derived from it.
 	return provider.NewFlixHQWS(resolveDomain(autoBase, "flixhqws", overrides))
