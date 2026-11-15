@@ -34,7 +34,8 @@ func resolveNumericEpisodeID(getEpisodes func(id, seasonID string) ([]media.Epis
 // parseFallbackEpisodeRef splits a fallback-resolver episode ID into the show
 // it names and the episode number it asks for, without consulting any
 // provider. "" means episode 1 of mediaID, which is what the resolver sends
-// for a film and for a request carrying no season or episode.
+// for a film (a TV request with no season or episode is refused before any
+// provider sees it).
 //
 // It is split out of resolveNumericEpisodeID for the providers where the
 // catalogue lookup buys nothing. AnimeOnsen numbers its episodes in the URL,

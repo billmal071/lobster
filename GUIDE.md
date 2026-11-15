@@ -252,18 +252,19 @@ player = "mpv"
 # "auto" means "no preference", and lets lobster pick per content type: a
 # movie is played from YTS where YTS carries it, and a series always goes to
 # a scraping source, because YTS has no TV catalogue at all. Series and
-# anything YTS does not carry fall back to vaplayer, the general-purpose
+# anything YTS does not carry fall back to flixhq.ws, the general-purpose
 # source "auto" maps to.
 #
 # Any other value is an explicit choice and is used for every title of either
 # type — lobster never overrides it. Same for `--base` on the command line.
 # Set it, and leave torrent_fallback false, if you would rather never join a
 # torrent swarm:
-#   base = "vaplayer"
-# Available: auto, vaplayer, flixhq.ws, tbcpl, 1shows.org, animeonsen, yts,
+#   base = "flixhq.ws"
+# Available: auto, flixhq.ws, tbcpl, 1shows.org, animeonsen, yts,
 # nyaa, eztv, 1337x (the last four are BitTorrent — see "Content sources")
-# Retired (treated as "auto" with a warning here; an error as --base):
-# soap2day, moviebox, vidnest, flixhq.to, kimcartoon, allanime, anipub.
+# Retired (replaced with "flixhq.ws" — "auto" under torrent_fallback — with a
+# warning here; an error as --base): soap2day, moviebox, vidnest, flixhq.to,
+# kimcartoon, allanime, anipub, vaplayer.
 # See "Content sources" below for what each one covers.
 base = "auto"
 
@@ -318,7 +319,7 @@ download_dir = "~/Videos/lobster"
 # This is NOT the swarm opt-in, and leaving it false does not keep you out of
 # a swarm: the default `base = "auto"` already plays movies from YTS, so a
 # default install joins one for films. To never join a swarm, choose an
-# explicit non-torrent source instead — `base = "vaplayer"` — and leave this
+# explicit non-torrent source instead — `base = "flixhq.ws"` — and leave this
 # false. `yts`, `nyaa`, `eztv` and `1337x` are swarms even with this false.
 #
 # What this setting controls is the other direction: letting a *failed* stream
@@ -382,9 +383,8 @@ and where the others break"). Run it before concluding a source is broken.
 
 | `base` | Covers | Worth knowing |
 | --- | --- | --- |
-| `auto` (default) | Films and series | Automatic routing: you name no source, so lobster picks one per content type. `vaplayer` is the general source `auto` maps to, and the primary every `auto` run searches with. A film is then looked up on YTS by title and year and played from there when both agree. A series is not — YTS is never even queried for one, because it has no TV catalogue — so it stays on `vaplayer`, and if `vaplayer` cannot enumerate its seasons, playback falls back to the chain, which re-searches every source by title. Films YTS has no match for stay on `vaplayer` too. The YTS lookup covers ordinary playback only: `--download` and `--json` runs stay on `vaplayer`, the first so a download you did not ask to make over BitTorrent does not silently join a swarm, the second because a magnet is not a URL a JSON consumer can open. Asking for it outright still works — `--base yts --download <dir>` downloads from YTS perfectly well. An explicit `base`, `--base`, or an `api_url` overrides all of this. |
-| `vaplayer` | Films and series | General-purpose, API-based. The general source `auto` maps to, and the first source the fallback chain asks. |
-| `flixhq.ws` | Films and series | Scraper-based; the default before `auto`. Checks its domain at startup and tries known alternates (plus any `domain_overrides`) when it is unreachable. Not to be confused with `flixhq.to`, a different and now retired provider. |
+| `auto` (default) | Films and series | Automatic routing: you name no source, so lobster picks one per content type. `flixhq.ws` is the general source `auto` maps to, and the primary every `auto` run searches with. A film is then looked up on YTS by title and year and played from there when both agree. A series is not — YTS is never even queried for one, because it has no TV catalogue — so it stays on `flixhq.ws`, and if `flixhq.ws` cannot enumerate its seasons, lobster asks you for the season and episode (only the one you did not already give; season 0 with an episode is a Specials request and is not asked about) and then plays from the chain, which re-searches every source by title; `flixhq.ws` has no stream resolver of its own, so it takes part in that chain itself when it is the primary. With `--json` or without a terminal on stdin there is nobody to ask, so it stops with a hint to run without `--json` in a terminal, or to use `lobster play --ref <ref> --season N --episode M`. Films YTS has no match for stay on `flixhq.ws` too. The YTS lookup covers ordinary playback only: `--download` and `--json` runs stay on `flixhq.ws`, the first so a download you did not ask to make over BitTorrent does not silently join a swarm, the second because a magnet is not a URL a JSON consumer can open. Asking for it outright still works — `--base yts --download <dir>` downloads from YTS perfectly well. An explicit `base`, `--base`, or an `api_url` overrides all of this. |
+| `flixhq.ws` | Films and series | Scraper-based. The general source `auto` maps to. Checks its domain at startup and tries known alternates (plus any `domain_overrides`) when it is unreachable. Not to be confused with `flixhq.to`, a different and now retired provider. |
 | `tbcpl`, `1shows.org` | Films and series | The same provider against the same site: `tbcpl` resolves to `https://www.1shows.org`, `1shows.org` to `https://1shows.org`. Honours `audio_language` for multi-dub releases. |
 | `animeonsen` | Anime | Public API, no key and no DRM, and the only anime source in the automatic fallback chain, except that `torrent_fallback` adds Nyaa after it. Two things to know before naming it. It **carries no subtitles** — the stream is Japanese audio and the source has no text track at all, so you need `subdl_api_key` or `opensubtitles_api_key` set for anything to appear. And it has **one 720p rendition**, so `quality` has nothing to choose: a run under it reports 720 whatever you asked for, rather than claiming a height the stream does not have. Its episode counts are measured by probing the CDN (the catalogue endpoints need a key lobster does not ship), so a series with a gap in its numbering lists short rather than long. |
 | `yts` | Films only | No TV catalogue at all, so a series named under `--base yts` is played from the fallback chain instead — for playback, `--base yts` pins nothing for a series. `lobster episodes` under it can still fail outright, per the note above. Resolves to a **magnet**, so playback joins a BitTorrent swarm and your IP is visible to its peers; lobster serves it over loopback, so `--download` works too, but the swarm is joined either way. If no peer answers within 90 seconds the run gives up with "the swarm may be dead". |
@@ -393,12 +393,13 @@ and where the others break"). Run it before concluding a source is broken.
 | `1337x` | Films and series | Torrents scraped from 1337x's Movies and TV category searches, with the info hash read from each release's page and the magnet rebuilt from it with lobster's own trackers. Only releases whose name starts with the title you searched for are kept, and the title must be followed by a release year, a season or episode marker, or a quality or source tag (anything after a year is ignored), so a near-miss such as "Lost in Space" is not offered for "Lost". When comparing, accents and punctuation are ignored and `&` is read as "and", so "Law & Order" matches "Law and Order" but not "Law Order"; the end of the name and "Season N" are also accepted right after the title. When 1337x is reached as a fallback, the title searched for is the one the primary source gave, so a differently named release may not be found. A series search gives one entry for the query you typed, not one per title: type the title (and `S02E05` for an episode) as precisely as you can. A film search gives one entry per release year found in the release names when there is more than one. Seasons and episodes are read from the `SxxEyy` in release names, so a series only lists what the first three result pages of each category carry. For the episode or film asked for, the best-seeded release of each quality is offered, and `--quality` and `-q best` pick among them; when nothing is at or below the requested quality, the best available is used. Several mirrors are tried in turn (`1337x.to`, `1337xx.to`, `x1337x.eu`); a mirror that is down or answers with a challenge or block page is skipped. lobster does not solve challenges, so when every mirror challenges, the source fails. Resolves to a **magnet** like `yts`: playback joins a swarm and your IP is visible to its peers. Never reached automatically — only when you name this base, or under `torrent_fallback`, which races it with the other torrent sources, and only after every streaming source has failed. |
 
 **Retired sources.** `soap2day`, `moviebox`, `vidnest`, `flixhq.to`,
-`kimcartoon`, `allanime` and `anipub` were each verified dead upstream on
-2026-11-07 with nothing lobster could fix, and are no longer wired in. Naming
+`kimcartoon`, `allanime`, `anipub` and `vaplayer` were each verified dead
+upstream (the first seven on 2026-11-07, `vaplayer` on 2026-11-13: its stream API
+stopped returning stream URLs) with nothing lobster could fix, and are no longer wired in. Naming
 one with `--base` is rejected with a message saying which source and why, so
 an old script fails loudly instead of quietly searching somewhere else. One
-left in the config file is treated as `auto` with a one-line warning naming
-it, so no command (least of all `lobster doctor`, which lists what still
+left in the config file is replaced with `flixhq.ws` (`auto` when
+`torrent_fallback` is on) with a one-line warning naming it, so no command (least of all `lobster doctor`, which lists what still
 works) is locked out by a stale file; a ref stamped with one plays on the
 configured source with a one-line warning, since `play` re-searches by title
 anyway.
@@ -406,8 +407,8 @@ anyway.
 **Any other value lobster does not recognise is not an error.** Values are
 matched by substring, so anything still containing a known name works —
 `flixhq.ws.xx` is read as `flixhq.ws`. Anything else falls through to
-`vaplayer`, the same source `auto` maps to: `--base sopa2day` searches
-VaPlayer, and `find` reports it under a `base_unknown` warning.
+`flixhq.ws`, the same source `auto` maps to: `--base sopa2day` searches
+FlixHQWS, and `find` reports it under a `base_unknown` warning.
 
 `api_url` is the one way to name a source that does not go through `base` at
 all: when it is set it replaces `base` entirely, and the value of `base` is
@@ -418,7 +419,8 @@ ignored.
 Watch history is keyed on the provider's own ID, and IDs are not portable
 between providers. Changing `base` — including the upgrade that made `auto`
 the default, which moved the primary from `flixhq.ws` to `soap2day`, and the
-retirement of `soap2day` that moved it on to `vaplayer` — means
+retirement of `soap2day` that moved it on to `vaplayer`, and the
+retirement of `vaplayer` that moved it on to `flixhq.ws` — means
 in-progress titles are looked up under an ID that is not in your history:
 they restart from zero, and finishing one adds a second row for the same
 title rather than updating the first.

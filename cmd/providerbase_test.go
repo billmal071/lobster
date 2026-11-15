@@ -34,7 +34,7 @@ func hermeticProviderSelection(t *testing.T, base string) {
 // If the token does not round-trip, the ref names a source that did not
 // produce the row — the exact dishonesty providerBase exists to end — and it
 // does so silently, because newProvider has no "unknown base" arm and falls
-// through to VaPlayer.
+// through to FlixHQWS.
 //
 // Substring matching is why this cannot be checked by reading: newProvider
 // selects FlixHQWS on "flixhq.ws", and the type name resolver.ProviderName
@@ -45,7 +45,6 @@ func TestProviderBaseRoundTripsThroughNewProvider(t *testing.T) {
 	for _, p := range []provider.Provider{
 		provider.NewFlixHQWS("flixhq.ws"),
 		provider.NewTBCPL("tbcpl"),
-		provider.NewVaPlayer(),
 		provider.NewYTS(),
 		provider.NewAnimeOnsen(),
 		provider.NewNyaa(),
@@ -87,7 +86,7 @@ func TestProviderBaseCoversEveryProviderInTheSearchChain(t *testing.T) {
 
 	primary := newProvider()
 	chain := append([]provider.Provider{primary}, fallbackSearchProviders(primary)...)
-	if len(chain) < 4 {
+	if len(chain) < 3 {
 		t.Fatalf("search chain has only %d providers (%v); the fixture is not exercising the real chain", len(chain), providerNames(chain))
 	}
 

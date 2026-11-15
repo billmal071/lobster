@@ -34,17 +34,10 @@ broken rather than the catalogue being thin.`,
 	RunE: doctorRun,
 }
 
-// doctorRun probes a fixed list of providers, each with query (the first argument, or a well-known default) except AnimeOnsen, Nyaa, EZTV and 1337x, which use their own fixed queries, prints the health table to stdout, and fails only when no provider is usable.
-func doctorRun(cmd *cobra.Command, args []string) error {
-	query := doctorDefaultQuery
-	if len(args) > 0 && args[0] != "" {
-		query = args[0]
-	}
-
-	// Only sources newProvider or fallbackProviders can still reach; the
-	// retired ones (config.retiredBases) would only ever read FAIL.
-	providers := []doctor.Named{
-		{Name: "VaPlayer", Provider: provider.NewVaPlayer()},
+// doctorProviders is every source newProvider or fallbackProviders can still
+// reach; the retired ones (config.retiredBases) would only ever read FAIL.
+func doctorProviders() []doctor.Named {
+	return []doctor.Named{
 		{Name: "TBCPL", Provider: provider.NewTBCPL("tbcpl")},
 		{Name: "FlixHQWS", Provider: provider.NewFlixHQWS("flixhq.ws")},
 		// 1shows.org is the same TBCPL provider on a different base, and the two
@@ -59,6 +52,16 @@ func doctorRun(cmd *cobra.Command, args []string) error {
 		{Name: "EZTV", Provider: provider.NewEZTV(), Query: doctorEZTVQuery},
 		{Name: "1337x", Provider: provider.NewX1337(), Query: doctorEZTVQuery},
 	}
+}
+
+// doctorRun probes a fixed list of providers, each with query (the first argument, or a well-known default) except AnimeOnsen, Nyaa and EZTV, which use their own fixed queries, prints the health table to stdout, and fails only when no provider is usable.
+func doctorRun(cmd *cobra.Command, args []string) error {
+	query := doctorDefaultQuery
+	if len(args) > 0 && args[0] != "" {
+		query = args[0]
+	}
+
+	providers := doctorProviders()
 
 	stop := ui.StartSpinner(fmt.Sprintf("Probing %d providers with %q...", len(providers), query))
 	results := doctor.CheckAll(providers, query)
