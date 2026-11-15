@@ -190,7 +190,7 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 		}
 	}
 
-	// YTS last, and only when torrent_fallback is set.
+	// YTS and 1337x, only when torrent_fallback is set; they race in the torrent tier.
 	//
 	// Be precise about what that setting does and does not decide. It is NOT
 	// what makes lobster join a swarm: under the default base = "auto" every
@@ -206,11 +206,17 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 	// Opting out of swarming altogether is a source, not this flag:
 	// `base = "flixhq.ws"` — or any explicit non-torrent base, or an api_url,
 	// which overrides base entirely — with torrent_fallback off never
-	// reaches a magnet. An explicit yts, nyaa or eztv base still does: the
+	// reaches a magnet. An explicit yts, nyaa, eztv or 1337x base still does: the
 	// user named the torrent source outright.
 	if _, ok := primary.(*provider.YTS); !ok {
 		if cfg != nil && cfg.TorrentFallback {
 			fallbacks = append(fallbacks, provider.NewYTS())
+		}
+	}
+
+	if _, ok := primary.(*provider.X1337); !ok {
+		if cfg != nil && cfg.TorrentFallback {
+			fallbacks = append(fallbacks, provider.NewX1337())
 		}
 	}
 
@@ -254,7 +260,7 @@ func streamChain(primary provider.Provider) []provider.Provider {
 // only the local torrent server can open.
 func servesMagnets(p provider.Provider) bool {
 	switch p.(type) {
-	case *provider.YTS, *provider.EZTV, *provider.Nyaa:
+	case *provider.YTS, *provider.EZTV, *provider.Nyaa, *provider.X1337:
 		return true
 	}
 	_, ok := p.(magnetSource)

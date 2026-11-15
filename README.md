@@ -128,16 +128,18 @@ broke, which is the difference between a cheap fix and a rewrite:
 $ lobster doctor
 Provider health (query: "The Matrix")
 
-  ok   AnimeHeaven     1.21s           3 results, stream resolved
-  ok   AnimeOnsen     4.197s           17 results, stream resolved
-  ok   EZTV            4.17s           1 results, magnet resolved
-  ok   FlixHQWS       2.538s           5 results, 3 servers, embed via Vidmoly
-  ok   Nyaa            927ms           2 results, magnet resolved
-  ok   TBCPL          3.752s           20 results, stream resolved
-  ok   TBCPL(1shows)  3.281s           20 results, stream resolved
-  ok   YTS            1.498s           7 results, magnet resolved
+  ok   AnimeHeaven    1.207s           3 results, stream resolved
+  ok   AnimeOnsen      3.31s           17 results, stream resolved
+  ok   EZTV           2.165s           1 results, magnet resolved
+  ok   FlixHQWS       1.759s           5 results, 3 servers, embed via Vidmoly
+  ok   Nyaa            703ms           2 results, magnet resolved
+  ok   TBCPL          1.159s           20 results, stream resolved
+  ok   TBCPL(1shows)  1.927s           20 results, stream resolved
+  ok   YTS            1.107s           7 results, magnet resolved
+  FAIL 1337x          10.939s  search   1337x search: 1337x: https://1337x.to answered status 403
+(further per-mirror 403 lines trimmed here)
 
-8 of 8 providers usable.
+8 of 9 providers usable.
 ```
 
 Only sources lobster still wires in are probed. Soap2Day, MovieBox, VidNest,
@@ -155,6 +157,10 @@ A failure at `search` usually means a moved domain or a renamed field. A failure
 at `watch` or `embed` means the player changed. Pass a title to probe with
 something else; anime providers are probed with an anime title automatically.
 Exits non-zero when nothing is usable, so it works as a check.
+
+In the sample above 1337x reads FAIL: every mirror answered 403, which is the
+Cloudflare challenge lobster's own HTTP client cannot pass. That was observed from
+one network on one day.
 ## Live TV and Sports
 
 Live TV streams free, public IPTV playlists — by default the community-maintained
@@ -403,7 +409,8 @@ download_dir = "~/Videos/lobster"
 # anything YTS does not carry falls back to flixhq.ws. Any other value is an
 # explicit choice and is used for both content types.
 # Available: auto, flixhq.ws, tbcpl, 1shows.org, animeonsen, animeheaven, yts,
-# nyaa (anime torrents), eztv (TV series torrents)
+# nyaa (anime torrents), eztv (TV series torrents), 1337x (film and series
+# torrents)
 # All other providers except animeheaven (used only when named) are
 # automatically used as fallbacks (the torrent ones only with
 # torrent_fallback = true).
@@ -417,13 +424,13 @@ download_dir = "~/Videos/lobster"
 # your resume positions".
 # base = "auto"
 
-# yts, nyaa and eztv are BitTorrent, not HTTP streaming. They play while
+# yts, nyaa, eztv and 1337x are BitTorrent, not HTTP streaming. They play while
 # downloading, but also make you a participant in the swarm: your IP is visible to every peer
 # and to the monitoring firms that sit in them, which ordinary streaming never
 # does. This applies to the default install, because "auto" plays movies from
 # YTS — set base = "flixhq.ws" (or another explicit non-torrent source, or
 # api_url) and leave torrent_fallback false to never join a swarm. Naming yts,
-# nyaa or eztv joins one even with torrent_fallback false. Otherwise use a VPN.
+# nyaa, eztv or 1337x joins one even with torrent_fallback false. Otherwise use a VPN.
 # Needs a 64-bit build, or the classic storage backend, which lobster selects
 # for you on a run that may stream a torrent (GUIDE.md -> "Torrent storage
 # backend"). Pieces land in ~/Videos/.lobster/ and are removed when playback
@@ -444,7 +451,7 @@ download_dir = "~/Videos/lobster"
 # When set, lobster uses this API for search, streaming, etc. It overrides
 # `base` entirely, and counts as an explicit source: movies are not routed to
 # YTS. With torrent_fallback left false, such a run never joins a swarm —
-# torrent_fallback = true puts YTS, EZTV and Nyaa back in the fallback chain
+# torrent_fallback = true puts YTS, EZTV, Nyaa and 1337x back in the fallback chain
 # whatever api_url says.
 # api_url = "https://your-consumet-instance.example.com"
 

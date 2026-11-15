@@ -71,6 +71,9 @@ func newProvider() provider.Provider {
 	if strings.Contains(base, "eztv") {
 		return provider.NewEZTV()
 	}
+	if strings.Contains(base, "1337x") {
+		return provider.NewX1337()
+	}
 	// These are substring tests, so an arm that matched a longer token first
 	// would shadow a later one; none of the tokens above contain each other
 	// or "animeonsen", so the order among them is not load-bearing today.

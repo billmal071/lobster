@@ -22,6 +22,8 @@ Lobster selects the content provider via the `base` setting in `config.toml` or 
    - `animeheaven` — anime; only when named, never a fallback
    - `yts` — films over BitTorrent
    - `eztv` — TV series over BitTorrent, keyed by IMDb id
+   - `1337x` — films and series over BitTorrent, scraped from the 1337x site
+     and its mirrors
    - `nyaa` — anime over BitTorrent (English-translated category; the feed
      exposes only the 75 newest torrents per query)
 
@@ -32,7 +34,7 @@ Lobster selects the content provider via the `base` setting in `config.toml` or 
    `anipub`, `vaplayer`.
 
    All other providers are automatically used as fallbacks when the primary
-   fails; the torrent sources (`yts`, `eztv`, `nyaa`) only when
+   fails; the torrent sources (`yts`, `eztv`, `nyaa`, `1337x`) only when
    `torrent_fallback = true`, because a magnet exposes your IP to the swarm.
 
 ## 2. Test Provider via CLI
@@ -111,7 +113,7 @@ A: Run with `-x` (debug mode). It prints the selected provider and all fallback 
 A: Switch with `--base` on the CLI, which selects the primary source. It is not an isolated check: when the primary fails, playback goes on to the fallback chain (stderr says "Primary provider failed, trying fallback..."), so a stream can come from another provider. Run with `-x` and read the debug output to see which provider answered. The TUI (run `lobster` with no args) is not an independent check per category: under the default config Movies and Series both search FlixHQWS and only Anime searches AnimeOnsen, and Movies and Series searches can add rows from fallback providers when the primary returns few results (the Anime tab never does).
 
 **Q: What if a provider is down?**  
-A: Lobster builds a fallback chain from every source except the primary (a FlixHQWS primary rejoins it for episode streams, since it cannot resolve one itself): TBCPL, Consumet (when `api_url` is set), FlixHQWS, AnimeOnsen, TBCPLEmbed (when the catalog feed is on), and, only when `torrent_fallback` is on, EZTV, Nyaa and YTS. The probes are health-ranked and raced, not tried strictly in sequence, and the torrent sources are tried only after every HTTP source has failed. When `api_url` is set, Consumet is the primary rather than a fallback, and `base` is ignored. Under the default config FlixHQWS is the primary for series and for any film YTS has no match for, so its fallbacks start at TBCPL; with `base = "auto"` a film is routed to YTS at play time instead (not with `--json`, or `--download`, which keep FlixHQWS).
+A: Lobster builds a fallback chain from every source except the primary (a FlixHQWS primary rejoins it for episode streams, since it cannot resolve one itself): TBCPL, Consumet (when `api_url` is set), FlixHQWS, AnimeOnsen, TBCPLEmbed (when the catalog feed is on), and, only when `torrent_fallback` is on, EZTV, Nyaa, YTS and 1337x. Within each tier the probes are health-ranked and raced in batches, not tried strictly in sequence; the torrent tier is raced only after every HTTP source has failed. When `api_url` is set, Consumet is the primary rather than a fallback, and `base` is ignored. Under the default config FlixHQWS is the primary for series and for any film YTS has no match for, so its fallbacks start at TBCPL; with `base = "auto"` a film is routed to YTS at play time instead (not with `--json`, or `--download`, which keep FlixHQWS).
 
 ---
 
