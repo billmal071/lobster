@@ -26,7 +26,8 @@ Lobster selects the content provider via the `base` setting in `config.toml` or 
      exposes only the 75 newest torrents per query)
 
    Retired (`--base` rejects them; a config file's value is replaced with
-   `flixhq.ws`, or `auto` when `torrent_fallback` is on, with a warning):
+   `flixhq.ws`, or `auto` when `torrent_fallback` is on, with a warning; with
+   `api_url` set neither happens and the API provider is used):
    `soap2day`, `moviebox`, `vidnest`, `flixhq.to`, `kimcartoon`, `allanime`,
    `anipub`, `vaplayer`.
 
