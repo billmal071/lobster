@@ -110,10 +110,11 @@ type Request struct {
 func resolveWithProvider(p provider.Provider, req Request, log func(string, ...any)) (*media.Stream, string, error) {
 	results, err := p.Search(req.Title)
 	if err != nil {
+		log("search failed on %s: %v", ProviderName(p), err)
 		return nil, "search", fmt.Errorf("search failed: %w", err)
 	}
 
-	candidates := candidatesFor(results, req)
+	candidates := admittedCandidates(candidatesFor(results, req), req, log)
 	if len(candidates) == 0 {
 		return nil, "match", fmt.Errorf("no matching result for %q", req.Title)
 	}
@@ -161,6 +162,21 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 		return nil, StageAccept, fmt.Errorf("stream refused: %w", refusal)
 	}
 	return nil, "resolve", fmt.Errorf("all %d candidates failed: %w", len(candidates), lastErr)
+}
+
+// admittedCandidates keeps the candidates that are the work req identifies. A
+// provider's search is relevance-ranked, not exact, so without this gate its
+// best-scoring unrelated row would be streamed under the requested title.
+func admittedCandidates(candidates []media.SearchResult, req Request, log func(string, ...any)) []media.SearchResult {
+	out := make([]media.SearchResult, 0, len(candidates))
+	for _, c := range candidates {
+		if Matches(c, req) {
+			out = append(out, c)
+			continue
+		}
+		log("fallback candidate %q (ID: %s) refused: not the requested title %q", c.Title, c.ID, req.Title)
+	}
+	return out
 }
 
 // confidentMatch reports whether c is the work req identifies: the same ID, or
