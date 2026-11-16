@@ -323,3 +323,23 @@ func TestImageBaseFallsBackWhenConfigurationFails(t *testing.T) {
 		}
 	}
 }
+
+func TestTruncatedResponseIsNotCachedAndTheNextCallRecovers(t *testing.T) {
+	calls := 0
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			io.WriteString(w, `{"results":[{"id":603,"tit`)
+			return
+		}
+		io.WriteString(w, `{"results":[{"id":603,"title":"The Matrix","release_date":"1999-03-30"}]}`)
+	})
+
+	if _, err := c.Trending(media.Movie); err == nil {
+		t.Fatal("truncated JSON decoded without error")
+	}
+	got, err := c.Trending(media.Movie)
+	if err != nil || len(got) != 1 || got[0].ID != "movie/603" {
+		t.Fatalf("retry = %v, %v; want the valid body, not the cached truncated one", got, err)
+	}
+}

@@ -7,6 +7,7 @@ import (
 
 	"lobster/internal/media"
 	"lobster/internal/provider"
+	"lobster/internal/titlekey"
 )
 
 // Hint is shown once when no key is configured.
@@ -32,6 +33,8 @@ type Provider struct {
 	mu       sync.Mutex
 	notice   string
 	hintDone bool
+	rows     map[string]media.SearchResult
+	resolved map[string]string
 }
 
 // Wrap returns inner with catalogue lists. A nil client keeps inner's lists
@@ -79,6 +82,79 @@ func (p *Provider) fellBack(err error) {
 	}
 }
 
+func (p *Provider) remember(rows []media.SearchResult) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.rows == nil {
+		p.rows = map[string]media.SearchResult{}
+	}
+	for _, r := range rows {
+		if IsID(r.ID) {
+			p.rows[r.ID] = r
+		}
+	}
+}
+
+func (p *Provider) providerID(id string) (string, error) {
+	if !IsID(id) {
+		return id, nil
+	}
+	p.mu.Lock()
+	if r, ok := p.resolved[id]; ok {
+		p.mu.Unlock()
+		return r, nil
+	}
+	row, known := p.rows[id]
+	p.mu.Unlock()
+	if !known {
+		return id, nil
+	}
+	results, err := p.Provider.Search(row.Title)
+	if err != nil {
+		return "", err
+	}
+	want := titlekey.Normalize(row.Title)
+	pick := ""
+	for _, r := range results {
+		if r.Type != media.TV || titlekey.Normalize(r.Title) != want {
+			continue
+		}
+		if row.Year != "" && r.Year == row.Year {
+			pick = r.ID
+			break
+		}
+		if pick == "" {
+			pick = r.ID
+		}
+	}
+	if pick == "" {
+		return "", fmt.Errorf("%q was not found on this provider", row.Title)
+	}
+	p.mu.Lock()
+	if p.resolved == nil {
+		p.resolved = map[string]string{}
+	}
+	p.resolved[id] = pick
+	p.mu.Unlock()
+	return pick, nil
+}
+
+func (p *Provider) GetSeasons(id string) ([]media.Season, error) {
+	pid, err := p.providerID(id)
+	if err != nil {
+		return nil, err
+	}
+	return p.Provider.GetSeasons(pid)
+}
+
+func (p *Provider) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
+	pid, err := p.providerID(id)
+	if err != nil {
+		return nil, err
+	}
+	return p.Provider.GetEpisodes(pid, seasonID)
+}
+
 // Trending returns the catalogue's trending (or anime) list, or the
 // provider's when there is no key or the catalogue fails.
 func (p *Provider) Trending(mt media.MediaType) ([]media.SearchResult, error) {
@@ -97,6 +173,7 @@ func (p *Provider) Trending(mt media.MediaType) ([]media.SearchResult, error) {
 		p.fellBack(err)
 		return p.Provider.Trending(mt)
 	}
+	p.remember(res)
 	return res, nil
 }
 
@@ -115,6 +192,7 @@ func (p *Provider) Recent(mt media.MediaType) ([]media.SearchResult, error) {
 		p.fellBack(err)
 		return p.Provider.Recent(mt)
 	}
+	p.remember(res)
 	return res, nil
 }
 

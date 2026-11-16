@@ -233,3 +233,85 @@ func TestUnwrapReturnsInner(t *testing.T) {
 		t.Error("Unwrap did not return the wrapped provider")
 	}
 }
+
+type showProvider struct {
+	provider.Provider
+	results    []media.SearchResult
+	searches   []string
+	seasonIDs  []string
+	episodeIDs []string
+	seasonsErr error
+}
+
+func (s *showProvider) Search(q string) ([]media.SearchResult, error) {
+	s.searches = append(s.searches, q)
+	return s.results, nil
+}
+
+func (s *showProvider) GetSeasons(id string) ([]media.Season, error) {
+	s.seasonIDs = append(s.seasonIDs, id)
+	return []media.Season{{ID: "s1", Number: 1}}, s.seasonsErr
+}
+
+func (s *showProvider) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
+	s.episodeIDs = append(s.episodeIDs, id)
+	return []media.Episode{{ID: "e1", Number: 1}}, nil
+}
+
+func (s *showProvider) Trending(media.MediaType) ([]media.SearchResult, error) {
+	return nil, errors.New("unused")
+}
+
+func TestSeasonsAndEpisodesUseTheProvidersOwnIDForACatalogueRow(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/one-piece-live-action-9", Title: "One Piece (Live Action)", Type: media.TV, Year: "2023"},
+		{ID: "movie/one-piece-film-1", Title: "One Piece", Type: media.Movie, Year: "1999"},
+		{ID: "tv/one-piece-100", Title: "One Piece", Type: media.TV, Year: "1999"},
+	}}
+	p := Wrap(inner, okServer(t), Anime)
+	rows, err := p.Trending(media.TV)
+	if err != nil || len(rows) != 1 || rows[0].ID != "tv/37854" {
+		t.Fatalf("Trending = %v, %v", rows, err)
+	}
+
+	if _, err := p.GetSeasons("tv/37854"); err != nil {
+		t.Fatalf("GetSeasons: %v", err)
+	}
+	if _, err := p.GetEpisodes("tv/37854", "s1"); err != nil {
+		t.Fatalf("GetEpisodes: %v", err)
+	}
+	if len(inner.seasonIDs) != 1 || inner.seasonIDs[0] != "tv/one-piece-100" {
+		t.Fatalf("GetSeasons got %v, want tv/one-piece-100", inner.seasonIDs)
+	}
+	if len(inner.episodeIDs) != 1 || inner.episodeIDs[0] != "tv/one-piece-100" {
+		t.Fatalf("GetEpisodes got %v", inner.episodeIDs)
+	}
+	if len(inner.searches) != 1 {
+		t.Fatalf("searches = %v, want the resolution cached", inner.searches)
+	}
+}
+
+func TestSeasonsFailWhenTheProviderHasNoMatchingShow(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{{ID: "tv/other-1", Title: "Other Show", Type: media.TV}}}
+	p := Wrap(inner, okServer(t), Anime)
+	if _, err := p.Trending(media.TV); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.GetSeasons("tv/37854"); err == nil {
+		t.Fatal("GetSeasons succeeded with no matching show")
+	}
+	if len(inner.seasonIDs) != 0 {
+		t.Fatalf("provider was called with %v", inner.seasonIDs)
+	}
+}
+
+func TestSeasonsPassThroughForNativeIDs(t *testing.T) {
+	inner := &showProvider{}
+	p := Wrap(inner, okServer(t), General)
+	if _, err := p.GetSeasons("tv/native-5"); err != nil {
+		t.Fatal(err)
+	}
+	if len(inner.searches) != 0 || inner.seasonIDs[0] != "tv/native-5" {
+		t.Fatalf("native id was rewritten: searches=%v ids=%v", inner.searches, inner.seasonIDs)
+	}
+}

@@ -123,6 +123,9 @@ func (c *Client) get(path string, q url.Values) ([]byte, error) {
 	if len(body) > maxBody {
 		return nil, errors.New("TMDB response too large")
 	}
+	if !json.Valid(body) {
+		return nil, errors.New("TMDB returned malformed JSON")
+	}
 
 	c.mu.Lock()
 	c.cache[cacheKey] = cacheEntry{body: body, at: c.now()}
