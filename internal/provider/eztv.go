@@ -59,6 +59,7 @@ type EZTV struct {
 	tmdbBaseURL string
 
 	primary bool
+	apiBase string
 	now     func() time.Time
 
 	mu      sync.Mutex
@@ -89,6 +90,23 @@ func NewEZTV() *EZTV {
 		partial:     map[string]time.Time{},
 		now:         time.Now,
 	}
+}
+
+func (e *EZTV) apiURL() string {
+	if e.apiBase != "" {
+		return e.apiBase
+	}
+	return eztvBase
+}
+
+// SetBaseURLs points this instance at a TMDB site and an EZTV API, for tests of code that builds the provider itself.
+func (e *EZTV) SetBaseURLs(tmdb, api string) {
+	e.tmdbBaseURL, e.apiBase = tmdb, api
+}
+
+// IsCatalogueGap reports a list that is short because EZTV lacks releases, as opposed to one cut short by a failed fetch or probe.
+func IsCatalogueGap(err error) bool {
+	return errors.Is(err, ErrIncompleteEpisodeList) && errors.Is(err, ErrNotCarried)
 }
 
 // AsPrimary marks e as the configured base, so Search offers only shows EZTV holds torrents for.
@@ -145,7 +163,7 @@ type eztvResponse struct {
 // fetchPage reads one page of a show's torrent list, abandoning the request when ctx ends.
 func (e *EZTV) fetchPage(ctx context.Context, imdb string, page int) (*eztvResponse, error) {
 	apiURL := fmt.Sprintf("%s/api/get-torrents?imdb_id=%s&limit=%d&page=%d",
-		strings.TrimRight(eztvBase, "/"), imdb, eztvPageSize, page)
+		strings.TrimRight(e.apiURL(), "/"), imdb, eztvPageSize, page)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, err

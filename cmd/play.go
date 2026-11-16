@@ -154,8 +154,9 @@ func applyRefBase(cmd *cobra.Command, r playRef) {
 // better informed.
 func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) error {
 	seasons, err := p.GetSeasons(r.ID)
-	partial := len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList)
-	if (err != nil && !partial) || len(seasons) == 0 {
+	usable := len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList)
+	partial := usable && !provider.IsCatalogueGap(err)
+	if (err != nil && !usable) || len(seasons) == 0 {
 		// Same condition resolveAndPlay branches on. Let it do its job.
 		debugf("play: cannot validate season/episode against primary (err=%v, seasons=%d); deferring to the resolver", err, len(seasons))
 		return nil
@@ -225,7 +226,7 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 	eps, err := p.GetEpisodes(r.ID, seasonID)
 	// A list that is short only because the source lacks some episodes
 	// (provider.ErrNotCarried) is still a complete answer about what it has.
-	complete := len(eps) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) && errors.Is(err, provider.ErrNotCarried)
+	complete := len(eps) > 0 && provider.IsCatalogueGap(err)
 	if (err != nil && !complete) || len(eps) == 0 {
 		debugf("play: cannot validate episode against primary (err=%v, episodes=%d); deferring to the resolver", err, len(eps))
 		return nil

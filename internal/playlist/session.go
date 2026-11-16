@@ -2,7 +2,6 @@
 package playlist
 
 import (
-	"errors"
 	"fmt"
 
 	"lobster/internal/media"
@@ -185,7 +184,7 @@ func (s *Session) Next() (media.Episode, error) {
 }
 
 func isShortList(episodes []media.Episode, err error) bool {
-	return len(episodes) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList)
+	return len(episodes) > 0 && provider.IsCatalogueGap(err)
 }
 
 // Previous moves to the previous episode. If at the start of a season, loads

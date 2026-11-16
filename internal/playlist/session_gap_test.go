@@ -15,7 +15,7 @@ func (g gappedProvider) GetEpisodes(id, seasonID string) ([]media.Episode, error
 	if err != nil {
 		return nil, err
 	}
-	return eps, fmt.Errorf("%w: eztv carries only some episodes", provider.ErrIncompleteEpisodeList)
+	return eps, fmt.Errorf("%w: %w", provider.ErrIncompleteEpisodeList, provider.ErrNotCarried)
 }
 
 func gappedSession(seasonIdx, episodeIdx int) *Session {

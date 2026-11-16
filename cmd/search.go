@@ -322,7 +322,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		stopSeasons()
 		seasonsPartial := false
 		if err != nil && len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
-			seasonsPartial = true
+			seasonsPartial = !provider.IsCatalogueGap(err)
 			warnf("%s could not list every season of %q, so the season list may be short: %v", providerLabel(p), title, err)
 			err = nil
 		}

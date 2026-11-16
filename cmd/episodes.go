@@ -97,6 +97,10 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		src, seasons, sel, ok = seasonAcrossHits(primary, seasonRequest(r), src, wantSeason)
 		p = src.provider
 	}
+	if !ok && src.gapped {
+		return emitErr("no_results", exitNoResults, "%s does not carry season %d of %q",
+			strings.ToUpper(searchProviderBase(primary)), flagSeason, r.Title)
+	}
 	if !ok && src.partial {
 		return emitErr("providers_failed", exitProvidersFailed,
 			"season %d was not in the season list %s could fetch for %q, and that list is incomplete, so it may still exist",
@@ -123,7 +127,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	// base test below asked whether the *chain member's* token named the
 	// primary.
 	asked := primary
-	seasonsPartial := src.partial
+	seasonsPartial, seasonsGapped := src.partial, src.gapped
 
 	eps, err := listSeasonEpisodes(p, src, sel)
 	askedLacks := src.primaryLacks || (src.fromPrimary && lacksTheWork(err, len(eps)))
@@ -167,7 +171,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 			debugf("episodes: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), a.season.Number)
 			p, seasons, sel, eps, err = a.hit.provider, a.hit.seasons, a.season, a.episodes, nil
 			shortfall = a.shortfall
-			seasonsPartial = a.hit.partial
+			seasonsPartial, seasonsGapped = a.hit.partial, a.hit.gapped
 		}
 	}
 	if err != nil {
@@ -210,7 +214,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		"provider": providerLabel(p),
 	}
 	w := episodeSourceWarnings(asked, p, shortfall, len(out), askedLacks)
-	if seasonsPartial {
+	if seasonsPartial || seasonsGapped {
 		w = append(w, map[string]any{
 			"code":     "season_list_incomplete",
 			"provider": providerLabel(p),
@@ -511,7 +515,8 @@ func seasonSource(primary provider.Provider, r playRef) seasonAnswer {
 		return seasonAnswer{provider: primary, id: r.ID, seasons: seasons, fromPrimary: true}
 	}
 	if len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
-		return seasonAnswer{provider: primary, id: r.ID, seasons: seasons, fromPrimary: true, partial: true}
+		return seasonAnswer{provider: primary, id: r.ID, seasons: seasons, fromPrimary: true,
+			partial: !provider.IsCatalogueGap(err), gapped: provider.IsCatalogueGap(err)}
 	}
 	debugf("episodes: primary could not enumerate %q (err=%v, seasons=%d); re-searching the fallback chain by title", r.ID, err, len(seasons))
 
@@ -522,6 +527,7 @@ func seasonSource(primary provider.Provider, r playRef) seasonAnswer {
 			id:           hits[0].id,
 			seasons:      hits[0].seasons,
 			partial:      hits[0].partial,
+			gapped:       hits[0].gapped,
 			alts:         hits[1:],
 		}
 	}
@@ -559,8 +565,9 @@ func seasonAcrossHits(primary provider.Provider, req resolver.Request, src seaso
 			id:           h.id,
 			seasons:      h.seasons,
 			partial:      h.partial,
+			gapped:       h.gapped,
 			alts:         alts[i+1:],
-			primaryLacks: src.primaryLacks || src.fromPrimary,
+			primaryLacks: src.primaryLacks || (src.fromPrimary && !src.partial),
 		}, h.seasons, sel, true
 	}
 	for _, h := range alts {
@@ -593,6 +600,7 @@ type seasonAnswer struct {
 	// (provider.ErrIncompleteEpisodeList), so a season absent from all of them
 	// may still exist.
 	partial      bool
+	gapped       bool
 	err          error
 	primaryLacks bool
 }
@@ -800,6 +808,7 @@ type seasonHit struct {
 	seasons  []media.Season
 	// partial reports that seasons came with provider.ErrIncompleteEpisodeList.
 	partial bool
+	gapped  bool
 }
 
 // probeSeasons asks one fallback provider whether it has req's work and can
@@ -817,11 +826,12 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 			continue
 		}
 		seasons, err := seasonsWithContext(ctx, p, c.ID)
-		partial := err != nil && len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList)
-		if (err != nil && !partial) || len(seasons) == 0 {
+		incomplete := err != nil && len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList)
+		if (err != nil && !incomplete) || len(seasons) == 0 {
 			continue
 		}
-		return &seasonHit{provider: p, id: c.ID, title: c.Title, seasons: seasons, partial: partial}
+		return &seasonHit{provider: p, id: c.ID, title: c.Title, seasons: seasons,
+			partial: incomplete && !provider.IsCatalogueGap(err), gapped: incomplete && provider.IsCatalogueGap(err)}
 	}
 	return nil
 }

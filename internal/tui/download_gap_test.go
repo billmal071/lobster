@@ -12,7 +12,7 @@ type gappedListProvider struct{ provider.Provider }
 
 func (gappedListProvider) GetEpisodes(string, string) ([]media.Episode, error) {
 	return []media.Episode{{ID: "2x2", Number: 2}, {ID: "2x3", Number: 3}},
-		fmt.Errorf("%w: eztv carries only some episodes", provider.ErrIncompleteEpisodeList)
+		fmt.Errorf("%w: %w", provider.ErrIncompleteEpisodeList, provider.ErrNotCarried)
 }
 
 func TestFetchEpisodesKeepsAListWithGaps(t *testing.T) {
