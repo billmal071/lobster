@@ -283,6 +283,13 @@ subs_language = "english"
 # subdl_api_key = "..."
 # opensubtitles_api_key = "..."
 
+# Your own themoviedb.org API key (v3 key or v4 token). With it the Movies,
+# Series and Anime tabs and `lobster trending` / `lobster recent` list titles
+# from the TMDB API; without it they come from the content source. The
+# LOBSTER_TMDB_KEY environment variable overrides this. The key is only ever
+# sent to api.themoviedb.org. See README.md -> "TMDB catalogue".
+# tmdb_api_key = "..."
+
 # Optional opensubtitles.com account, which only affects how many subtitle
 # files you may download per day: the API key alone allows 5, the key plus
 # these allows 20. Twelve episodes is more than 5, and running out looks like
