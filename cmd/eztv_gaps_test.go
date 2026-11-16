@@ -136,3 +136,79 @@ func TestEpisodesGapWordingIsNotTheEnumerationShortfall(t *testing.T) {
 		t.Errorf("message = %q, want gap wording rather than the enumeration-shortfall wording", w[0].Message)
 	}
 }
+
+func TestValidateNamesTheSourceWhenAGappedListLacksTheEpisode(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+	primary := &stubProvider{
+		seasons:         []media.Season{{ID: "5", Number: 5}},
+		episodesWithErr: []media.Episode{{ID: "5x1", Number: 1}, {ID: "5x5", Number: 5}},
+		episodesErr:     gapErr(),
+	}
+	withStubProviderBase(t, primary, "eztv")
+	_ = validateSeasonEpisode(primary, playRef{ID: "eztv/1", Title: "South Park", Type: "tv"}, 5, 4)
+	out := buf.String()
+	if !strings.Contains(out, "EZTV does not carry") || strings.Contains(out, "has no episode") {
+		t.Errorf("output = %s, want it to say EZTV does not carry the episode, not that the show has none", out)
+	}
+}
+
+func fallbackNamed(t *testing.T, token string, seasons []media.Season, err error) *stubProvider {
+	t.Helper()
+	fb := chainShow()
+	fb.seasons, fb.seasonsErr = seasons, err
+	withStubProviderBase(t, fb, token)
+	return fb
+}
+
+func TestGappedFallbackListNamesItselfNotTheFailedPrimary(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+	withBase(t, "flixhq.ws")
+	primary := &stubProvider{seasonsErr: errors.New("boom")}
+	withStubProvider(t, primary)
+	withStubProviderBase(t, primary, "flixhq.ws")
+	chainOf(t, fallbackNamed(t, "eztv", []media.Season{{ID: "3", Number: 3}}, gapErr()))
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+
+	_ = episodesRun(episodesCmd, nil)
+	out := buf.String()
+	if !strings.Contains(out, "EZTV does not carry season 1") || strings.Contains(out, "FLIXHQ") {
+		t.Errorf("output = %s, want EZTV named, not the primary whose lookup merely failed", out)
+	}
+}
+
+func TestIncompleteFallbackListBeatsAGappedOneForSeasonVerdict(t *testing.T) {
+	hostileEnv(t)
+	captureAgentOut(t)
+	withBase(t, "flixhq.ws")
+	primary := &stubProvider{seasonsErr: errors.New("boom")}
+	withStubProvider(t, primary)
+	withStubProviderBase(t, primary, "flixhq.ws")
+	gapped := fallbackNamed(t, "eztv", []media.Season{{ID: "3", Number: 3}}, gapErr())
+	partial := fallbackNamed(t, "other", []media.Season{{ID: "1", Number: 1}},
+		fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList))
+	chainOf(t, gapped, partial)
+	withEpisodesFlags(t, tvRef(t, ""), 2)
+
+	err := episodesRun(episodesCmd, nil)
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != exitProvidersFailed {
+		t.Fatalf("err = %v, want exit %d: an incomplete list cannot establish season 2 is absent", err, exitProvidersFailed)
+	}
+}
+
+func TestBatchUsesAFallbackPrefixWhenThePrimaryFails(t *testing.T) {
+	hostileEnv(t)
+	fb := chainShow()
+	fb.episodesWithErr = []media.Episode{{ID: "1x1", Number: 1}}
+	fb.episodesErr = fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList)
+	fb.seasons = []media.Season{{ID: "1", Number: 1}}
+	chainOf(t, fb)
+	primary := &stubProvider{episodesErr: errors.New("boom")}
+	l := newSeasonLister(primary, media.SearchResult{ID: "x", Title: "Some Show", Type: media.TV})
+	eps, err := l.episodes(media.Season{ID: "1", Number: 1})
+	if err != nil || len(eps) != 1 {
+		t.Fatalf("episodes = %d, err = %v; GUIDE.md says a fallback's flagged prefix is used as it comes", len(eps), err)
+	}
+}

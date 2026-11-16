@@ -97,9 +97,9 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		src, seasons, sel, ok = seasonAcrossHits(primary, seasonRequest(r), src, wantSeason)
 		p = src.provider
 	}
-	if !ok && src.gapped {
+	if !ok && src.gapped && !src.partial {
 		return emitErr("no_results", exitNoResults, "%s does not carry season %d of %q",
-			strings.ToUpper(searchProviderBase(primary)), flagSeason, r.Title)
+			strings.ToUpper(searchProviderBase(src.provider)), flagSeason, r.Title)
 	}
 	if !ok && src.partial {
 		return emitErr("providers_failed", exitProvidersFailed,

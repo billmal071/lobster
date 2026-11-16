@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -226,7 +227,8 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 	eps, err := p.GetEpisodes(r.ID, seasonID)
 	// A list that is short only because the source lacks some episodes
 	// (provider.ErrNotCarried) is still a complete answer about what it has.
-	complete := len(eps) > 0 && provider.IsCatalogueGap(err)
+	gapped := provider.IsCatalogueGap(err)
+	complete := len(eps) > 0 && gapped
 	if (err != nil && !complete) || len(eps) == 0 {
 		debugf("play: cannot validate episode against primary (err=%v, episodes=%d); deferring to the resolver", err, len(eps))
 		return nil
@@ -235,6 +237,10 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 		if e.Number == episode {
 			return nil
 		}
+	}
+	if gapped {
+		return emitErr("no_results", exitNoResults, "%s does not carry episode %d of season %d of %q",
+			strings.ToUpper(searchProviderBase(p)), episode, season, r.Title)
 	}
 	return emitErr("no_results", exitNoResults,
 		"season %d of %q has no episode %d", season, r.Title, episode)
