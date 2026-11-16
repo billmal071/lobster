@@ -393,7 +393,7 @@ func TestVidrockWatchPrefersHLSOverMP4InTheSameLanguage(t *testing.T) {
 			{Name: "A", Enc: vrSeal(t, vrKey(t), host+"/p/direct.mp4"), Lang: "English", Type: "mp4"},
 			{Name: "B", Enc: vrSealURL(t, host, "hls"), Lang: "English", Type: "hls"},
 		})
-	}, "hls")
+	}, "hls", "direct.mp4")
 	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "1080")
 	if err != nil || !strings.HasSuffix(stream.URL, "/p/hls.m3u8") {
 		t.Fatalf("stream %v err %v, want the hls entry", stream, err)
