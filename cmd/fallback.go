@@ -423,7 +423,7 @@ func resolveTier(ctx context.Context, providers []provider.Provider, req resolve
 type resolveFailure struct {
 	report *resolver.Report
 	err    error
-	lead string
+	lead   string
 }
 
 func (e *resolveFailure) Error() string {
