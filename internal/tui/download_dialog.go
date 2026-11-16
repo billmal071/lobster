@@ -291,6 +291,9 @@ func (d *downloadDialog) fetchEpisodes(seasonIdx int) tea.Cmd {
 	season := d.seasons[seasonIdx]
 	return func() tea.Msg {
 		episodes, err := prov.GetEpisodes(item.ID, season.ID)
+		if err != nil && len(episodes) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
+			err = nil
+		}
 		if (err != nil || len(episodes) == 0) && EpisodeListFallback != nil {
 			if eps, ferr := EpisodeListFallback(prov, item, season.Number); ferr == nil && len(eps) > 0 {
 				return dlEpisodesMsg{episodes: eps}

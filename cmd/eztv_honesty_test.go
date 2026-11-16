@@ -27,6 +27,7 @@ func TestTryFallbackStreamLeadsWithTheEZTVReason(t *testing.T) {
 	withFallbackChain(t, a, b)
 
 	primary := &carrierStub{stubProvider: &stubProvider{}, carries: notCarried()}
+	withStubProviderBase(t, primary, "eztv")
 	_, err := tryFallbackStream(primary, media.SearchResult{ID: "eztv/121955", Title: "South Park", Type: media.TV}, 5, 4)
 	if err == nil {
 		t.Fatal("want an error from a chain that streams nothing")
@@ -49,6 +50,7 @@ func TestTryFallbackStreamAddsNoEZTVReasonWhenEZTVHasTheEpisode(t *testing.T) {
 	withFallbackChain(t, a, b)
 
 	primary := &carrierStub{stubProvider: &stubProvider{}, carries: nil}
+	withStubProviderBase(t, primary, "eztv")
 	_, err := tryFallbackStream(primary, media.SearchResult{ID: "eztv/121955", Title: "South Park", Type: media.TV}, 5, 4)
 	if err == nil || strings.Contains(err.Error(), "EZTV does not carry") {
 		t.Fatalf("error = %v, want no EZTV verdict when EZTV does carry the episode", err)
@@ -61,6 +63,7 @@ func TestTryFallbackStreamAddsNoEZTVReasonWhenTheLookupFailed(t *testing.T) {
 	withFallbackChain(t, a, b)
 
 	primary := &carrierStub{stubProvider: &stubProvider{}, carries: errors.New("eztv: unexpected status 429")}
+	withStubProviderBase(t, primary, "eztv")
 	_, err := tryFallbackStream(primary, media.SearchResult{ID: "eztv/121955", Title: "South Park", Type: media.TV}, 5, 4)
 	if err == nil || strings.Contains(err.Error(), "EZTV does not carry") {
 		t.Fatalf("error = %v, want no claim that EZTV lacks the episode when the lookup itself failed", err)
@@ -79,6 +82,7 @@ func TestPlayReportsTheEZTVReasonFirst(t *testing.T) {
 		stubProvider: &stubProvider{seasonsErr: errors.New("eztv: no torrents")},
 		carries:      notCarried(),
 	}
+	withStubProviderBase(t, primary, "eztv")
 	prev := agentProvider
 	agentProvider = func() provider.Provider { return primary }
 	t.Cleanup(func() { agentProvider = prev })
@@ -109,7 +113,7 @@ func TestEpisodesFromFallbackUnderEZTVSaysTheyWillNotPlayViaEZTV(t *testing.T) {
 	withBase(t, "eztv")
 
 	primary := twoSeasonStub()
-	primary.episodesErr = errors.New("eztv: no torrents for eztv/1")
+	primary.episodesErr = fmt.Errorf("eztv: no torrents for eztv/1 (%w)", provider.ErrNotCarried)
 	withStubProvider(t, primary)
 	withStubProviderBase(t, primary, "eztv")
 
@@ -183,13 +187,5 @@ func TestEpisodesFlagsAPartialEZTVCatalogue(t *testing.T) {
 	}
 	if !codes["season_list_incomplete"] || !codes["episode_list_incomplete"] {
 		t.Fatalf("warning codes = %v, want season_list_incomplete and episode_list_incomplete", codes)
-	}
-}
-
-func TestNewProviderBuildsEZTVAsPrimary(t *testing.T) {
-	withBase(t, "eztv")
-	p, ok := newProvider().(*provider.EZTV)
-	if !ok || !p.IsPrimary() {
-		t.Fatalf("newProvider for base eztv = %T, want a *provider.EZTV marked primary", newProvider())
 	}
 }

@@ -338,8 +338,10 @@ listing is the whole season:
   that someone else was asked first and could not, which is a different fact
   and the one that matters: a fallback can list episodes it has no way to
   stream. Check that a ref from this listing actually plays before relying on
-  the count. When the base is `eztv` the message also says the listed episodes
-  will not play via EZTV.
+  the count. When the base is `eztv` and EZTV itself answered that it has none
+  of the show (or none of the requested season), the message also says the
+  listed episodes will not play via EZTV; after a transient EZTV failure it
+  keeps the generic wording.
 
 The counts describe the rows you actually received, so `--type` and `--limit`
 are already applied. Each row's `ref` names the source that produced it, where

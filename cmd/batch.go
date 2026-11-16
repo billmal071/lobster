@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -428,7 +429,7 @@ func newSeasonLister(p provider.Provider, selected media.SearchResult) *seasonLi
 
 func (l *seasonLister) episodes(season media.Season) ([]media.Episode, error) {
 	episodes, err := l.primary.GetEpisodes(l.selected.ID, season.ID)
-	if err == nil && len(episodes) > 0 {
+	if len(episodes) > 0 && (err == nil || errors.Is(err, provider.ErrIncompleteEpisodeList)) {
 		return episodes, nil
 	}
 	if season.Number < 0 {

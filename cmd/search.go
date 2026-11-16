@@ -531,8 +531,13 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		if sf := shortfallFor(err); sf.code != "" && len(episodes) > 0 &&
 			(episode == 0 || episodeIndex(episodes, episode) >= 0) {
 			err = nil
-			warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",
-				providerLabel(p), selectedSeason.Number, title, sf.reason)
+			if sf.gap {
+				warnf("%s has no release for some episodes of season %d of %q: %s",
+					providerLabel(p), selectedSeason.Number, title, sf.reason)
+			} else {
+				warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",
+					providerLabel(p), selectedSeason.Number, title, sf.reason)
+			}
 		}
 
 		if err != nil || len(episodes) == 0 {

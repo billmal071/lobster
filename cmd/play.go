@@ -223,7 +223,10 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 	}
 
 	eps, err := p.GetEpisodes(r.ID, seasonID)
-	if err != nil || len(eps) == 0 {
+	// A list that is short only because the source lacks some episodes
+	// (provider.ErrNotCarried) is still a complete answer about what it has.
+	complete := len(eps) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) && errors.Is(err, provider.ErrNotCarried)
+	if (err != nil && !complete) || len(eps) == 0 {
 		debugf("play: cannot validate episode against primary (err=%v, episodes=%d); deferring to the resolver", err, len(eps))
 		return nil
 	}

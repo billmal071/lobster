@@ -126,6 +126,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	seasonsPartial := src.partial
 
 	eps, err := listSeasonEpisodes(p, src, sel)
+	askedLacks := src.primaryLacks || (src.fromPrimary && lacksTheWork(err, len(eps)))
 	// An enumeration that stopped short of the end is an answer, not a
 	// failure: the list is episodes the provider actually confirmed, and
 	// dropping it to ask the chain would trade a measured prefix for a guess
@@ -208,7 +209,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		"episodes": out,
 		"provider": providerLabel(p),
 	}
-	w := episodeSourceWarnings(asked, p, shortfall, len(out))
+	w := episodeSourceWarnings(asked, p, shortfall, len(out), askedLacks)
 	if seasonsPartial {
 		w = append(w, map[string]any{
 			"code":     "season_list_incomplete",
@@ -291,12 +292,17 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 // Silent when no base was named, or "auto" was, or the base does not select
 // the primary at all: broadening is then the documented behaviour rather than
 // a departure from a request, which is the rule find.go already follows.
-func episodeSourceWarnings(asked, answered provider.Provider, shortfall episodeShortfall, listed int) []map[string]any {
+func episodeSourceWarnings(asked, answered provider.Provider, shortfall episodeShortfall, listed int, askedLacks bool) []map[string]any {
 	var out []map[string]any
 	if shortfall.code != "" {
 		message := fmt.Sprintf(
 			"%s could not establish where this season ends, so the %d episodes above are what it confirmed and there may be more: %s",
 			providerLabel(answered), listed, shortfall.reason)
+		if shortfall.gap {
+			message = fmt.Sprintf(
+				"%s has no release for some episodes of this season, so the %d episodes above are all it carries and others may exist elsewhere: %s",
+				providerLabel(answered), listed, shortfall.reason)
+		}
 		if shortfall.code == "episode_list_unconfirmed" {
 			message = fmt.Sprintf(
 				"%s found nothing beyond the %d episodes above, but could not re-check that on a request of its own, so the count is very likely the whole season rather than certainly: %s",
@@ -322,7 +328,7 @@ func episodeSourceWarnings(asked, answered provider.Provider, shortfall episodeS
 		message := fmt.Sprintf(
 			"base %q could not list this season, so the %d episodes above came from %s instead; a fallback provider can list episodes it cannot stream, so check that a ref from this listing plays before relying on the count",
 			configured, listed, providerLabel(answered))
-		if askedBase == "eztv" {
+		if askedBase == "eztv" && askedLacks {
 			message = fmt.Sprintf(
 				"base %q could not list this season, so the %d episodes above came from %s instead; EZTV could not list it, so these episodes will not play via EZTV and play only if another source serves them",
 				configured, listed, providerLabel(answered))
@@ -347,6 +353,7 @@ func episodeSourceWarnings(asked, answered provider.Provider, shortfall episodeS
 type episodeShortfall struct {
 	code   string
 	reason string
+	gap    bool
 }
 
 // shortfallFor reads a GetEpisodes error and says which warning code it is, or
@@ -375,7 +382,7 @@ func shortfallFor(err error) episodeShortfall {
 	if errors.Is(err, provider.ErrUnconfirmedEpisodeList) {
 		return episodeShortfall{code: "episode_list_unconfirmed", reason: err.Error()}
 	}
-	return episodeShortfall{code: "episode_list_incomplete", reason: err.Error()}
+	return episodeShortfall{code: "episode_list_incomplete", reason: err.Error(), gap: errors.Is(err, provider.ErrNotCarried)}
 }
 
 // listSeasonEpisodes makes the first episode-listing call, under a deadline
@@ -510,11 +517,12 @@ func seasonSource(primary provider.Provider, r playRef) seasonAnswer {
 
 	if hits := fallbackSeasonHits(primary, seasonRequest(r)); len(hits) > 0 {
 		return seasonAnswer{
-			provider: hits[0].provider,
-			id:       hits[0].id,
-			seasons:  hits[0].seasons,
-			partial:  hits[0].partial,
-			alts:     hits[1:],
+			primaryLacks: lacksTheWork(err, len(seasons)),
+			provider:     hits[0].provider,
+			id:           hits[0].id,
+			seasons:      hits[0].seasons,
+			partial:      hits[0].partial,
+			alts:         hits[1:],
 		}
 	}
 	return seasonAnswer{provider: primary, id: r.ID, fromPrimary: true, err: err}
@@ -547,17 +555,25 @@ func seasonAcrossHits(primary provider.Provider, req resolver.Request, src seaso
 		// The hits after this one stay available, so a provider that has the
 		// season but cannot list its episodes still falls through to the next.
 		return seasonAnswer{
-			provider: h.provider,
-			id:       h.id,
-			seasons:  h.seasons,
-			partial:  h.partial,
-			alts:     alts[i+1:],
+			provider:     h.provider,
+			id:           h.id,
+			seasons:      h.seasons,
+			partial:      h.partial,
+			alts:         alts[i+1:],
+			primaryLacks: src.primaryLacks || src.fromPrimary,
 		}, h.seasons, sel, true
 	}
 	for _, h := range alts {
 		src.partial = src.partial || h.partial
 	}
 	return src, src.seasons, media.Season{}, false
+}
+
+func lacksTheWork(err error, listed int) bool {
+	if err == nil {
+		return listed == 0
+	}
+	return errors.Is(err, provider.ErrNotCarried)
 }
 
 // seasonAnswer is who ended up answering seasonSource, plus the chain hits it
@@ -576,8 +592,9 @@ type seasonAnswer struct {
 	// provider's own or a chain hit's, was flagged incomplete
 	// (provider.ErrIncompleteEpisodeList), so a season absent from all of them
 	// may still exist.
-	partial bool
-	err     error
+	partial      bool
+	err          error
+	primaryLacks bool
 }
 
 // seasonRequest is the ref as the resolver sees it: the ID/Title/Year all
