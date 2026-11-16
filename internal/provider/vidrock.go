@@ -42,15 +42,14 @@ var vidrockWatchBudget = 20 * time.Second
 // It is a StreamProvider: the API has no search, listing or detail endpoints,
 // so Search borrows TMDB's and Watch takes the ids that search produced.
 type Vidrock struct {
-	base   string
-	client *http.Client
+	base       string
+	client     *http.Client
 	allowLocal bool
 
 	mu        sync.RWMutex
 	audioLang string
 }
 
-// NewVidrock creates a new Vidrock provider.
 func NewVidrock() *Vidrock {
 	return &Vidrock{
 		base:      vidrockBase,
@@ -59,15 +58,12 @@ func NewVidrock() *Vidrock {
 	}
 }
 
-// SetAudioLanguage sets the preferred audio language used to order servers.
-// Empty keeps the API's own order.
 func (v *Vidrock) SetAudioLanguage(lang string) {
 	v.mu.Lock()
 	v.audioLang = lang
 	v.mu.Unlock()
 }
 
-// Search uses TMDB's keyless multi-search, whose ids the Vidrock API takes.
 func (v *Vidrock) Search(query string) ([]media.SearchResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), vidrockWatchBudget)
 	defer cancel()
@@ -212,8 +208,6 @@ func (v *Vidrock) candidates(servers map[string]vidrockEntry) ([]vidrockCandidat
 	return out, lastErr
 }
 
-// vidrockDecrypt opens a server URL: base64url of a 12-byte IV followed by
-// AES-256-GCM ciphertext and its 16-byte tag.
 func vidrockDecrypt(s string) (string, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(strings.TrimSpace(s), "="))
 	if err != nil {
@@ -242,8 +236,6 @@ func vidrockDecrypt(s string) (string, error) {
 	return string(plain), nil
 }
 
-// checkURL accepts only an https URL with a host and no credentials, and
-// unless allowLocal is set, no loopback, private or link-local address.
 func (v *Vidrock) checkURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
@@ -263,8 +255,6 @@ func (v *Vidrock) checkURL(raw string) error {
 	return nil
 }
 
-// probe fetches the start of the candidate with no Referer, and for HLS
-// requires the body to be a playlist. Redirects must stay on vetted https URLs.
 func (v *Vidrock) probe(ctx context.Context, c vidrockCandidate) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
 	if err != nil {
