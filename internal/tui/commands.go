@@ -28,6 +28,14 @@ func fetchTabCmd(p provider.Provider, active tab) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
+		if n, ok := p.(interface{ TakeNotice() string }); ok {
+			if notice := n.TakeNotice(); notice != "" {
+				return tea.BatchMsg{
+					func() tea.Msg { return resultsFetchedMsg(results) },
+					func() tea.Msg { return noticeMsg(notice) },
+				}
+			}
+		}
 		return resultsFetchedMsg(results)
 	}
 }

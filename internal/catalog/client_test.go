@@ -19,7 +19,7 @@ func newTestClient(t *testing.T, h http.HandlerFunc) (*Client, *httptest.Server)
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return newClient(testKey, srv.URL, srv.Client()), srv
+	return NewWithBase(testKey, srv.URL, srv.Client()), srv
 }
 
 func TestDecodeListMapsRows(t *testing.T) {

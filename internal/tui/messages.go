@@ -13,6 +13,9 @@ func (e errMsg) Error() string { return e.err.Error() }
 // resultsFetchedMsg is sent when a list of search/trending results is fetched.
 type resultsFetchedMsg []media.SearchResult
 
+// noticeMsg carries a one-line catalogue notice to show in the footer.
+type noticeMsg string
+
 // detailFetchedMsg is sent when detailed metadata for an item is fetched.
 type detailFetchedMsg struct {
 	id     string

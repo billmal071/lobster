@@ -55,10 +55,11 @@ type Client struct {
 
 // New returns a client for the given key, or nil when the key is blank.
 func New(key string) *Client {
-	return newClient(key, apiBase, httputil.NewClient())
+	return NewWithBase(key, apiBase, httputil.NewClient())
 }
 
-func newClient(key, base string, hc *http.Client) *Client {
+// NewWithBase is New against another API root, for tests.
+func NewWithBase(key, base string, hc *http.Client) *Client {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return nil

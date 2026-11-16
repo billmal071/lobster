@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"lobster/internal/catalog"
 	"os"
 	"strings"
 
@@ -76,6 +77,7 @@ type AppModel struct {
 	downloadsModel downloads.Model
 	dlManager      *dlmanager.Manager
 	toast          string // transient notification
+	notice         string // catalogue fallback or hint line; cleared on tab switch
 
 	// Live TV state
 	liveTVProvider *provider.LiveTV
@@ -103,7 +105,7 @@ func (i listItem) Description() string {
 		return i.desc
 	}
 	desc := fmt.Sprintf("%s \u2022 %s", i.result.Type.String(), i.result.Year)
-	if i.result.Type == media.TV {
+	if i.result.Type == media.TV && i.result.Seasons > 0 {
 		desc = fmt.Sprintf("%s \u2022 %d Seasons", desc, i.result.Seasons)
 	}
 	return desc
@@ -135,11 +137,11 @@ func StartApp(p provider.Provider, cfg *config.Config, liveSources []string, mgr
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4C4C"))
 
+	general, anime := wrapProviders(p, provider.NewAnimeOnsen(), cfg)
 	m := AppModel{
-		state:    stateTrending,
-		provider: p,
-		// AnimeOnsen is the one anime source still standing (config.retiredBases).
-		animeProvider:     provider.NewAnimeOnsen(),
+		state:             stateTrending,
+		provider:          general,
+		animeProvider:     anime,
 		liveTVProvider:    provider.NewLiveTV(liveSources),
 		fallbackProviders: fallbacks,
 		config:            cfg,
@@ -165,7 +167,22 @@ func StartApp(p provider.Provider, cfg *config.Config, liveSources []string, mgr
 	if appModel.selectedProvider == nil {
 		appModel.selectedProvider = p
 	}
-	return appModel.selectedResult, appModel.selectedLineup, appModel.selectedIndex, appModel.selectedProvider, nil
+	return appModel.selectedResult, appModel.selectedLineup, appModel.selectedIndex, unwrapProvider(appModel.selectedProvider), nil
+}
+
+func wrapProviders(p, animeBase provider.Provider, cfg *config.Config) (provider.Provider, provider.Provider) {
+	var client *catalog.Client
+	if cfg != nil {
+		client = catalog.New(cfg.TMDBAPIKey)
+	}
+	return catalog.Wrap(p, client, catalog.General), catalog.Wrap(animeBase, client, catalog.Anime)
+}
+
+func unwrapProvider(p provider.Provider) provider.Provider {
+	if w, ok := p.(*catalog.Provider); ok {
+		return w.Unwrap()
+	}
+	return p
 }
 
 func (m AppModel) Init() tea.Cmd {
@@ -366,6 +383,9 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case errMsg:
 		m.err = msg.err
 		m.list.StopSpinner()
+
+	case noticeMsg:
+		m.notice = string(msg)
 
 	case resultsFetchedMsg:
 		m.err = nil
@@ -600,6 +620,8 @@ func (m AppModel) View() string {
 		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Render(m.toast)
 	} else if m.err != nil {
 		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555")).Render(fmt.Sprintf("Error: %v", m.err))
+	} else if m.notice != "" && m.activeTab != tabDownloads {
+		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("#F1FA8C")).Render(m.notice)
 	} else if m.activeTab == tabDownloads {
 		footer = footerStyle.Render("[P] Pause/Resume  [X] Cancel  [R] Retry  [BS] Remove  [C] Clear  [Shift+R] Refresh  [TAB] Browse")
 	} else {
@@ -722,6 +744,7 @@ func (m *AppModel) switchTab(next tab) tea.Cmd {
 	m.currentItem = nil
 	m.currentDetail = nil
 	m.err = nil
+	m.notice = ""
 
 	if next == tabDownloads {
 		m.downloadsModel.SetFocused(true)
