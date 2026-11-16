@@ -13,7 +13,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +40,14 @@ var errVidrockNoStream = errors.New("vidrock has no stream for this title")
 
 var vidrockWatchBudget = 20 * time.Second
 
+var vidrockProbeTimeout = 6 * time.Second
+
+var (
+	vidrockResolutionRe = regexp.MustCompile(`RESOLUTION=\d+x(\d+)`)
+	vidrockBandwidthRe  = regexp.MustCompile(`(?:^|[:,])BANDWIDTH=(\d+)`)
+	vidrockPathHeightRe = regexp.MustCompile(`/(\d{3,4})p?/`)
+)
+
 // Vidrock resolves streams from vidrock.to's unofficial JSON API by TMDB id.
 // It is a StreamProvider: the API has no search, listing or detail endpoints,
 // so Search borrows TMDB's and Watch takes the ids that search produced.
@@ -48,6 +58,7 @@ type Vidrock struct {
 
 	mu        sync.RWMutex
 	audioLang string
+	logf      func(string, ...any)
 }
 
 func NewVidrock() *Vidrock {
@@ -62,6 +73,21 @@ func (v *Vidrock) SetAudioLanguage(lang string) {
 	v.mu.Lock()
 	v.audioLang = lang
 	v.mu.Unlock()
+}
+
+func (v *Vidrock) SetLogger(fn func(string, ...any)) {
+	v.mu.Lock()
+	v.logf = fn
+	v.mu.Unlock()
+}
+
+func (v *Vidrock) log(format string, args ...any) {
+	v.mu.RLock()
+	fn := v.logf
+	v.mu.RUnlock()
+	if fn != nil {
+		fn(format, args...)
+	}
 }
 
 func (v *Vidrock) Search(query string) ([]media.SearchResult, error) {
@@ -146,21 +172,161 @@ func (v *Vidrock) Watch(mediaID, episodeID, server, quality string) (*media.Stre
 	}
 
 	candidates, lastErr := v.candidates(servers)
-	for _, c := range candidates {
-		if ctx.Err() != nil {
-			break
-		}
-		if err := v.probe(ctx, c); err != nil {
-			lastErr = err
-			continue
-		}
-		return &media.Stream{URL: c.url, Quality: quality}, nil
+	probes, probeErr := v.probeAll(ctx, candidates, vidrockQualityCap(quality))
+	if probeErr != nil {
+		lastErr = probeErr
+	}
+	if len(probes) > 0 {
+		best := v.rank(probes, quality)
+		v.log("vidrock: using server %s (%s) at %dp", best.c.name, best.c.language, best.height)
+		return &media.Stream{URL: best.streamURL(quality), Quality: quality}, nil
 	}
 
 	if lastErr != nil {
 		return nil, fmt.Errorf("%w: %v", errVidrockNoStream, lastErr)
 	}
 	return nil, errVidrockNoStream
+}
+
+type vidrockVariant struct {
+	height, bandwidth int
+	url               string
+}
+
+type vidrockProbe struct {
+	c        vidrockCandidate
+	variants []vidrockVariant
+	height   int
+	maxH     int
+	bw       int
+	pick     *vidrockVariant
+}
+
+func (p vidrockProbe) streamURL(quality string) string {
+	if vidrockQualityCap(quality) > 0 && p.pick != nil && p.pick.height < p.maxH {
+		return p.pick.url
+	}
+	return p.c.url
+}
+
+func vidrockQualityCap(quality string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(quality))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+func vidrockTier(height, qcap int) int {
+	switch {
+	case height <= 0:
+		return 2
+	case qcap > 0 && height > qcap:
+		return 1
+	}
+	return 0
+}
+
+func vidrockBetter(ah, abw, bh, bbw, qcap int) bool {
+	at, bt := vidrockTier(ah, qcap), vidrockTier(bh, qcap)
+	if at != bt {
+		return at < bt
+	}
+	if ah != bh {
+		if at == 1 {
+			return ah < bh
+		}
+		return ah > bh
+	}
+	return abw > bbw
+}
+
+func (v *Vidrock) probeAll(ctx context.Context, cands []vidrockCandidate, qcap int) ([]vidrockProbe, error) {
+	type result struct {
+		p   vidrockProbe
+		err error
+	}
+	results := make([]result, len(cands))
+	var wg sync.WaitGroup
+	for i, c := range cands {
+		wg.Add(1)
+		go func(i int, c vidrockCandidate) {
+			defer wg.Done()
+			pctx, cancel := context.WithTimeout(ctx, vidrockProbeTimeout)
+			defer cancel()
+			p, err := v.probe(pctx, c, qcap)
+			results[i] = result{p, err}
+		}(i, c)
+	}
+	wg.Wait()
+
+	var out []vidrockProbe
+	var lastErr error
+	for _, r := range results {
+		if r.err != nil {
+			lastErr = r.err
+			continue
+		}
+		out = append(out, r.p)
+	}
+	return out, lastErr
+}
+
+func (v *Vidrock) rank(probes []vidrockProbe, quality string) vidrockProbe {
+	qcap := vidrockQualityCap(quality)
+	v.mu.RLock()
+	pref := v.audioLang
+	v.mu.RUnlock()
+	sort.SliceStable(probes, func(i, j int) bool {
+		a, b := probes[i], probes[j]
+		if pref != "" {
+			if ma, mb := lang.Matches(a.c.language, pref), lang.Matches(b.c.language, pref); ma != mb {
+				return ma
+			}
+		}
+		return vidrockBetter(a.height, a.bw, b.height, b.bw, qcap)
+	})
+	for _, p := range probes {
+		v.log("vidrock: server %s (%s, %s) offers %dp", p.c.name, p.c.language, vidrockKind(p.c), p.height)
+	}
+	return probes[0]
+}
+
+func vidrockKind(c vidrockCandidate) string {
+	if c.hls {
+		return "hls"
+	}
+	return "other"
+}
+
+func parseVidrockPlaylist(body string, base *url.URL) []vidrockVariant {
+	lines := strings.Split(body, "\n")
+	var out []vidrockVariant
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "#EXT-X-STREAM-INF") {
+			continue
+		}
+		var v vidrockVariant
+		if m := vidrockResolutionRe.FindStringSubmatch(line); m != nil {
+			v.height, _ = strconv.Atoi(m[1])
+		}
+		if m := vidrockBandwidthRe.FindStringSubmatch(line); m != nil {
+			v.bandwidth, _ = strconv.Atoi(m[1])
+		}
+		for _, next := range lines[i+1:] {
+			next = strings.TrimSpace(next)
+			if next == "" || strings.HasPrefix(next, "#") {
+				continue
+			}
+			ref, err := url.Parse(next)
+			if err == nil {
+				v.url = base.ResolveReference(ref).String()
+				out = append(out, v)
+			}
+			break
+		}
+	}
+	return out
 }
 
 func (v *Vidrock) candidates(servers map[string]vidrockEntry) ([]vidrockCandidate, error) {
@@ -255,10 +421,11 @@ func (v *Vidrock) checkURL(raw string) error {
 	return nil
 }
 
-func (v *Vidrock) probe(ctx context.Context, c vidrockCandidate) error {
+func (v *Vidrock) probe(ctx context.Context, c vidrockCandidate, qcap int) (vidrockProbe, error) {
+	p := vidrockProbe{c: c}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
 	if err != nil {
-		return err
+		return p, err
 	}
 	req.Header.Set("User-Agent", vidrockUA)
 	client := *v.client
@@ -270,20 +437,44 @@ func (v *Vidrock) probe(ctx context.Context, c vidrockCandidate) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("server %s: %w", c.name, err)
+		return p, fmt.Errorf("server %s: %w", c.name, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("server %s: playlist status %d", c.name, resp.StatusCode)
+		return p, fmt.Errorf("server %s: playlist status %d", c.name, resp.StatusCode)
 	}
-	head, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	head, err := io.ReadAll(io.LimitReader(resp.Body, 16384))
 	if err != nil {
-		return fmt.Errorf("server %s: %w", c.name, err)
+		return p, fmt.Errorf("server %s: %w", c.name, err)
 	}
-	if c.hls && !strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(string(head), utf8BOM)), "#EXTM3U") {
-		return fmt.Errorf("server %s: not an HLS playlist", c.name)
+	text := strings.TrimPrefix(string(head), utf8BOM)
+	if c.hls && !strings.HasPrefix(strings.TrimSpace(text), "#EXTM3U") {
+		return p, fmt.Errorf("server %s: not an HLS playlist", c.name)
 	}
-	return nil
+	if !c.hls {
+		return p, nil
+	}
+
+	final := resp.Request.URL
+	p.variants = parseVidrockPlaylist(text, final)
+	for i := range p.variants {
+		vr := p.variants[i]
+		if vr.height > p.maxH {
+			p.maxH = vr.height
+		}
+		if p.pick == nil || vidrockBetter(vr.height, vr.bandwidth, p.pick.height, p.pick.bandwidth, qcap) {
+			p.pick = &p.variants[i]
+		}
+	}
+	if p.pick != nil {
+		p.height, p.bw = p.pick.height, p.pick.bandwidth
+		return p, nil
+	}
+	if m := vidrockPathHeightRe.FindStringSubmatch(final.Path); m != nil {
+		p.height, _ = strconv.Atoi(m[1])
+		p.maxH = p.height
+	}
+	return p, nil
 }
 
 func (v *Vidrock) get(ctx context.Context, rawURL, referer, accept string, max int64) ([]byte, error) {

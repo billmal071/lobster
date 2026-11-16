@@ -63,6 +63,7 @@ func newProvider() provider.Provider {
 	}
 	if strings.Contains(base, "vidrock") {
 		v := provider.NewVidrock()
+		v.SetLogger(debugf)
 		v.SetAudioLanguage(cfg.AudioLanguage)
 		return v
 	}

@@ -61,6 +61,7 @@ type vrHarness struct {
 	apiPaths  []string
 	playlists map[string]int
 	referers  []string
+	bodies    map[string]string
 }
 
 func (h *vrHarness) apiCalls() int {
@@ -79,7 +80,7 @@ func (h *vrHarness) playlistHits(name string) int {
 // playlist for every name in good; any other name answers 404.
 func vrNew(t *testing.T, apiBody func(host string) string, good ...string) *vrHarness {
 	t.Helper()
-	h := &vrHarness{playlists: map[string]int{}}
+	h := &vrHarness{playlists: map[string]int{}, bodies: map[string]string{}}
 	okNames := map[string]bool{}
 	for _, g := range good {
 		okNames[g] = true
@@ -98,6 +99,10 @@ func vrNew(t *testing.T, apiBody func(host string) string, good ...string) *vrHa
 			h.referers = append(h.referers, r.Header.Get("Referer"))
 			if !okNames[name] {
 				http.NotFound(w, r)
+				return
+			}
+			if body, ok := h.bodies[name]; ok {
+				fmt.Fprint(w, body)
 				return
 			}
 			fmt.Fprint(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nhttps://cdn.example/v.m3u8\n")
@@ -535,5 +540,145 @@ func TestVidrockSearchReturnsTMDBIDs(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].ID != "tv/219" || got[0].Type != media.TV {
 		t.Fatalf("results = %+v", got)
+	}
+}
+
+func vrMaster(heights ...int) string {
+	var b strings.Builder
+	b.WriteString("#EXTM3U\n")
+	for _, h := range heights {
+		fmt.Fprintf(&b, "#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d\n%dp/index.m3u8\n", h*3000, h*16/9, h, h)
+	}
+	return b.String()
+}
+
+func vrEnglish(t *testing.T, host string, names ...string) string {
+	var servers []vrSrv
+	for i, n := range names {
+		servers = append(servers, vrSrv{Name: fmt.Sprintf("S%d", i), Enc: vrSealURL(t, host, n), Lang: "English", Type: "hls"})
+	}
+	return vrJSON(servers)
+}
+
+func TestVidrockWatchPicksTheHighestResolutionServer(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "low", "high", "mid") }, "low", "high", "mid")
+	h.bodies["low"] = vrMaster(480)
+	h.bodies["high"] = vrMaster(1080, 720)
+	h.bodies["mid"] = vrMaster(720)
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "best")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/high.m3u8") {
+		t.Fatalf("stream %v err %v, want the 1080p server, not the first by name", stream, err)
+	}
+}
+
+func TestVidrockWatchFallsBackInOrderWhenTheBestPlaylistFails(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "low", "high", "mid") }, "low", "mid")
+	h.bodies["low"] = vrMaster(480)
+	h.bodies["mid"] = vrMaster(720)
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "best")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/mid.m3u8") {
+		t.Fatalf("stream %v err %v, want the next best server that answers", stream, err)
+	}
+}
+
+func TestVidrockWatchKeepsTheAPIOrderWhenPlaylistsAdvertiseNoResolution(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "a", "b") }, "a", "b")
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "best")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/a.m3u8") {
+		t.Fatalf("stream %v err %v, want the first server when nothing can be ranked", stream, err)
+	}
+}
+
+func TestVidrockWatchRanksMediaPlaylistsByTheHeightInTheirPath(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "x/480/index", "x/720/index") }, "x/480/index", "x/720/index")
+	h.bodies["x/480/index"] = "#EXTM3U\n#EXTINF:5,\nseg.ts\n"
+	h.bodies["x/720/index"] = "#EXTM3U\n#EXTINF:5,\nseg.ts\n"
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "best")
+	if err != nil || !strings.Contains(stream.URL, "/720/") {
+		t.Fatalf("stream %v err %v, want the 720 media playlist over the 480 one", stream, err)
+	}
+}
+
+func TestVidrockWatchLanguageBeatsResolutionOnlyWhenALanguageMatchExists(t *testing.T) {
+	body := func(host string) string {
+		return vrJSON([]vrSrv{
+			{Name: "A", Enc: vrSealURL(t, host, "hindi1080"), Lang: "Hindi", Type: "hls"},
+			{Name: "B", Enc: vrSealURL(t, host, "tamil480"), Lang: "Tamil", Type: "hls"},
+			{Name: "C", Enc: vrSealURL(t, host, "english480"), Lang: "English", Type: "hls"},
+		})
+	}
+	h := vrNew(t, body, "hindi1080", "tamil480", "english480")
+	h.bodies["hindi1080"], h.bodies["tamil480"], h.bodies["english480"] = vrMaster(1080), vrMaster(480), vrMaster(480)
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "best")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/english480.m3u8") {
+		t.Fatalf("stream %v err %v, want the English server despite its lower resolution", stream, err)
+	}
+
+	h = vrNew(t, body, "hindi1080", "tamil480")
+	h.bodies["hindi1080"], h.bodies["tamil480"] = vrMaster(1080), vrMaster(480)
+	stream, err = h.v.Watch("tv/1", "1:1:1", "Default", "best")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/hindi1080.m3u8") {
+		t.Fatalf("stream %v err %v, want resolution to decide when no server matches the language", stream, err)
+	}
+}
+
+func TestVidrockWatchHonoursTheQualitySetting(t *testing.T) {
+	setup := func() *vrHarness {
+		h := vrNew(t, func(host string) string { return vrEnglish(t, host, "small", "big") }, "small", "big")
+		h.bodies["small"] = vrMaster(480)
+		h.bodies["big"] = vrMaster(1080, 720, 480)
+		return h
+	}
+
+	h := setup()
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "720")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(stream.URL, "/p/720p/index.m3u8") || !strings.Contains(stream.URL, "/p/") {
+		t.Fatalf("quality 720 gave %q, want the 720p variant of the server that offers it, so mpv is not left to pick 1080p", stream.URL)
+	}
+
+	h = setup()
+	stream, err = h.v.Watch("tv/1", "1:1:1", "Default", "1080")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/big.m3u8") {
+		t.Fatalf("quality 1080: stream %v err %v, want the master so the player keeps every rendition", stream, err)
+	}
+
+	h = setup()
+	stream, err = h.v.Watch("tv/1", "1:1:1", "Default", "best")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/big.m3u8") {
+		t.Fatalf("quality best: stream %v err %v", stream, err)
+	}
+}
+
+func TestVidrockWatchWithAQualityBelowEverythingTakesTheLowestAvailable(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "a", "b") }, "a", "b")
+	h.bodies["a"] = vrMaster(1080)
+	h.bodies["b"] = vrMaster(720)
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "480")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/b.m3u8") {
+		t.Fatalf("stream %v err %v, want the closest rendition above a quality nothing meets", stream, err)
+	}
+}
+
+func TestVidrockWatchLogsTheChoiceThroughTheInjectedLogger(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "low", "high") }, "low", "high")
+	h.bodies["low"], h.bodies["high"] = vrMaster(480), vrMaster(1080)
+	var lines []string
+	var mu sync.Mutex
+	h.v.SetLogger(func(f string, a ...any) {
+		mu.Lock()
+		lines = append(lines, fmt.Sprintf(f, a...))
+		mu.Unlock()
+	})
+	if _, err := h.v.Watch("tv/1", "1:1:1", "Default", "best"); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "S1") || !strings.Contains(joined, "1080") {
+		t.Fatalf("log lines %q do not name the chosen server and its height", joined)
 	}
 }

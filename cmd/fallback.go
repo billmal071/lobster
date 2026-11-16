@@ -192,6 +192,7 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 
 	if _, ok := primary.(*provider.Vidrock); !ok {
 		v := provider.NewVidrock()
+		v.SetLogger(debugf)
 		if cfg != nil {
 			v.SetAudioLanguage(cfg.AudioLanguage)
 		}
