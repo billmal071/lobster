@@ -323,10 +323,14 @@ func playRun(cmd *cobra.Command, args []string) error {
 			return emitErrDetail("providers_failed", exitProvidersFailed, detail, "%s", refusal.msg)
 		}
 		if hasReport {
+			lead := ""
+			if resolveErr.lead != "" {
+				lead = resolveErr.lead + "; "
+			}
 			return emitErrDetail("providers_failed", exitProvidersFailed,
 				map[string]any{"providers": resolveErr.providerRows()},
-				"no source could stream %s: %d providers tried, none produced a playable stream (per-provider reasons in error.providers)",
-				playTarget(r.Title, flagSeason, flagEpisode), resolveErr.providersTried())
+				"%sno source could stream %s: %d providers tried, none produced a playable stream (per-provider reasons in error.providers)",
+				lead, playTarget(r.Title, flagSeason, flagEpisode), resolveErr.providersTried())
 		}
 		return emitErr("providers_failed", exitProvidersFailed, "%v", err)
 	}

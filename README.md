@@ -327,8 +327,10 @@ listing is the whole season:
   separate codes because a single code fired on most correct runs and so said
   nothing.
 - `{"code": "season_list_incomplete", "provider": "eztv"}` — the source could
-  not fetch its whole release list, so `seasons` may be missing some. A season
-  absent from it is not proof the season does not exist.
+  not fetch its whole release list, or (for EZTV) holds only some of the show's
+  seasons, so `seasons` may be missing some. A season absent from it is not
+  proof the season does not exist. EZTV's `episode_list_incomplete` reason
+  names the episodes of the season it has no release for.
 - `{"code": "episode_list_from_fallback", "base": "flixhq.ws",
   "provider": "tbcpl", "episodes_listed": 10}` — the source named by `--base`
   (or by the ref) could not list this season, so the listing came from a
@@ -336,7 +338,8 @@ listing is the whole season:
   that someone else was asked first and could not, which is a different fact
   and the one that matters: a fallback can list episodes it has no way to
   stream. Check that a ref from this listing actually plays before relying on
-  the count.
+  the count. When the base is `eztv` the message also says the listed episodes
+  will not play via EZTV.
 
 The counts describe the rows you actually received, so `--type` and `--limit`
 are already applied. Each row's `ref` names the source that produced it, where

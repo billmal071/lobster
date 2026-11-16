@@ -752,3 +752,5 @@ func (e *EZTV) Trending(mediaType media.MediaType) ([]media.SearchResult, error)
 func (e *EZTV) Recent(mediaType media.MediaType) ([]media.SearchResult, error) {
 	return nil, nil
 }
+
+func (e *EZTV) IsPrimary() bool { return e.primary }

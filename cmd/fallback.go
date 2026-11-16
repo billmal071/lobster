@@ -228,7 +228,32 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 // content carries the ID and year of the work the user actually selected so the
 // resolver can tell a franchise entry apart from its sequels.
 func tryFallbackStream(primary provider.Provider, content media.SearchResult, season, episode int) (*media.Stream, error) {
-	return tryFallbackStreamFrom(streamChain(primary), content, season, episode)
+	stream, err := tryFallbackStreamFrom(streamChain(primary), content, season, episode)
+	if err != nil {
+		var failure *resolveFailure
+		if errors.As(err, &failure) {
+			failure.lead = primaryCatalogueVerdict(primary, content, season, episode)
+		}
+	}
+	return stream, err
+}
+
+type episodeCarrier interface {
+	CarriesEpisode(id string, season, episode int) error
+}
+
+// primaryCatalogueVerdict is the sentence that leads a failed resolve when the
+// primary's catalogue lacks the episode, and empty when it has it or the lookup
+// itself failed, since only a catalogue answer is a verdict.
+func primaryCatalogueVerdict(primary provider.Provider, content media.SearchResult, season, episode int) string {
+	carrier, ok := primary.(episodeCarrier)
+	if !ok || season <= 0 || episode <= 0 {
+		return ""
+	}
+	if err := carrier.CarriesEpisode(content.ID, season, episode); !errors.Is(err, provider.ErrNotCarried) {
+		return ""
+	}
+	return fmt.Sprintf("EZTV does not carry %s S%02dE%02d", fallbackTitle(content), season, episode)
 }
 
 // streamChain is the fallback chain for resolving an episode's stream. A
@@ -398,9 +423,15 @@ func resolveTier(ctx context.Context, providers []provider.Provider, req resolve
 type resolveFailure struct {
 	report *resolver.Report
 	err    error
+	lead string
 }
 
-func (e *resolveFailure) Error() string { return e.err.Error() }
+func (e *resolveFailure) Error() string {
+	if e.lead == "" {
+		return e.err.Error()
+	}
+	return e.lead + "; " + e.err.Error()
+}
 func (e *resolveFailure) Unwrap() error { return e.err }
 
 // providerRows renders the report as JSON-ready rows, one per probe attempt, in

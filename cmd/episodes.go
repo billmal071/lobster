@@ -319,14 +319,20 @@ func episodeSourceWarnings(asked, answered provider.Provider, shortfall episodeS
 	askedBase := searchProviderBase(asked)
 	if asked != answered && configured != "" && configured != config.BaseAuto &&
 		baseNamedThePrimary(configured, askedBase) {
+		message := fmt.Sprintf(
+			"base %q could not list this season, so the %d episodes above came from %s instead; a fallback provider can list episodes it cannot stream, so check that a ref from this listing plays before relying on the count",
+			configured, listed, providerLabel(answered))
+		if askedBase == "eztv" {
+			message = fmt.Sprintf(
+				"base %q could not list this season, so the %d episodes above came from %s instead; EZTV could not list it, so these episodes will not play via EZTV and play only if another source serves them",
+				configured, listed, providerLabel(answered))
+		}
 		out = append(out, map[string]any{
 			"code":            "episode_list_from_fallback",
 			"base":            configured,
 			"provider":        providerLabel(answered),
 			"episodes_listed": listed,
-			"message": fmt.Sprintf(
-				"base %q could not list this season, so the %d episodes above came from %s instead; a fallback provider can list episodes it cannot stream, so check that a ref from this listing plays before relying on the count",
-				configured, listed, providerLabel(answered)),
+			"message":         message,
 		})
 	}
 	return out
