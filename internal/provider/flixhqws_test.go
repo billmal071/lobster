@@ -281,6 +281,8 @@ func TestFlixHQWSSearchUnrecognisedPages(t *testing.T) {
 			`<form id="challenge-form" action="/cdn-cgi/challenge-platform/"><input type="hidden" name="md"></form></body></html>`,
 		"truncated before the search form": `<!DOCTYPE html><html lang="en"><head><title>FlixHQ | Watch Free TV Series Online HD</title>` +
 			`<link rel="canonical" href="https://flixhq.ws/search/"/><link rel="stylesheet" hr`,
+		"truncated after the keyword input": `<!DOCTYPE html><html lang="en"><head><link rel="canonical" href="https://flixhq.ws/search/"/></head>` +
+			`<body><div id="header"><div id="search"><form><input type="text" name="keyword" class="form-control search-input">`,
 		"canonical alone":    `<html><head><link rel="canonical" href="https://flixhq.ws/search/"/></head><body></body></html>`,
 		"keyword form alone": `<html><body><form action="/search"><input name="keyword"></form></body></html>`,
 	}

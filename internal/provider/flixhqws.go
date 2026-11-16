@@ -340,11 +340,13 @@ func (f *FlixHQWS) Recent(mediaType media.MediaType) ([]media.SearchResult, erro
 // isWSSearchPage reports whether a document is flixhq.ws's own search page.
 // For a query with no match the site answers 200 with its landing page: no
 // .film_list-wrap, but a canonical link to /search/ and the keyword form.
-// Both must be present so a challenge or truncated page does not qualify.
+// The header's #user-slot follows the keyword form, so requiring it keeps a
+// challenge page or a body cut off inside the header from qualifying.
 func isWSSearchPage(doc *goquery.Document) bool {
 	canonical, _ := doc.Find(`link[rel="canonical"]`).First().Attr("href")
 	return strings.HasSuffix(canonical, "/search/") &&
-		doc.Find(`form input[name="keyword"]`).Length() > 0
+		doc.Find(`form input[name="keyword"]`).Length() > 0 &&
+		doc.Find(`#user-slot`).Length() > 0
 }
 
 // fetchDocument fetches a URL and parses it into a goquery Document.
