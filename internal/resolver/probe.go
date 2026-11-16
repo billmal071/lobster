@@ -172,7 +172,7 @@ func admittedCandidates(candidates []media.SearchResult, req Request, log func(s
 	for _, c := range candidates {
 		sameWork := req
 		sameWork.MediaType = c.Type
-		if Matches(c, sameWork) || sequelSeason(req.Title, c.ID, 1) != 1 {
+		if Matches(c, sameWork) || sequelSeason(req.Title, c.ID, 1) != 1 || isNyaaSequelOf(c, req) {
 			out = append(out, c)
 			continue
 		}
@@ -212,10 +212,9 @@ func FallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 // catalog by title (cmd.seasonSource).
 //
 // Ranking is not filtering. Every candidate of the right media type is
-// returned, including ones that match nothing about req: within resolution
-// that is safe, because a candidate still has to yield a playable stream. A
-// caller that only reads metadata off the candidate has no such check and must
-// gate on Matches first.
+// returned, including ones that match nothing about req. resolveWithProvider
+// filters them itself (admittedCandidates) before asking for a stream; a caller
+// that only reads metadata off the candidate must gate on Matches first.
 func Candidates(results []media.SearchResult, req Request) []media.SearchResult {
 	return candidatesFor(results, req)
 }
@@ -274,10 +273,11 @@ func Candidates(results []media.SearchResult, req Request) []media.SearchResult 
 //
 // Request.MediaType has no "unspecified": media.Movie is the zero value of
 // media.MediaType, so a Request that never sets it asks for a film and this
-// gate refuses every TV candidate. Callers must set it. Both production sites
+// gate refuses every TV candidate. Callers must set it. The production sites
 // do — cmd/episodes.go's seasonSource passes media.TV outright, and
 // cmd/fallback.go's tryFallbackStream copies Type off the search result the
-// user picked — and TestMatchesTreatsAnUnsetRequestMediaTypeAsMovie pins the
+// user picked — except admittedCandidates, which sets it to the candidate's own
+// type so that only the title is judged. TestMatchesTreatsAnUnsetRequestMediaTypeAsMovie pins the
 // consequence so a third caller finds out from a test rather than from an
 // empty season list. Adding a sentinel to media.MediaType was the alternative;
 // it renumbers an iota compared across the codebase to fix a hazard with no
@@ -289,7 +289,7 @@ func Matches(r media.SearchResult, req Request) bool {
 	if r.Type != req.MediaType {
 		return false
 	}
-	title, want := normalize(r.Title), normalize(req.Title)
+	title, want := titleKey(r.Title), titleKey(req.Title)
 	if title == "" || want == "" {
 		return false
 	}
@@ -297,10 +297,10 @@ func Matches(r media.SearchResult, req Request) bool {
 		return true
 	}
 	// Qualifier stripped from one side only, never both at once.
-	if base, ok := stripQualifier(r.Title); ok && base == want {
+	if base, ok := stripQualifier(r.Title); ok && canonSeason(base) == want {
 		return true
 	}
-	if base, ok := stripQualifier(req.Title); ok && base == title {
+	if base, ok := stripQualifier(req.Title); ok && canonSeason(base) == title {
 		return true
 	}
 	return false
