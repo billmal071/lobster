@@ -315,3 +315,69 @@ func TestSeasonsPassThroughForNativeIDs(t *testing.T) {
 		t.Fatalf("native id was rewritten: searches=%v ids=%v", inner.searches, inner.seasonIDs)
 	}
 }
+
+func utopiaServer(t *testing.T) *Client {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"results":[{"id":1,"name":"Utopia","first_air_date":"2013-01-15"}]}`)
+	})
+	return c
+}
+
+func TestSeasonsRejectASameTitleShowFromAnotherYear(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"},
+	}}
+	p := Wrap(inner, utopiaServer(t), General)
+	if _, err := p.Trending(media.TV); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.GetSeasons("tv/1"); err == nil {
+		t.Fatal("GetSeasons resolved Utopia 2013 to the 2020 series")
+	}
+	if len(inner.seasonIDs) != 0 {
+		t.Fatalf("provider was called with %v", inner.seasonIDs)
+	}
+}
+
+func TestSeasonsKeepAYearlessSameTitleCandidate(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"},
+		{ID: "tv/utopia-x", Title: "Utopia", Type: media.TV},
+	}}
+	p := Wrap(inner, utopiaServer(t), General)
+	if _, err := p.Trending(media.TV); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.GetSeasons("tv/1"); err != nil {
+		t.Fatal(err)
+	}
+	if inner.seasonIDs[0] != "tv/utopia-x" {
+		t.Fatalf("GetSeasons got %v, want tv/utopia-x", inner.seasonIDs)
+	}
+}
+
+func TestResolveRowSwapsACatalogueTVIDForTheProvidersOwn(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/one-piece-100", Title: "One Piece", Type: media.TV, Year: "1999"},
+	}}
+	p := Wrap(inner, okServer(t), General)
+	row := media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, Year: "1999"}
+	got := p.ResolveRow(row)
+	if got.ID != "tv/one-piece-100" || got.Title != "One Piece" {
+		t.Fatalf("ResolveRow = %+v", got)
+	}
+}
+
+func TestResolveRowLeavesOtherRowsAlone(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{{ID: "tv/x-1", Title: "X", Type: media.TV}}}
+	p := Wrap(inner, okServer(t), General)
+	for _, row := range []media.SearchResult{
+		{ID: "movie/603", Title: "X", Type: media.Movie},
+		{ID: "tv/native-5", Title: "X", Type: media.TV},
+		{ID: "tv/404", Title: "Missing", Type: media.TV},
+	} {
+		if got := p.ResolveRow(row); got != row {
+			t.Fatalf("ResolveRow(%+v) = %+v", row, got)
+		}
+	}
+}

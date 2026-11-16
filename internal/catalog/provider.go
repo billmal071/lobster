@@ -100,15 +100,36 @@ func (p *Provider) providerID(id string) (string, error) {
 		return id, nil
 	}
 	p.mu.Lock()
-	if r, ok := p.resolved[id]; ok {
-		p.mu.Unlock()
-		return r, nil
-	}
 	row, known := p.rows[id]
 	p.mu.Unlock()
 	if !known {
 		return id, nil
 	}
+	return p.resolve(row)
+}
+
+// ResolveRow returns a catalogue TV row under the wrapped provider's own id,
+// or r unchanged when it is not a catalogue TV row or the provider has no
+// matching show.
+func (p *Provider) ResolveRow(r media.SearchResult) media.SearchResult {
+	if r.Type != media.TV || !IsID(r.ID) {
+		return r
+	}
+	id, err := p.resolve(r)
+	if err != nil {
+		return r
+	}
+	r.ID = id
+	return r
+}
+
+func (p *Provider) resolve(row media.SearchResult) (string, error) {
+	p.mu.Lock()
+	if r, ok := p.resolved[row.ID]; ok {
+		p.mu.Unlock()
+		return r, nil
+	}
+	p.mu.Unlock()
 	results, err := p.Provider.Search(row.Title)
 	if err != nil {
 		return "", err
@@ -117,6 +138,9 @@ func (p *Provider) providerID(id string) (string, error) {
 	pick := ""
 	for _, r := range results {
 		if r.Type != media.TV || titlekey.Normalize(r.Title) != want {
+			continue
+		}
+		if row.Year != "" && r.Year != "" && r.Year != row.Year {
 			continue
 		}
 		if row.Year != "" && r.Year == row.Year {
@@ -134,7 +158,7 @@ func (p *Provider) providerID(id string) (string, error) {
 	if p.resolved == nil {
 		p.resolved = map[string]string{}
 	}
-	p.resolved[id] = pick
+	p.resolved[row.ID] = pick
 	p.mu.Unlock()
 	return pick, nil
 }

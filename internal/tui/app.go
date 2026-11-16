@@ -167,7 +167,8 @@ func StartApp(p provider.Provider, cfg *config.Config, liveSources []string, mgr
 	if appModel.selectedProvider == nil {
 		appModel.selectedProvider = p
 	}
-	return appModel.selectedResult, appModel.selectedLineup, appModel.selectedIndex, unwrapProvider(appModel.selectedProvider), nil
+	res, prov := finishSelection(appModel.selectedResult, appModel.selectedProvider)
+	return res, appModel.selectedLineup, appModel.selectedIndex, prov, nil
 }
 
 func wrapProviders(p, animeBase provider.Provider, cfg *config.Config) (provider.Provider, provider.Provider) {
@@ -176,6 +177,14 @@ func wrapProviders(p, animeBase provider.Provider, cfg *config.Config) (provider
 		client = catalog.New(cfg.TMDBAPIKey)
 	}
 	return catalog.Wrap(p, client, catalog.General), catalog.Wrap(animeBase, client, catalog.Anime)
+}
+
+func finishSelection(r *media.SearchResult, p provider.Provider) (*media.SearchResult, provider.Provider) {
+	if w, ok := p.(*catalog.Provider); ok && r != nil {
+		resolved := w.ResolveRow(*r)
+		r = &resolved
+	}
+	return r, unwrapProvider(p)
 }
 
 func unwrapProvider(p provider.Provider) provider.Provider {

@@ -129,3 +129,27 @@ func TestWrapProvidersWithNilConfig(t *testing.T) {
 		t.Fatal("nil general provider")
 	}
 }
+
+type tvSearchStub struct {
+	stubProvider
+}
+
+func (tvSearchStub) Search(string) ([]media.SearchResult, error) {
+	return []media.SearchResult{{ID: "tv/one-piece-100", Title: "One Piece", Type: media.TV, Year: "1999"}}, nil
+}
+
+func TestSelectionResolvesCatalogueTVRowForThePlaybackProvider(t *testing.T) {
+	inner := &tvSearchStub{}
+	general, _ := wrapProviders(inner, provider.NewAnimeOnsen(), &config.Config{TMDBAPIKey: "abc"})
+	row := &media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, Year: "1999"}
+	gotRow, gotProv := finishSelection(row, general)
+	if gotRow.ID != "tv/one-piece-100" {
+		t.Errorf("row = %+v, want the provider's id", gotRow)
+	}
+	if gotProv != provider.Provider(inner) {
+		t.Errorf("provider = %T, want the inner provider", gotProv)
+	}
+	if r, _ := finishSelection(nil, inner); r != nil {
+		t.Errorf("nil selection became %+v", r)
+	}
+}

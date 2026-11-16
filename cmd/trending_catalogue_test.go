@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"lobster/internal/catalog"
 	"lobster/internal/config"
 	"lobster/internal/media"
@@ -113,5 +115,38 @@ func TestRateLimitFallsBackWithOneLine(t *testing.T) {
 	}
 	if len(*w) != 1 || !strings.Contains((*w)[0], "rate limit") {
 		t.Errorf("warnings = %v", *w)
+	}
+}
+
+type tvSearchProvider struct {
+	listProvider
+}
+
+func (tvSearchProvider) Search(string) ([]media.SearchResult, error) {
+	return []media.SearchResult{{ID: "tv/one-piece-100", Title: "One Piece", Type: media.TV, Year: "1999"}}, nil
+}
+
+func TestTrendingAndRecentPlayCatalogueTVRowsUnderTheProvidersID(t *testing.T) {
+	for name, run := range map[string]func(*cobra.Command, []string) error{"trending": trendingRun, "recent": recentRun} {
+		t.Run(name, func(t *testing.T) {
+			catalogueFixture(t, "abc", func(rw http.ResponseWriter, r *http.Request) {
+				io.WriteString(rw, `{"results":[{"id":37854,"name":"One Piece","first_air_date":"1999-10-20"}]}`)
+			})
+			prevProv, prevSel, prevPlay := agentProvider, selectItem, playSelected
+			t.Cleanup(func() { agentProvider, selectItem, playSelected = prevProv, prevSel, prevPlay })
+			agentProvider = func() provider.Provider { return &tvSearchProvider{} }
+			selectItem = func(string, []string) (int, error) { return 0, nil }
+			var played media.SearchResult
+			playSelected = func(_ provider.Provider, sel media.SearchResult, _, _ int) error {
+				played = sel
+				return nil
+			}
+			if err := run(nil, []string{"tv"}); err != nil {
+				t.Fatal(err)
+			}
+			if played.ID != "tv/one-piece-100" {
+				t.Fatalf("played %+v, want the provider's id", played)
+			}
+		})
 	}
 }

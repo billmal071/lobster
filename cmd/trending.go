@@ -9,7 +9,6 @@ import (
 	"lobster/internal/catalog"
 	"lobster/internal/media"
 	"lobster/internal/provider"
-	"lobster/internal/ui"
 )
 
 var trendingCmd = &cobra.Command{
@@ -22,7 +21,7 @@ var trendingCmd = &cobra.Command{
 func trendingRun(cmd *cobra.Command, args []string) error {
 	mediaType := parseMediaTypeArg(args)
 
-	p := newProvider()
+	p := agentProvider()
 	results, err := listResults(p, mediaType, false)
 	if err != nil {
 		return fmt.Errorf("getting trending: %w", err)
@@ -38,12 +37,12 @@ func trendingRun(cmd *cobra.Command, args []string) error {
 		items[i] = provider.FormatDisplayTitle(r)
 	}
 
-	idx, err := ui.Select("Trending", items)
+	idx, err := selectItem("Trending", items)
 	if err != nil {
 		return err
 	}
 
-	return resolveAndPlay(p, results[idx], 0, 0)
+	return playSelected(p, resolveCatalogueRow(p, results[idx]), 0, 0)
 }
 
 var recentCmd = &cobra.Command{
@@ -56,7 +55,7 @@ var recentCmd = &cobra.Command{
 func recentRun(cmd *cobra.Command, args []string) error {
 	mediaType := parseMediaTypeArg(args)
 
-	p := newProvider()
+	p := agentProvider()
 	results, err := listResults(p, mediaType, true)
 	if err != nil {
 		return fmt.Errorf("getting recent: %w", err)
@@ -72,15 +71,21 @@ func recentRun(cmd *cobra.Command, args []string) error {
 		items[i] = provider.FormatDisplayTitle(r)
 	}
 
-	idx, err := ui.Select("Recent", items)
+	idx, err := selectItem("Recent", items)
 	if err != nil {
 		return err
 	}
 
-	return resolveAndPlay(p, results[idx], 0, 0)
+	return playSelected(p, resolveCatalogueRow(p, results[idx]), 0, 0)
 }
 
+var playSelected = resolveAndPlay
+
 var newCatalogClient = catalog.New
+
+func resolveCatalogueRow(p provider.Provider, r media.SearchResult) media.SearchResult {
+	return catalog.Wrap(p, nil, catalog.General).ResolveRow(r)
+}
 
 // listResults reads the trending or recent list from the TMDB catalogue when
 // tmdb_api_key is set, and from p otherwise or when the catalogue fails.
