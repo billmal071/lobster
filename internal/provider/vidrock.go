@@ -151,8 +151,8 @@ type vidrockCandidate struct {
 }
 
 // Watch resolves mediaID ("tv/<tmdb>" or "movie/<tmdb>") and, for a series,
-// episodeID ("<tmdb>:<season>:<episode>") to the first server whose playlist
-// answers. Servers in the preferred audio language come first, then HLS ones.
+// episodeID ("<tmdb>:<season>:<episode>") to the best server whose playlist
+// answers: preferred audio language first, then resolution against quality.
 func (v *Vidrock) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
 	path, err := tbcplStreamPath(mediaID, episodeID)
 	if err != nil {
@@ -421,13 +421,7 @@ func (v *Vidrock) checkURL(raw string) error {
 	return nil
 }
 
-func (v *Vidrock) probe(ctx context.Context, c vidrockCandidate, qcap int) (vidrockProbe, error) {
-	p := vidrockProbe{c: c}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
-	if err != nil {
-		return p, err
-	}
-	req.Header.Set("User-Agent", vidrockUA)
+func (v *Vidrock) httpClient() *http.Client {
 	client := *v.client
 	client.CheckRedirect = func(r *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
@@ -435,19 +429,36 @@ func (v *Vidrock) probe(ctx context.Context, c vidrockCandidate, qcap int) (vidr
 		}
 		return v.checkURL(r.URL.String())
 	}
-	resp, err := client.Do(req)
+	return &client
+}
+
+func (v *Vidrock) fetchPlaylist(ctx context.Context, name, target string) (string, *url.URL, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return p, fmt.Errorf("server %s: %w", c.name, err)
+		return "", nil, err
+	}
+	req.Header.Set("User-Agent", vidrockUA)
+	resp, err := v.httpClient().Do(req)
+	if err != nil {
+		return "", nil, fmt.Errorf("server %s: %w", name, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return p, fmt.Errorf("server %s: playlist status %d", c.name, resp.StatusCode)
+		return "", nil, fmt.Errorf("server %s: playlist status %d", name, resp.StatusCode)
 	}
 	head, err := io.ReadAll(io.LimitReader(resp.Body, 16384))
 	if err != nil {
-		return p, fmt.Errorf("server %s: %w", c.name, err)
+		return "", nil, fmt.Errorf("server %s: %w", name, err)
 	}
-	text := strings.TrimPrefix(string(head), utf8BOM)
+	return strings.TrimPrefix(string(head), utf8BOM), resp.Request.URL, nil
+}
+
+func (v *Vidrock) probe(ctx context.Context, c vidrockCandidate, qcap int) (vidrockProbe, error) {
+	p := vidrockProbe{c: c}
+	text, final, err := v.fetchPlaylist(ctx, c.name, c.url)
+	if err != nil {
+		return p, err
+	}
 	if c.hls && !strings.HasPrefix(strings.TrimSpace(text), "#EXTM3U") {
 		return p, fmt.Errorf("server %s: not an HLS playlist", c.name)
 	}
@@ -455,16 +466,37 @@ func (v *Vidrock) probe(ctx context.Context, c vidrockCandidate, qcap int) (vidr
 		return p, nil
 	}
 
-	final := resp.Request.URL
-	p.variants = parseVidrockPlaylist(text, final)
-	for i := range p.variants {
-		vr := p.variants[i]
-		if vr.height > p.maxH {
-			p.maxH = vr.height
+	for _, vr := range parseVidrockPlaylist(text, final) {
+		if v.checkURL(vr.url) == nil {
+			p.variants = append(p.variants, vr)
 		}
-		if p.pick == nil || vidrockBetter(vr.height, vr.bandwidth, p.pick.height, p.pick.bandwidth, qcap) {
-			p.pick = &p.variants[i]
+	}
+	for len(p.variants) > 0 {
+		p.pick, p.maxH = nil, 0
+		for i := range p.variants {
+			vr := p.variants[i]
+			if vr.height > p.maxH {
+				p.maxH = vr.height
+			}
+			if p.pick == nil || vidrockBetter(vr.height, vr.bandwidth, p.pick.height, p.pick.bandwidth, qcap) {
+				p.pick = &p.variants[i]
+			}
 		}
+		if qcap <= 0 || p.pick.height >= p.maxH {
+			break
+		}
+		if _, _, err := v.fetchPlaylist(ctx, c.name, p.pick.url); err == nil {
+			break
+		}
+		v.log("vidrock: server %s variant %dp did not answer; trying the next", c.name, p.pick.height)
+		idx := p.pick
+		for i := range p.variants {
+			if &p.variants[i] == idx {
+				p.variants = append(p.variants[:i], p.variants[i+1:]...)
+				break
+			}
+		}
+		p.pick, p.maxH = nil, 0
 	}
 	if p.pick != nil {
 		p.height, p.bw = p.pick.height, p.pick.bandwidth
@@ -485,7 +517,7 @@ func (v *Vidrock) get(ctx context.Context, rawURL, referer, accept string, max i
 	req.Header.Set("User-Agent", vidrockUA)
 	req.Header.Set("Accept", accept)
 	req.Header.Set("Referer", referer)
-	resp, err := v.client.Do(req)
+	resp, err := v.httpClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}

@@ -624,7 +624,7 @@ func TestVidrockWatchLanguageBeatsResolutionOnlyWhenALanguageMatchExists(t *test
 
 func TestVidrockWatchHonoursTheQualitySetting(t *testing.T) {
 	setup := func() *vrHarness {
-		h := vrNew(t, func(host string) string { return vrEnglish(t, host, "small", "big") }, "small", "big")
+		h := vrNew(t, func(host string) string { return vrEnglish(t, host, "small", "big") }, "small", "big", "720p/index")
 		h.bodies["small"] = vrMaster(480)
 		h.bodies["big"] = vrMaster(1080, 720, 480)
 		return h
@@ -680,5 +680,55 @@ func TestVidrockWatchLogsTheChoiceThroughTheInjectedLogger(t *testing.T) {
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "S1") || !strings.Contains(joined, "1080") {
 		t.Fatalf("log lines %q do not name the chosen server and its height", joined)
+	}
+}
+
+func TestVidrockWatchNeverSelectsAnUnsafeVariantURL(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "m") }, "m")
+	h.bodies["m"] = "#EXTM3U\n" +
+		"#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1280x720\nhttp://127.0.0.1:1/private.m3u8\n" +
+		"#EXT-X-STREAM-INF:BANDWIDTH=2,RESOLUTION=1920x1080\n1080p/index.m3u8\n"
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "720")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/m.m3u8") {
+		t.Fatalf("stream %v err %v, want the master, never the http:// variant", stream, err)
+	}
+}
+
+func TestVidrockWatchProbesTheSelectedVariantAndTriesTheNextBest(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "m") }, "m", "480p/index")
+	h.bodies["m"] = vrMaster(1080, 720, 480)
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "720")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/480p/index.m3u8") {
+		t.Fatalf("stream %v err %v, want the 480p variant once the 720p one answers 404", stream, err)
+	}
+}
+
+func TestVidrockWatchFallsBackToTheMasterWhenNoVariantUnderTheCapAnswers(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "m") }, "m")
+	h.bodies["m"] = vrMaster(1080, 720)
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "720")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/m.m3u8") {
+		t.Fatalf("stream %v err %v, want the master when the only variant under the cap is dead", stream, err)
+	}
+}
+
+func TestVidrockWatchDoesNotFollowAnAPIRedirectToPlainHTTP(t *testing.T) {
+	hits := 0
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		fmt.Fprint(w, "{}")
+	}))
+	defer plain.Close()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+"/api/x", http.StatusFound)
+	}))
+	defer srv.Close()
+	v := NewVidrock()
+	v.base, v.client, v.allowLocal = srv.URL, srv.Client(), true
+	if _, err := v.Watch("tv/1", "1:1:1", "Default", "1080"); err == nil {
+		t.Fatal("expected an error")
+	}
+	if hits != 0 {
+		t.Fatalf("the API redirect to http:// was followed (%d hits)", hits)
 	}
 }
