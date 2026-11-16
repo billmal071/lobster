@@ -89,3 +89,16 @@ footer{border-top:1px solid var(--line);padding:2rem clamp(1rem,4vw,3rem);color:
   .js .reveal{opacity:1;transform:none}
 }
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.brand img{display:block}
+.hero-art{position:relative;min-width:0;padding-top:10.5rem}
+.hero-art .term{position:relative;z-index:1}
+.peek{position:absolute;top:0;right:4%;width:min(18.5rem,70%);height:auto;overflow:visible}
+.peek .eye .lid{transform-box:fill-box;transform-origin:50% 0;animation:blink 5.5s infinite}
+.peek .wave{transform-box:fill-box;transform-origin:50% 100%;animation:wave 3.2s ease-in-out infinite}
+@keyframes blink{0%,93%,100%{transform:scaleY(1)}96%{transform:scaleY(2)}}
+@keyframes wave{0%,55%,100%{rotate:0deg}65%{rotate:-14deg}75%{rotate:8deg}85%{rotate:-12deg}95%{rotate:4deg}}
+.lost{text-align:center;padding:3rem 0 4rem}
+.lost img{width:min(20rem,80%);height:auto}
+.lost h1{font-size:clamp(2rem,6vw,3.4rem)}
+.lost .lede{margin:0 auto 1.5rem}
+.lost .cta{justify-content:center}
