@@ -408,7 +408,8 @@ download_dir = "~/Videos/lobster"
 # series always go to a scraping source (YTS has no TV catalogue), and
 # anything YTS does not carry falls back to flixhq.ws. Any other value is an
 # explicit choice and is used for both content types.
-# Available: auto, flixhq.ws, tbcpl, 1shows.org, animeonsen, animeheaven, yts,
+# Available: auto, flixhq.ws, tbcpl, 1shows.org, animeonsen, animeheaven,
+# vidrock (unofficial third-party HTTP API, TMDB ids), yts,
 # nyaa (anime torrents), eztv (TV series torrents), 1337x (film and series
 # torrents)
 # All other providers except animeheaven (used only when named) are

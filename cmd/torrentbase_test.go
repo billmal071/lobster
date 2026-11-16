@@ -94,7 +94,7 @@ func TestFallbackProvidersOrderWithTorrentFallback(t *testing.T) {
 
 	want := []string{
 		"*provider.TBCPL", "*provider.EZTV", "*provider.FlixHQWS",
-		"*provider.AnimeOnsen", "*provider.Nyaa", "*provider.YTS", "*provider.X1337",
+		"*provider.AnimeOnsen", "*provider.Nyaa", "*provider.Vidrock", "*provider.YTS", "*provider.X1337",
 	}
 	got := providerNames(fallbackProviders(nil))
 	if fmt.Sprint(got) != fmt.Sprint(want) {

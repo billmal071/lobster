@@ -61,6 +61,11 @@ func newProvider() provider.Provider {
 		tb.SetAudioLanguage(cfg.AudioLanguage)
 		return tb
 	}
+	if strings.Contains(base, "vidrock") {
+		v := provider.NewVidrock()
+		v.SetAudioLanguage(cfg.AudioLanguage)
+		return v
+	}
 	// Torrent sources: config.IsTorrentBase (mayStreamTorrent, cmd/root.go) must recognise every spelling matched here.
 	if config.IsYTSBase(base) {
 		return provider.NewYTS()

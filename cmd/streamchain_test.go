@@ -62,7 +62,7 @@ func TestStreamChainHoldsFlixHQWSOnceAndKeepsMagnetsLast(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("FlixHQWS appears %d times in %v, want once", n, providerNames(got))
 	}
-	want := []string{"*provider.TBCPL", "*provider.EZTV", "*provider.FlixHQWS", "*provider.AnimeOnsen", "*provider.Nyaa", "*provider.YTS", "*provider.X1337"}
+	want := []string{"*provider.TBCPL", "*provider.EZTV", "*provider.FlixHQWS", "*provider.AnimeOnsen", "*provider.Nyaa", "*provider.Vidrock", "*provider.YTS", "*provider.X1337"}
 	if fmt.Sprint(providerNames(got)) != fmt.Sprint(want) {
 		t.Fatalf("chain = %v, want %v: the order the merge base had, with the resolver splitting the magnet tier off", providerNames(got), want)
 	}

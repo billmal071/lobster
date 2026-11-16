@@ -190,6 +190,14 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 		}
 	}
 
+	if _, ok := primary.(*provider.Vidrock); !ok {
+		v := provider.NewVidrock()
+		if cfg != nil {
+			v.SetAudioLanguage(cfg.AudioLanguage)
+		}
+		fallbacks = append(fallbacks, v)
+	}
+
 	// YTS and 1337x, only when torrent_fallback is set; they race in the torrent tier.
 	//
 	// Be precise about what that setting does and does not decide. It is NOT
