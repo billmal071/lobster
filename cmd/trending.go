@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"lobster/internal/catalog"
 	"lobster/internal/media"
 	"lobster/internal/provider"
 	"lobster/internal/ui"
@@ -22,7 +23,7 @@ func trendingRun(cmd *cobra.Command, args []string) error {
 	mediaType := parseMediaTypeArg(args)
 
 	p := newProvider()
-	results, err := p.Trending(mediaType)
+	results, err := listResults(p, mediaType, false)
 	if err != nil {
 		return fmt.Errorf("getting trending: %w", err)
 	}
@@ -56,7 +57,7 @@ func recentRun(cmd *cobra.Command, args []string) error {
 	mediaType := parseMediaTypeArg(args)
 
 	p := newProvider()
-	results, err := p.Recent(mediaType)
+	results, err := listResults(p, mediaType, true)
 	if err != nil {
 		return fmt.Errorf("getting recent: %w", err)
 	}
@@ -77,6 +78,29 @@ func recentRun(cmd *cobra.Command, args []string) error {
 	}
 
 	return resolveAndPlay(p, results[idx], 0, 0)
+}
+
+var newCatalogClient = catalog.New
+
+// listResults reads the trending or recent list from the TMDB catalogue when
+// tmdb_api_key is set, and from p otherwise or when the catalogue fails.
+func listResults(p provider.Provider, mt media.MediaType, recent bool) ([]media.SearchResult, error) {
+	var client *catalog.Client
+	if cfg != nil {
+		client = newCatalogClient(cfg.TMDBAPIKey)
+	}
+	cp := catalog.Wrap(p, client, catalog.General)
+	var results []media.SearchResult
+	var err error
+	if recent {
+		results, err = cp.Recent(mt)
+	} else {
+		results, err = cp.Trending(mt)
+	}
+	if n := cp.TakeNotice(); n != "" {
+		warnf("%s", n)
+	}
+	return results, err
 }
 
 func parseMediaTypeArg(args []string) media.MediaType {
