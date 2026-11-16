@@ -119,3 +119,31 @@ func TestDoctorProbesVidrockWithAMovieItSurelyHas(t *testing.T) {
 	}
 	t.Fatal("doctor does not probe Vidrock")
 }
+
+func TestStreamChainAsksAVidrockPrimaryForTheEpisodeFirst(t *testing.T) {
+	withDefaultConfig(t)
+	got := streamChain(provider.NewVidrock())
+	if indexOfProvider[*provider.Vidrock](got) != 0 {
+		t.Fatalf("streamChain(Vidrock) = %v, want Vidrock first: it cannot list seasons, so the chain is the only way it is asked to Watch", providerNames(got))
+	}
+	if n := countProviders[*provider.Vidrock](got); n != 1 {
+		t.Fatalf("Vidrock appears %d times in %v, want once", n, providerNames(got))
+	}
+}
+
+func TestStreamChainKeepsASingleVidrockForOtherPrimaries(t *testing.T) {
+	withDefaultConfig(t)
+	if n := countProviders[*provider.Vidrock](streamChain(provider.NewTBCPL("tbcpl"))); n != 1 {
+		t.Fatalf("Vidrock appears %d times for a TBCPL primary, want its single fallback slot", n)
+	}
+}
+
+func countProviders[T provider.Provider](ps []provider.Provider) int {
+	n := 0
+	for _, p := range ps {
+		if _, ok := p.(T); ok {
+			n++
+		}
+	}
+	return n
+}

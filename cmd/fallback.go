@@ -240,12 +240,16 @@ func tryFallbackStream(primary provider.Provider, content media.SearchResult, se
 }
 
 // streamChain is the fallback chain for resolving an episode's stream. A
-// primary without a Watch (FlixHQWS) is never asked for the stream by its
+// primary that cannot enumerate seasons (Vidrock) rejoins first, since the
+// user named it. A primary without a Watch (FlixHQWS) is never asked for the stream by its
 // caller, and fallbackProviders leaves it out of its own chain, so the one
 // source that listed the show would go unasked: it rejoins here, ahead of the
 // anime and torrent sources as in fallbackProviders' own order.
 func streamChain(primary provider.Provider) []provider.Provider {
 	chain := agentFallbackProviders(primary)
+	if _, ok := primary.(*provider.Vidrock); ok {
+		return append([]provider.Provider{primary}, chain...)
+	}
 	if _, ok := primary.(*provider.FlixHQWS); !ok {
 		return chain
 	}
