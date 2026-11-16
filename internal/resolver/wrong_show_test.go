@@ -172,6 +172,20 @@ func TestResolveWithProviderKeepsTheCrossTypeFallback(t *testing.T) {
 	}
 }
 
+func TestResolveWithProviderKeepsTheCrossTypeMatchBesideAnUnrelatedSameTypeRow(t *testing.T) {
+	p := &watchCountingSP{fakeSP: &fakeSP{
+		searchResults: []media.SearchResult{
+			{ID: "movie/bar", Title: "Bar", Type: media.Movie},
+			{ID: "cartoon/foo", Title: "Foo", Type: media.TV},
+		},
+		stream: &media.Stream{URL: "https://cdn/foo.m3u8"},
+	}}
+	got, _, err := resolveWithProvider(p, Request{Title: "Foo", MediaType: media.Movie}, func(string, ...any) {})
+	if err != nil || got == nil {
+		t.Fatalf("got %v / %v, want the matching other-type row tried after the unrelated row is refused", got, err)
+	}
+}
+
 func admits(t *testing.T, req Request, row media.SearchResult) bool {
 	t.Helper()
 	p := &watchCountingSP{fakeSP: &fakeSP{searchResults: []media.SearchResult{row}, stream: &media.Stream{URL: "https://cdn/x.m3u8"}}}

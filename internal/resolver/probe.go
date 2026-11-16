@@ -114,7 +114,7 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 		return nil, "search", fmt.Errorf("search failed: %w", err)
 	}
 
-	candidates := truncateCandidates(admittedCandidates(rankedCandidates(results, req), req, log))
+	candidates := truncateCandidates(rankedCandidates(admittedCandidates(results, req, log), req))
 	if len(candidates) == 0 {
 		return nil, "match", fmt.Errorf("no matching result for %q", req.Title)
 	}
