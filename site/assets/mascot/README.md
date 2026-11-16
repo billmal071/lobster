@@ -1,6 +1,6 @@
 # lobster mascot
 
-An original character drawn for this project: a coral-red lobster, friendly and a little smug, a film-night regular who sits in front of a terminal. All artwork is hand-authored SVG. Nothing is traced, copied or generated, and no third-party mascot or brand was used as a reference.
+Marlowe is an original character drawn for this project: a coral-red lobster, friendly and a little smug, a film-night regular who sits in front of a terminal. All artwork is hand-authored SVG. Nothing is traced, copied or generated, and no third-party mascot or brand was used as a reference.
 
 ## Files
 
@@ -15,20 +15,16 @@ An original character drawn for this project: a coral-red lobster, friendly and 
 | `../../favicon.svg` | Simplest crop (no tail, no mouth, heavier outline) for 16 and 32px. |
 | `../../apple-touch-icon.png` | 180px render of `mascot-icon.svg` (iOS ignores SVG icons). |
 | `mascot-mono.svg` | One-colour line art. The colour is the `color` attribute on the root element; every stroke and fill uses `currentColor`. |
-| `social-preview.png` | 1280x640 GitHub social preview, rendered from `mascot.svg` with headless Chrome. Upload it under repository Settings, General, Social preview. There is no API for this. |
+| `social-preview.png` | 1280x640 GitHub social preview (alt text: "Marlowe, the lobster mascot, beside the lobster wordmark and tagline"), rendered from `mascot.svg` with headless Chrome. Upload it under repository Settings, General, Social preview. There is no API for this. |
 | `lobster.ans`, `lobster.txt` | Terminal lobster: 10 rows, 24 columns. `.ans` uses 256-colour escape codes (coral 203, dark coral 167, cream 230); `.txt` is the no-colour fallback and uses distinct glyphs for eyes and mouth so it still reads. |
 
 Palette: shell `#e9533f`, shadow `#b93a2c`, highlight `#f78a74`, outline `#2a1512`, cream `#fff3df`. The outline keeps the shell readable on cream; on near-black backgrounds the coral carries the shape. Every SVG has a `<title>` and `<desc>`, a `viewBox`, no external references and no fonts.
 
 The hero on the landing page is the cropped `mascot.svg` construction (head, antennae, claws, remote) inlined into `index.html` so `style.css` can animate the blink (`.lid`) and the wave (`.wave`). Both animations are off under `prefers-reduced-motion`.
 
-## Name suggestions
+## Name
 
-Not decided. Pick one, or none.
-
-- **Marlowe**: a noir-detective name for a lobster who is always at the late show and always a step ahead of the plot.
-- **Butters**: for the popcorn tub; short, warm and easy to say in an issue title.
-- **Reel**: a one-syllable film pun that also works as a CLI-ish word (`reel says ok`).
+The mascot is called **Marlowe**: a noir-detective name for a lobster who is always at the late show and always a step ahead of the plot.
 
 ## Licence
 

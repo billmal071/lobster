@@ -1,6 +1,6 @@
 # Lobster — Terminal Media Streamer
 
-<p align="center"><img src="site/assets/mascot/mascot.svg" alt="The lobster mascot: a coral-red lobster in front of a terminal, waving and holding a remote" width="200"></p>
+<p align="center"><img src="site/assets/mascot/mascot.svg" alt="Marlowe, the lobster mascot: a coral-red lobster in front of a terminal, waving and holding a remote" width="200"></p>
 
 ![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go&logoColor=white)
 ![Cobra](https://img.shields.io/badge/Cobra-CLI-blue?style=flat)
