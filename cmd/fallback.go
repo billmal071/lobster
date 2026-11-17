@@ -367,7 +367,7 @@ func tryFallbackStreamAccepting(providers []provider.Provider, content media.Sea
 
 // resolveTier races providers for req. A failure is wrapped in a resolveFailure, which carries earlier's attempts too when a previous tier failed.
 func resolveTier(ctx context.Context, providers []provider.Provider, req resolver.Request, earlier *resolveFailure) (*media.Stream, error) {
-	r := resolver.New(providers, sharedHealth(), debugf)
+	r := resolver.New(providers, sharedHealth(), debugLogger())
 	stream, report, err := r.Resolve(ctx, req)
 	if err != nil {
 		if earlier != nil && earlier.report != nil {
