@@ -5,8 +5,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"lobster/internal/catalog"
 	"lobster/internal/history"
 	"lobster/internal/media"
+	"lobster/internal/provider"
 	"lobster/internal/ui"
 )
 
@@ -87,6 +89,17 @@ func historyRun(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	if row, ok := resumeRow(p, selected); ok {
+		return resolveAndPlay(p, row, selected.Season, selected.Episode)
+	}
+
 	// If exact ID not found, let user pick from search results
 	return playFlow(p, selected.Title)
+}
+
+func resumeRow(p provider.Provider, e media.HistoryEntry) (media.SearchResult, bool) {
+	if !catalog.IsID(e.ID) {
+		return media.SearchResult{}, false
+	}
+	return resolveCatalogueRow(p, media.SearchResult{ID: e.ID, Title: e.Title, Type: e.Type}), true
 }

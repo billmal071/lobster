@@ -17,7 +17,7 @@ import (
 )
 
 // fetchTabCmd fetches the default listing for a dashboard category.
-func fetchTabCmd(p provider.Provider, active tab) tea.Cmd {
+func fetchTabCmd(p provider.Provider, active tab, gen int) tea.Cmd {
 	return func() tea.Msg {
 		mediaType := media.Movie
 		if active == tabSeries || active == tabAnime {
@@ -32,7 +32,7 @@ func fetchTabCmd(p provider.Provider, active tab) tea.Cmd {
 			if notice := n.TakeNotice(); notice != "" {
 				return tea.BatchMsg{
 					func() tea.Msg { return resultsFetchedMsg(results) },
-					func() tea.Msg { return noticeMsg(notice) },
+					func() tea.Msg { return noticeMsg{text: notice, tab: active, gen: gen} },
 				}
 			}
 		}

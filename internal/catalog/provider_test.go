@@ -356,28 +356,97 @@ func TestSeasonsKeepAYearlessSameTitleCandidate(t *testing.T) {
 	}
 }
 
-func TestResolveRowSwapsACatalogueTVIDForTheProvidersOwn(t *testing.T) {
+func TestResolveRowKeepsTheCatalogueIDAndNamesTheProvidersOwn(t *testing.T) {
 	inner := &showProvider{results: []media.SearchResult{
 		{ID: "tv/one-piece-100", Title: "One Piece", Type: media.TV, Year: "1999"},
+		{ID: "movie/the-matrix-7", Title: "The Matrix", Type: media.Movie, Year: "1999"},
 	}}
 	p := Wrap(inner, okServer(t), General)
-	row := media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, Year: "1999"}
-	got := p.ResolveRow(row)
-	if got.ID != "tv/one-piece-100" || got.Title != "One Piece" {
-		t.Fatalf("ResolveRow = %+v", got)
+	for _, tc := range []struct{ row, want media.SearchResult }{
+		{
+			media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, Year: "1999"},
+			media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, Year: "1999", ProviderID: "tv/one-piece-100"},
+		},
+		{
+			media.SearchResult{ID: "movie/603", Title: "The Matrix", Type: media.Movie, Year: "1999"},
+			media.SearchResult{ID: "movie/603", Title: "The Matrix", Type: media.Movie, Year: "1999", ProviderID: "movie/the-matrix-7"},
+		},
+	} {
+		if got := p.ResolveRow(tc.row); got != tc.want {
+			t.Fatalf("ResolveRow(%+v) = %+v, want %+v", tc.row, got, tc.want)
+		}
 	}
 }
 
-func TestResolveRowLeavesOtherRowsAlone(t *testing.T) {
+func TestResolveRowMarksACatalogueRowTheProviderDoesNotHave(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{{ID: "tv/x-1", Title: "X", Type: media.TV}}}
+	p := Wrap(inner, okServer(t), General)
+	row := media.SearchResult{ID: "tv/404", Title: "Missing", Type: media.TV}
+	got := p.ResolveRow(row)
+	want := row
+	want.Unresolved = true
+	if got != want {
+		t.Fatalf("ResolveRow = %+v, want %+v", got, want)
+	}
+}
+
+func TestResolveRowLeavesNativeRowsAlone(t *testing.T) {
 	inner := &showProvider{results: []media.SearchResult{{ID: "tv/x-1", Title: "X", Type: media.TV}}}
 	p := Wrap(inner, okServer(t), General)
 	for _, row := range []media.SearchResult{
-		{ID: "movie/603", Title: "X", Type: media.Movie},
 		{ID: "tv/native-5", Title: "X", Type: media.TV},
-		{ID: "tv/404", Title: "Missing", Type: media.TV},
+		{ID: "movie/free-the-exorcist-hd-75043", Title: "X", Type: media.Movie},
 	} {
 		if got := p.ResolveRow(row); got != row {
 			t.Fatalf("ResolveRow(%+v) = %+v", row, got)
 		}
+	}
+}
+
+type detailProvider struct {
+	showProvider
+	detailIDs []string
+}
+
+func (d *detailProvider) GetDetails(id string) (*media.ContentDetail, error) {
+	d.detailIDs = append(d.detailIDs, id)
+	return &media.ContentDetail{Description: "from provider"}, nil
+}
+
+func TestDetailsFallbackAsksTheProviderForItsOwnID(t *testing.T) {
+	inner := &detailProvider{showProvider: showProvider{results: []media.SearchResult{
+		{ID: "tv/one-piece-100", Title: "One Piece", Type: media.TV, Year: "1999"},
+	}}}
+	p := Wrap(inner, failingClient(t, 500), General)
+	p.remember([]media.SearchResult{{ID: "tv/37854", Title: "One Piece", Type: media.TV, Year: "1999"}})
+	d, err := p.GetDetails("tv/37854")
+	if err != nil || d.Description != "from provider" {
+		t.Fatalf("detail = %+v, %v", d, err)
+	}
+	if len(inner.detailIDs) != 1 || inner.detailIDs[0] != "tv/one-piece-100" {
+		t.Fatalf("provider asked for %v, want tv/one-piece-100", inner.detailIDs)
+	}
+}
+
+func TestDetailsFallbackNeverSendsAnUnresolvedCatalogueID(t *testing.T) {
+	inner := &detailProvider{showProvider: showProvider{}}
+	p := Wrap(inner, failingClient(t, 500), General)
+	p.remember([]media.SearchResult{{ID: "tv/37854", Title: "One Piece", Type: media.TV}})
+	if _, err := p.GetDetails("tv/37854"); err == nil {
+		t.Fatal("GetDetails succeeded for a show the provider does not have")
+	}
+	if len(inner.detailIDs) != 0 {
+		t.Fatalf("provider was asked for %v", inner.detailIDs)
+	}
+}
+
+func TestDetailsFailureDoesNotQueueAListNotice(t *testing.T) {
+	inner := &detailProvider{}
+	p := Wrap(inner, failingClient(t, 401), General)
+	if _, err := p.GetDetails("movie/603"); err != nil {
+		t.Fatal(err)
+	}
+	if n := p.TakeNotice(); n != "" {
+		t.Fatalf("notice = %q, want none from a metadata failure", n)
 	}
 }

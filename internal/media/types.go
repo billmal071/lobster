@@ -42,6 +42,13 @@ type SearchResult struct {
 	// It travels with the ID through deduplication, because it is the ID it
 	// attributes — IDs are provider-specific and not portable.
 	Provider string
+
+	// ProviderID is the ID the playback provider knows this row by, and
+	// Unresolved marks a catalogue row that provider has no match for. Both
+	// are set only by the catalogue layer; ID stays the catalogue identity
+	// that history and resume key on.
+	ProviderID string
+	Unresolved bool
 }
 
 // ContentDetail contains detailed metadata fetched from a content's detail page.

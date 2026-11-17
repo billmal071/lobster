@@ -14,7 +14,11 @@ func (e errMsg) Error() string { return e.err.Error() }
 type resultsFetchedMsg []media.SearchResult
 
 // noticeMsg carries a one-line catalogue notice to show in the footer.
-type noticeMsg string
+type noticeMsg struct {
+	text string
+	tab  tab
+	gen  int
+}
 
 // detailFetchedMsg is sent when detailed metadata for an item is fetched.
 type detailFetchedMsg struct {

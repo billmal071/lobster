@@ -85,6 +85,7 @@ type AppModel struct {
 	liveCategory   string    // current category at level 1
 	liveMaster     []liveRow // unfiltered rows for the current level
 	liveReqGen     int       // bumped per Live TV fetch; stale responses are ignored
+	tabReqGen      int       // bumped per tab switch; notices from an earlier request are ignored
 
 	// Download dialog for TV show batch downloads
 	dlDialog downloadDialog
@@ -196,7 +197,7 @@ func unwrapProvider(p provider.Provider) provider.Provider {
 
 func (m AppModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		fetchTabCmd(m.providerForActiveTab(), m.activeTab),
+		fetchTabCmd(m.providerForActiveTab(), m.activeTab, m.tabReqGen),
 		textinput.Blink,
 		m.loader.Tick,
 		m.list.StartSpinner(),
@@ -394,7 +395,9 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.StopSpinner()
 
 	case noticeMsg:
-		m.notice = string(msg)
+		if msg.tab == m.activeTab && msg.gen == m.tabReqGen {
+			m.notice = msg.text
+		}
 
 	case resultsFetchedMsg:
 		m.err = nil
@@ -754,6 +757,7 @@ func (m *AppModel) switchTab(next tab) tea.Cmd {
 	m.currentDetail = nil
 	m.err = nil
 	m.notice = ""
+	m.tabReqGen++
 
 	if next == tabDownloads {
 		m.downloadsModel.SetFocused(true)
@@ -770,7 +774,7 @@ func (m *AppModel) switchTab(next tab) tea.Cmd {
 		m.liveReqGen++
 		return tea.Batch(fetchCategoriesCmd(m.liveTVProvider, m.liveReqGen), m.list.StartSpinner(), tea.ClearScreen)
 	}
-	return tea.Batch(fetchTabCmd(m.providerForActiveTab(), next), m.list.StartSpinner(), tea.ClearScreen)
+	return tea.Batch(fetchTabCmd(m.providerForActiveTab(), next, m.tabReqGen), m.list.StartSpinner(), tea.ClearScreen)
 }
 
 func (m AppModel) tabTitle(t tab) string {

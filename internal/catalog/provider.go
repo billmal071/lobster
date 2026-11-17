@@ -108,18 +108,20 @@ func (p *Provider) providerID(id string) (string, error) {
 	return p.resolve(row)
 }
 
-// ResolveRow returns a catalogue TV row under the wrapped provider's own id,
-// or r unchanged when it is not a catalogue TV row or the provider has no
-// matching show.
+// ResolveRow names the wrapped provider's own ID for a catalogue row in
+// ProviderID and leaves ID, the catalogue identity, alone. A catalogue row
+// the provider has no match for is marked Unresolved; any other row is
+// returned unchanged.
 func (p *Provider) ResolveRow(r media.SearchResult) media.SearchResult {
-	if r.Type != media.TV || !IsID(r.ID) {
+	if !IsID(r.ID) || r.ProviderID != "" {
 		return r
 	}
 	id, err := p.resolve(r)
 	if err != nil {
+		r.Unresolved = true
 		return r
 	}
-	r.ID = id
+	r.ProviderID = id
 	return r
 }
 
@@ -137,7 +139,7 @@ func (p *Provider) resolve(row media.SearchResult) (string, error) {
 	want := titlekey.Normalize(row.Title)
 	pick := ""
 	for _, r := range results {
-		if r.Type != media.TV || titlekey.Normalize(r.Title) != want {
+		if r.Type != row.Type || titlekey.Normalize(r.Title) != want {
 			continue
 		}
 		if row.Year != "" && r.Year != "" && r.Year != row.Year {
@@ -228,8 +230,11 @@ func (p *Provider) GetDetails(id string) (*media.ContentDetail, error) {
 	}
 	d, err := p.client.Details(id)
 	if err != nil {
-		p.fellBack(err)
-		return p.Provider.GetDetails(id)
+		pid, perr := p.providerID(id)
+		if perr != nil {
+			return nil, perr
+		}
+		return p.Provider.GetDetails(pid)
 	}
 	out := d.ContentDetail
 	if d.IMDbID != "" {

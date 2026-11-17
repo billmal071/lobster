@@ -45,7 +45,7 @@ func flatten(msg tea.Msg) []tea.Msg {
 
 func TestFetchTabWithoutNoticeIsUnchanged(t *testing.T) {
 	rows := []media.SearchResult{{ID: "movie/1", Title: "A"}}
-	msg := fetchTabCmd(stubProvider{rows: rows}, tabMovies)()
+	msg := fetchTabCmd(stubProvider{rows: rows}, tabMovies, 0)()
 	got, ok := msg.(resultsFetchedMsg)
 	if !ok || len(got) != 1 {
 		t.Fatalf("msg = %#v, want a plain resultsFetchedMsg", msg)
@@ -56,13 +56,16 @@ func TestFetchTabForwardsProviderNotice(t *testing.T) {
 	p := &noticingProvider{stubProvider: stubProvider{rows: []media.SearchResult{{ID: "movie/1", Title: "A"}}}, notice: "tmdb_api_key rejected"}
 	var results, notices int
 	var text string
-	for _, m := range flatten(fetchTabCmd(p, tabMovies)()) {
+	for _, m := range flatten(fetchTabCmd(p, tabMovies, 3)()) {
 		switch v := m.(type) {
 		case resultsFetchedMsg:
 			results++
 		case noticeMsg:
 			notices++
-			text = string(v)
+			text = v.text
+			if v.tab != tabMovies || v.gen != 3 {
+				t.Errorf("notice origin = tab %v gen %d, want the request's", v.tab, v.gen)
+			}
 		}
 	}
 	if results != 1 || notices != 1 || text != "tmdb_api_key rejected" {
@@ -72,7 +75,7 @@ func TestFetchTabForwardsProviderNotice(t *testing.T) {
 
 func TestFetchTabErrorStaysAnError(t *testing.T) {
 	p := &noticingProvider{stubProvider: stubProvider{err: assertErr("boom")}, notice: "x"}
-	msg := fetchTabCmd(p, tabMovies)()
+	msg := fetchTabCmd(p, tabMovies, 3)()
 	if _, ok := msg.(errMsg); !ok {
 		t.Fatalf("msg = %#v, want errMsg", msg)
 	}
@@ -84,7 +87,7 @@ func (e assertErr) Error() string { return string(e) }
 
 func TestNoticeMsgSetsNoticeAndTabSwitchClearsIt(t *testing.T) {
 	m := AppModel{list: list.New(nil, list.NewDefaultDelegate(), 10, 10), activeTab: tabMovies}
-	updated, _ := m.Update(noticeMsg("hello"))
+	updated, _ := m.Update(noticeMsg{text: "hello", tab: tabMovies})
 	m = updated.(AppModel)
 	if m.notice != "hello" {
 		t.Fatalf("notice = %q", m.notice)
@@ -92,6 +95,21 @@ func TestNoticeMsgSetsNoticeAndTabSwitchClearsIt(t *testing.T) {
 	m.switchTab(tabSeries)
 	if m.notice != "" {
 		t.Errorf("notice = %q after a tab switch, want cleared", m.notice)
+	}
+}
+
+func TestNoticeFromAnEarlierTabRequestIsIgnored(t *testing.T) {
+	m := AppModel{list: list.New(nil, list.NewDefaultDelegate(), 10, 10), activeTab: tabMovies}
+	m.switchTab(tabAnime)
+	updated, _ := m.Update(noticeMsg{text: "movies notice", tab: tabMovies, gen: 0})
+	m = updated.(AppModel)
+	if m.notice != "" {
+		t.Fatalf("notice = %q, a late Movies notice must not show on Anime", m.notice)
+	}
+	updated, _ = m.Update(noticeMsg{text: "anime notice", tab: tabAnime, gen: m.tabReqGen})
+	m = updated.(AppModel)
+	if m.notice != "anime notice" {
+		t.Fatalf("notice = %q, want the current request's notice", m.notice)
 	}
 }
 
@@ -143,8 +161,8 @@ func TestSelectionResolvesCatalogueTVRowForThePlaybackProvider(t *testing.T) {
 	general, _ := wrapProviders(inner, provider.NewAnimeOnsen(), &config.Config{TMDBAPIKey: "abc"})
 	row := &media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, Year: "1999"}
 	gotRow, gotProv := finishSelection(row, general)
-	if gotRow.ID != "tv/one-piece-100" {
-		t.Errorf("row = %+v, want the provider's id", gotRow)
+	if gotRow.ID != "tv/37854" || gotRow.ProviderID != "tv/one-piece-100" {
+		t.Errorf("row = %+v, want the catalogue id kept and the provider's id named", gotRow)
 	}
 	if gotProv != provider.Provider(inner) {
 		t.Errorf("provider = %T, want the inner provider", gotProv)

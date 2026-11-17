@@ -126,7 +126,7 @@ func (tvSearchProvider) Search(string) ([]media.SearchResult, error) {
 	return []media.SearchResult{{ID: "tv/one-piece-100", Title: "One Piece", Type: media.TV, Year: "1999"}}, nil
 }
 
-func TestTrendingAndRecentPlayCatalogueTVRowsUnderTheProvidersID(t *testing.T) {
+func TestTrendingAndRecentPlayCatalogueTVRowsKeepingTheirCatalogueID(t *testing.T) {
 	for name, run := range map[string]func(*cobra.Command, []string) error{"trending": trendingRun, "recent": recentRun} {
 		t.Run(name, func(t *testing.T) {
 			catalogueFixture(t, "abc", func(rw http.ResponseWriter, r *http.Request) {
@@ -144,8 +144,8 @@ func TestTrendingAndRecentPlayCatalogueTVRowsUnderTheProvidersID(t *testing.T) {
 			if err := run(nil, []string{"tv"}); err != nil {
 				t.Fatal(err)
 			}
-			if played.ID != "tv/one-piece-100" {
-				t.Fatalf("played %+v, want the provider's id", played)
+			if played.ID != "tv/37854" || played.ProviderID != "tv/one-piece-100" {
+				t.Fatalf("played %+v, want the catalogue id kept and the provider's id named", played)
 			}
 		})
 	}
