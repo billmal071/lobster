@@ -81,6 +81,30 @@ func TestFetchTabErrorStaysAnError(t *testing.T) {
 	}
 }
 
+type taggedProvider struct {
+	stubProvider
+	notice string
+}
+
+func (n *taggedProvider) TrendingWithNotice(media.MediaType) ([]media.SearchResult, string, error) {
+	return n.rows, n.notice, nil
+}
+
+func (n *taggedProvider) TakeNotice() string { return "another fetch's notice" }
+
+func TestFetchTabUsesTheNoticeReturnedWithItsOwnFetch(t *testing.T) {
+	p := &taggedProvider{stubProvider: stubProvider{rows: []media.SearchResult{{ID: "movie/1", Title: "A"}}}, notice: "this fetch's notice"}
+	var text string
+	for _, m := range flatten(fetchTabCmd(p, tabMovies, 3)()) {
+		if v, ok := m.(noticeMsg); ok {
+			text = v.text
+		}
+	}
+	if text != "this fetch's notice" {
+		t.Fatalf("notice = %q, want the one returned with the fetch", text)
+	}
+}
+
 type assertErr string
 
 func (e assertErr) Error() string { return string(e) }

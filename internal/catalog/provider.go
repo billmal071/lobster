@@ -61,24 +61,25 @@ func (p *Provider) setNotice(n string) {
 	p.mu.Unlock()
 }
 
-func (p *Provider) hintOnce() {
+func (p *Provider) hintOnce() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.kind == General && !p.hintDone {
 		p.hintDone = true
-		p.notice = Hint
+		return Hint
 	}
+	return ""
 }
 
-func (p *Provider) fellBack(err error) {
+func fallbackNotice(err error) string {
 	const tail = "; showing the provider's list instead"
 	switch {
 	case errors.Is(err, ErrKeyRejected):
-		p.setNotice(ErrKeyRejected.Error() + tail)
+		return ErrKeyRejected.Error() + tail
 	case errors.Is(err, ErrRateLimited):
-		p.setNotice(ErrRateLimited.Error() + tail)
+		return ErrRateLimited.Error() + tail
 	default:
-		p.setNotice(fmt.Sprintf("TMDB unavailable (%v)%s", err, tail))
+		return fmt.Sprintf("TMDB unavailable (%v)%s", err, tail)
 	}
 }
 
@@ -189,11 +190,22 @@ func (p *Provider) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
 }
 
 // Trending returns the catalogue's trending (or anime) list, or the
-// provider's when there is no key or the catalogue fails.
+// provider's when there is no key or the catalogue fails. Any notice is left
+// pending for TakeNotice.
 func (p *Provider) Trending(mt media.MediaType) ([]media.SearchResult, error) {
+	res, notice, err := p.TrendingWithNotice(mt)
+	if notice != "" {
+		p.setNotice(notice)
+	}
+	return res, err
+}
+
+// TrendingWithNotice is Trending with the notice returned alongside the list,
+// for callers that fetch on the same Provider concurrently.
+func (p *Provider) TrendingWithNotice(mt media.MediaType) ([]media.SearchResult, string, error) {
 	if p.client == nil {
-		p.hintOnce()
-		return p.Provider.Trending(mt)
+		res, err := p.Provider.Trending(mt)
+		return res, p.hintOnce(), err
 	}
 	var res []media.SearchResult
 	var err error
@@ -203,18 +215,20 @@ func (p *Provider) Trending(mt media.MediaType) ([]media.SearchResult, error) {
 		res, err = p.client.Trending(mt)
 	}
 	if err != nil {
-		p.fellBack(err)
-		return p.Provider.Trending(mt)
+		fb, ferr := p.Provider.Trending(mt)
+		return fb, fallbackNotice(err), ferr
 	}
 	p.remember(res)
-	return res, nil
+	return res, "", nil
 }
 
 // Recent returns the catalogue's recent list. The anime tab has no recent
 // catalogue and always uses the provider.
 func (p *Provider) Recent(mt media.MediaType) ([]media.SearchResult, error) {
 	if p.client == nil {
-		p.hintOnce()
+		if n := p.hintOnce(); n != "" {
+			p.setNotice(n)
+		}
 		return p.Provider.Recent(mt)
 	}
 	if p.kind == Anime {
@@ -222,7 +236,7 @@ func (p *Provider) Recent(mt media.MediaType) ([]media.SearchResult, error) {
 	}
 	res, err := p.client.Recent(mt)
 	if err != nil {
-		p.fellBack(err)
+		p.setNotice(fallbackNotice(err))
 		return p.Provider.Recent(mt)
 	}
 	p.remember(res)

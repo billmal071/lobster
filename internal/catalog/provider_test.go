@@ -478,3 +478,15 @@ func TestResolveRowWithoutAYearRefusesTwoSameTitleCandidates(t *testing.T) {
 		t.Fatalf("ResolveRow = %+v, want Unresolved when two works share the title", got)
 	}
 }
+
+func TestTrendingWithNoticeReturnsTheNoticeAndLeavesNoPendingOne(t *testing.T) {
+	inner := &fakeInner{trending: providerRow}
+	p := Wrap(inner, failingClient(t, 401), General)
+	got, notice, err := p.TrendingWithNotice(media.Movie)
+	if err != nil || len(got) != 1 || !strings.Contains(notice, "tmdb_api_key rejected") {
+		t.Fatalf("TrendingWithNotice = %v, %q, %v", got, notice, err)
+	}
+	if n := p.TakeNotice(); n != "" {
+		t.Fatalf("pending notice = %q, want none: another fetch could have taken it", n)
+	}
+}

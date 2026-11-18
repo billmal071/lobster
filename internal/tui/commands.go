@@ -24,6 +24,22 @@ func fetchTabCmd(p provider.Provider, active tab, gen int) tea.Cmd {
 			mediaType = media.TV
 		}
 
+		if t, ok := p.(interface {
+			TrendingWithNotice(media.MediaType) ([]media.SearchResult, string, error)
+		}); ok {
+			results, notice, err := t.TrendingWithNotice(mediaType)
+			if err != nil {
+				return errMsg{err}
+			}
+			if notice == "" {
+				return resultsFetchedMsg(results)
+			}
+			return tea.BatchMsg{
+				func() tea.Msg { return resultsFetchedMsg(results) },
+				func() tea.Msg { return noticeMsg{text: notice, tab: active, gen: gen} },
+			}
+		}
+
 		results, err := p.Trending(mediaType)
 		if err != nil {
 			return errMsg{err}
