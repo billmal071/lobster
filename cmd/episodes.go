@@ -131,6 +131,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 
 	eps, err := listSeasonEpisodes(p, src, sel)
 	askedLacks := src.primaryLacks || (src.fromPrimary && lacksTheWork(err, len(eps)))
+	askedSeason := sel.Number
 	// An enumeration that stopped short of the end is an answer, not a
 	// failure: the list is episodes the provider actually confirmed, and
 	// dropping it to ask the chain would trade a measured prefix for a guess
@@ -172,6 +173,9 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 			p, seasons, sel, eps, err = a.hit.provider, a.hit.seasons, a.season, a.episodes, nil
 			shortfall = a.shortfall
 			seasonsPartial, seasonsGapped = a.hit.partial, a.hit.gapped
+			if sel.Number != askedSeason {
+				askedLacks = src.primaryLacks
+			}
 		}
 	}
 	if err != nil {

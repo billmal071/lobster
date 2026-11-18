@@ -189,3 +189,35 @@ func TestEpisodesFlagsAPartialEZTVCatalogue(t *testing.T) {
 		t.Fatalf("warning codes = %v, want season_list_incomplete and episode_list_incomplete", codes)
 	}
 }
+
+func TestEpisodesFromFallbackForAnotherSeasonDoesNotClaimTheyWillNotPlayViaEZTV(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+	withBase(t, "eztv")
+
+	primary := &stubProvider{
+		seasons:     []media.Season{{ID: "s2", Number: 2}, {ID: "s3", Number: 3}},
+		episodesErr: fmt.Errorf("eztv: no standalone release for eztv/1 S02E01 (%w)", provider.ErrNotCarried),
+	}
+	withStubProvider(t, primary)
+	withStubProviderBase(t, primary, "eztv")
+
+	fb := twoSeasonStub()
+	fb.seasons = []media.Season{{ID: "s1", Number: 1}}
+	fb.results = []media.SearchResult{{ID: "fb/some-show", Title: "Some Show", Type: media.TV}}
+	prevFB := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider { return []provider.Provider{fb} }
+	t.Cleanup(func() { agentFallbackProviders = prevFB })
+
+	withEpisodesFlags(t, tvRef(t, ""), 0)
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	w := decodeEpisodesWarnings(t, buf.Bytes())
+	if len(w) != 1 || w[0].Code != "episode_list_from_fallback" {
+		t.Fatalf("warnings = %+v, want one episode_list_from_fallback", w)
+	}
+	if strings.Contains(w[0].Message, "will not play via EZTV") {
+		t.Errorf("message = %q: EZTV was only checked for season 2, the list shown is season 1", w[0].Message)
+	}
+}
