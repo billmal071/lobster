@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"lobster/internal/media"
@@ -130,15 +131,20 @@ func TestBatchRejectsAPrefixFromAProbeFailure(t *testing.T) {
 	}
 }
 
-func TestEZTVBaseIsBuiltAsPrimary(t *testing.T) {
+func eztvPrimaryFromBase(t *testing.T, torrents string) (*provider.EZTV, *int32) {
+	t.Helper()
+	var apiHits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/search/multi":
 			fmt.Fprint(w, `{"results":[{"id":1,"name":"Kyle XY","media_type":"tv"}]}`)
 		case strings.HasPrefix(r.URL.Path, "/tv/"):
 			fmt.Fprint(w, `imdb.com/title/tt0756509`)
+		case r.URL.Path == "/api/get-torrents" && r.URL.Query().Get("imdb_id") == "0756509":
+			atomic.AddInt32(&apiHits, 1)
+			fmt.Fprint(w, torrents)
 		default:
-			fmt.Fprint(w, `{"torrents_count":0,"limit":100,"page":1}`)
+			http.NotFound(w, r)
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -148,8 +154,29 @@ func TestEZTVBaseIsBuiltAsPrimary(t *testing.T) {
 		t.Fatalf("newProvider for base eztv = %T", newProvider())
 	}
 	p.SetBaseURLs(srv.URL, srv.URL)
-	if res, err := p.Search("kyle xy"); err == nil {
-		t.Fatalf("Search offered %+v for a show EZTV has no torrents for", res)
+	return p, &apiHits
+}
+
+func TestEZTVBaseIsBuiltAsPrimary(t *testing.T) {
+	p, apiHits := eztvPrimaryFromBase(t, `{"torrents_count":0,"limit":100,"page":1}`)
+	res, err := p.Search("kyle xy")
+	if !errors.Is(err, provider.ErrNoResults) {
+		t.Fatalf("Search = %+v, %v; want ErrNoResults for a show EZTV has no torrents for", res, err)
+	}
+	if atomic.LoadInt32(apiHits) == 0 {
+		t.Fatal("Search never asked EZTV for the show's torrents, so it was not probing as a primary")
+	}
+}
+
+func TestEZTVBaseKeepsAShowThatHasTorrents(t *testing.T) {
+	body := `{"torrents_count":1,"limit":100,"page":1,"torrents":[{"id":1,"filename":"Kyle.XY.S01E01.mkv","magnet_url":"magnet:?xt=urn:btih:x","title":"Kyle XY S01E01","season":"1","episode":"1","seeds":5,"size_bytes":1}]}`
+	p, apiHits := eztvPrimaryFromBase(t, body)
+	res, err := p.Search("kyle xy")
+	if err != nil || len(res) != 1 || res[0].ID != "eztv/0756509" {
+		t.Fatalf("Search = %+v, %v; want the show EZTV holds a torrent for", res, err)
+	}
+	if atomic.LoadInt32(apiHits) == 0 {
+		t.Fatal("Search never probed EZTV")
 	}
 }
 
