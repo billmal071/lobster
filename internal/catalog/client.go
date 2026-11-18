@@ -322,14 +322,18 @@ func (c *Client) Season(id string, season int) ([]media.Episode, error) {
 
 func decodeList(body []byte, def media.MediaType, imageBase func() string) ([]media.SearchResult, error) {
 	var env struct {
-		Results []json.RawMessage `json:"results"`
+		Results json.RawMessage `json:"results"`
 	}
-	if err := json.Unmarshal(body, &env); err != nil {
+	if err := json.Unmarshal(body, &env); err != nil || len(env.Results) == 0 {
+		return nil, errors.New("decoding TMDB list failed")
+	}
+	var rows []json.RawMessage
+	if err := json.Unmarshal(env.Results, &rows); err != nil {
 		return nil, errors.New("decoding TMDB list failed")
 	}
 	var out []media.SearchResult
 	seen := map[string]bool{}
-	for _, rawRow := range env.Results {
+	for _, rawRow := range rows {
 		var row struct {
 			ID           int    `json:"id"`
 			MediaType    string `json:"media_type"`

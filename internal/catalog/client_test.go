@@ -51,7 +51,6 @@ func TestDecodeListEdgeCases(t *testing.T) {
 	}{
 		{"empty results", `{"results":[]}`, nil},
 		{"null results", `{"results":null}`, nil},
-		{"empty object", `{}`, nil},
 		{"missing poster and year", `{"results":[{"id":5,"title":"No Art"}]}`, []string{"movie/5"}},
 		{"malformed year kept empty", `{"results":[{"id":5,"title":"X","release_date":"soon"}]}`, []string{"movie/5"}},
 		{"person row dropped", `{"results":[{"id":1,"media_type":"person","name":"Someone"},{"id":2,"media_type":"movie","title":"Real"}]}`, []string{"movie/2"}},
@@ -86,7 +85,7 @@ func TestDecodeListEdgeCases(t *testing.T) {
 }
 
 func TestDecodeListMalformedJSON(t *testing.T) {
-	for _, body := range []string{``, `not json`, `{"results":`, `[1,2]`} {
+	for _, body := range []string{``, `not json`, `{"results":`, `[1,2]`, `{}`, `null`, `{"results":{}}`, `{"results":"x"}`} {
 		if _, err := decodeList([]byte(body), media.Movie, nil); err == nil {
 			t.Errorf("decodeList(%q) = nil error, want error", body)
 		}
