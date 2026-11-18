@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"lobster/internal/config"
@@ -184,5 +185,51 @@ func TestForwardedArgsCarriesAutoplay(t *testing.T) {
 
 	if got := forwardedArgs(playCmd); !containsArg(got, "--autoplay=true") {
 		t.Fatalf("forwardedArgs = %v, the detached child would drop --autoplay", got)
+	}
+}
+
+func detachArgvFor(t *testing.T, refType string, season, episode int, cliAutoplay string) []string {
+	t.Helper()
+	withInheritedFlags(t, playCmd, "autoplay")
+	f := playCmd.Flags().Lookup("autoplay")
+	f.Changed = false
+	_ = f.Value.Set("false")
+	if cliAutoplay != "" {
+		if err := playCmd.Flags().Set("autoplay", cliAutoplay); err != nil {
+			t.Fatalf("Set --autoplay=%s: %v", cliAutoplay, err)
+		}
+	}
+	prevRef, prevS, prevE := flagRef, flagSeason, flagEpisode
+	flagRef, flagSeason, flagEpisode = "REF", season, episode
+	t.Cleanup(func() { flagRef, flagSeason, flagEpisode = prevRef, prevS, prevE })
+	return detachArgv(playCmd, "/usr/bin/lobster", playRef{ID: "x", Title: "X", Type: refType})
+}
+
+func TestDetachedSeriesPlayAutoplaysByDefault(t *testing.T) {
+	got := detachArgvFor(t, "tv", 1, 2, "")
+	if !containsArg(got, "--autoplay=true") {
+		t.Fatalf("argv = %v, a detached series play must default to --autoplay=true", got)
+	}
+}
+
+func TestDetachedMoviePlayDoesNotAutoplay(t *testing.T) {
+	got := detachArgvFor(t, "movie", 0, 0, "")
+	for _, a := range got {
+		if strings.HasPrefix(a, "--autoplay") {
+			t.Fatalf("argv = %v, a movie must not get %s", got, a)
+		}
+	}
+}
+
+func TestDetachedSeriesExplicitAutoplayFalseWins(t *testing.T) {
+	got := detachArgvFor(t, "tv", 1, 2, "false")
+	if !containsArg(got, "--autoplay=false") || containsArg(got, "--autoplay=true") {
+		t.Fatalf("argv = %v, explicit --autoplay=false must reach the child", got)
+	}
+}
+
+func TestAttachedPlayDoesNotAutoplayByDefault(t *testing.T) {
+	if f := playCmd.Flags().Lookup("autoplay"); f.DefValue != "false" {
+		t.Fatalf("--autoplay default = %q, attached play must stay off", f.DefValue)
 	}
 }

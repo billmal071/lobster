@@ -208,10 +208,13 @@ reports playback position — only mpv does.
 
 Attached, playing an episode starts the same continuous-playback session
 described above: the countdown runs when it ends and the next episode follows.
-Detached there is no terminal for that menu, so playback stops after the episode
-you asked for, unless you pass `--autoplay`.
+Detached there is no terminal for that menu, so a detached series play carries on
+by itself (`--autoplay` is on by default there). Pass `--autoplay=false` to stop
+after the episode you asked for. This changed: scripts and agents that call
+`play --detach` on a series used to get one episode and now get the whole run.
 
-`--autoplay` (off by default) makes `play` carry on by itself: when an episode
+`--autoplay` (off by default for attached play and for movies; on by default for
+`play --detach` on a series) makes `play` carry on by itself: when an episode
 plays to its end, the next one in the season starts, and after a season's last
 episode the next season's first. It stops at the end of the series, when an
 episode fails to resolve, and whenever you close the player before its last ten seconds.

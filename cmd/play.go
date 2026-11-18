@@ -67,7 +67,7 @@ func init() {
 	playCmd.Flags().IntVar(&flagSeason, "season", 0, "Season number (required for TV)")
 	playCmd.Flags().IntVar(&flagEpisode, "episode", 0, "Episode number (required for TV)")
 	playCmd.Flags().BoolVar(&flagDetach, "detach", false, "Start playback in the background and return immediately")
-	playCmd.Flags().BoolVar(&flagAutoplay, "autoplay", false, "After a series episode plays to its end, play the next one")
+	playCmd.Flags().BoolVar(&flagAutoplay, "autoplay", false, "After a series episode plays to its end, play the next one (on by default for --detach on a series; pass --autoplay=false to stop after one episode)")
 	playCmd.Flags().BoolVar(&flagSupervised, "supervised", false, "Internal: marks the background supervisor process")
 	_ = playCmd.Flags().MarkHidden("supervised")
 }

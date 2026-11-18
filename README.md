@@ -280,7 +280,8 @@ lobster find "the matrix" --limit 5      # JSON candidates, each with a ref
 lobster find "the bear" --type tv        # filter to movie | tv (case-insensitive)
 lobster episodes --ref <REF> --season 2  # JSON season/episode listing
 lobster play --ref <REF> --detach        # start playback, return immediately
-lobster play --ref <REF> --season 1 --episode 1 --detach --autoplay  # keep going to the next episode
+lobster play --ref <REF> --season 1 --episode 1 --detach   # series: keeps going to the next episode
+lobster play --ref <REF> --season 1 --episode 1 --detach --autoplay=false  # stop after this episode
 lobster channels                         # JSON categories + channel counts
 lobster channels --category news         # JSON channels in a category, each with a ref
 ```
@@ -367,7 +368,9 @@ the `--base` the search was run with, since `find` also searches a fallback
 chain — and `play` forwards any flags you pass explicitly (`--base`,
 `--quality`, `--player`, `--provider`, `--language`, `--audio-language`,
 `--no-subs`, `--debug`, `--continue`, `--autoplay`) to the detached child so overrides still
-apply in the background.
+apply in the background. A detached play of a series turns `--autoplay` on for the child unless you
+pass `--autoplay=false`, so scripts and agents that relied on one episode per `play --detach` must
+now pass `--autoplay=false`.
 
 `--detach` is what makes the stdout-is-only-JSON guarantee hold: attached, the
 player inherits lobster's stdout and its progress output is interleaved with
