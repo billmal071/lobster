@@ -894,3 +894,67 @@ func TestVidrockWatchDoesNotFollowAnAPIRedirectToPlainHTTP(t *testing.T) {
 		t.Fatalf("the API redirect to http:// was followed (%d hits)", hits)
 	}
 }
+
+const vrSplitAudioMaster = "#EXTM3U\n" +
+	"#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"en\",URI=\"audio/en.m3u8\"\n" +
+	"#EXT-X-STREAM-INF:BANDWIDTH=3240000,RESOLUTION=1920x1080,AUDIO=\"aud\"\n1080p/index.m3u8\n" +
+	"#EXT-X-STREAM-INF:BANDWIDTH=2160000,RESOLUTION=1280x720,AUDIO=\"aud\"\n720p/index.m3u8\n"
+
+func TestVidrockWatchKeepsTheMasterWhenTheCappedVariantNeedsASeparateAudioRendition(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "big") }, "big", "720p/index")
+	h.bodies["big"] = vrSplitAudioMaster
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "720")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/big.m3u8") {
+		t.Fatalf("stream %v err %v, want the master so the audio rendition is kept", stream, err)
+	}
+}
+
+func TestVidrockWatchStillSelectsTheVariantWhenItsAudioGroupIsMuxed(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "big") }, "big", "720p/index")
+	h.bodies["big"] = strings.Replace(vrSplitAudioMaster, ",URI=\"audio/en.m3u8\"", "", 1)
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "720")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/720p/index.m3u8") {
+		t.Fatalf("stream %v err %v, want the 720p variant", stream, err)
+	}
+}
+
+func vrMP4Server(t *testing.T, contentType, body string) *Vidrock {
+	t.Helper()
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			fmt.Fprint(w, vrJSON([]vrSrv{{Name: "A", Enc: vrSeal(t, vrKey(t), srv.URL+"/p/direct.mp4"), Lang: "English", Type: "mp4"}}))
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	v := NewVidrock()
+	v.base, v.client, v.allowLocal = srv.URL, srv.Client(), true
+	return v
+}
+
+func TestVidrockWatchRejectsAnHTMLPageServedForAnMP4Entry(t *testing.T) {
+	for name, tc := range map[string]struct{ ctype, body string }{
+		"content type": {"text/html; charset=utf-8", "<html>challenge</html>"},
+		"body only":    {"application/octet-stream", "\n <!DOCTYPE html><html>challenge</html>"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := vrMP4Server(t, tc.ctype, tc.body)
+			if stream, err := v.Watch("tv/1", "1:1:1", "Default", "1080"); err == nil {
+				t.Fatalf("an HTML page was accepted as video: %v", stream)
+			}
+		})
+	}
+}
+
+func TestVidrockWatchAcceptsAnMP4EntryServingVideo(t *testing.T) {
+	for _, ctype := range []string{"video/mp4", "application/octet-stream"} {
+		v := vrMP4Server(t, ctype, "\x00\x00\x00\x18ftypmp42")
+		stream, err := v.Watch("tv/1", "1:1:1", "Default", "1080")
+		if err != nil || !strings.HasSuffix(stream.URL, "/p/direct.mp4") {
+			t.Fatalf("%s: stream %v err %v", ctype, stream, err)
+		}
+	}
+}

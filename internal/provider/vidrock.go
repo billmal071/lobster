@@ -49,6 +49,8 @@ var (
 	vidrockResolutionRe = regexp.MustCompile(`RESOLUTION=\d+x(\d+)`)
 	vidrockBandwidthRe  = regexp.MustCompile(`(?:^|[:,])BANDWIDTH=(\d+)`)
 	vidrockPathHeightRe = regexp.MustCompile(`/(\d{3,4})p?/`)
+	vidrockAudioAttrRe  = regexp.MustCompile(`(?:^|[:,])AUDIO="([^"]*)"`)
+	vidrockGroupIDRe    = regexp.MustCompile(`GROUP-ID="([^"]*)"`)
 )
 
 // Vidrock resolves streams from vidrock.to's unofficial JSON API by TMDB id.
@@ -194,6 +196,7 @@ func (v *Vidrock) Watch(mediaID, episodeID, server, quality string) (*media.Stre
 type vidrockVariant struct {
 	height, bandwidth int
 	url               string
+	separateAudio     bool
 }
 
 type vidrockProbe struct {
@@ -206,7 +209,7 @@ type vidrockProbe struct {
 }
 
 func (p vidrockProbe) streamURL(quality string) string {
-	if vidrockQualityCap(quality) > 0 && p.pick != nil && p.pick.height < p.maxH {
+	if vidrockQualityCap(quality) > 0 && p.pick != nil && p.pick.height < p.maxH && !p.pick.separateAudio {
 		return p.pick.url
 	}
 	return p.c.url
@@ -304,6 +307,14 @@ func vidrockKind(c vidrockCandidate) string {
 
 func parseVidrockPlaylist(body string, base *url.URL) []vidrockVariant {
 	lines := strings.Split(body, "\n")
+	splitAudio := map[string]bool{}
+	for _, line := range lines {
+		if strings.HasPrefix(line, "#EXT-X-MEDIA") && strings.Contains(line, "TYPE=AUDIO") && strings.Contains(line, "URI=") {
+			if m := vidrockGroupIDRe.FindStringSubmatch(line); m != nil {
+				splitAudio[m[1]] = true
+			}
+		}
+	}
 	var out []vidrockVariant
 	for i, line := range lines {
 		if !strings.HasPrefix(line, "#EXT-X-STREAM-INF") {
@@ -315,6 +326,9 @@ func parseVidrockPlaylist(body string, base *url.URL) []vidrockVariant {
 		}
 		if m := vidrockBandwidthRe.FindStringSubmatch(line); m != nil {
 			v.bandwidth, _ = strconv.Atoi(m[1])
+		}
+		if m := vidrockAudioAttrRe.FindStringSubmatch(line); m != nil {
+			v.separateAudio = splitAudio[m[1]]
 		}
 		for _, next := range lines[i+1:] {
 			next = strings.TrimSpace(next)
@@ -435,25 +449,30 @@ func (v *Vidrock) httpClient() *http.Client {
 	return &client
 }
 
-func (v *Vidrock) fetchPlaylist(ctx context.Context, name, target string) (string, *url.URL, error) {
+func (v *Vidrock) fetchPlaylist(ctx context.Context, name, target string) (string, *url.URL, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
 	req.Header.Set("User-Agent", vidrockUA)
 	resp, err := v.httpClient().Do(req)
 	if err != nil {
-		return "", nil, fmt.Errorf("server %s: %w", name, err)
+		return "", nil, "", fmt.Errorf("server %s: %w", name, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", nil, fmt.Errorf("server %s: playlist status %d", name, resp.StatusCode)
+		return "", nil, "", fmt.Errorf("server %s: playlist status %d", name, resp.StatusCode)
 	}
 	head, err := io.ReadAll(io.LimitReader(resp.Body, 16384))
 	if err != nil {
-		return "", nil, fmt.Errorf("server %s: %w", name, err)
+		return "", nil, "", fmt.Errorf("server %s: %w", name, err)
 	}
-	return strings.TrimPrefix(string(head), utf8BOM), resp.Request.URL, nil
+	return strings.TrimPrefix(string(head), utf8BOM), resp.Request.URL, resp.Header.Get("Content-Type"), nil
+}
+
+func looksLikeHTML(contentType, body string) bool {
+	ct := strings.ToLower(contentType)
+	return strings.Contains(ct, "html") || strings.HasPrefix(strings.TrimSpace(body), "<")
 }
 
 func isHLSPlaylist(body string) bool {
@@ -462,7 +481,7 @@ func isHLSPlaylist(body string) bool {
 
 func (v *Vidrock) probe(ctx context.Context, c vidrockCandidate, qcap int) (vidrockProbe, error) {
 	p := vidrockProbe{c: c}
-	text, final, err := v.fetchPlaylist(ctx, c.name, c.url)
+	text, final, ctype, err := v.fetchPlaylist(ctx, c.name, c.url)
 	if err != nil {
 		return p, err
 	}
@@ -470,6 +489,9 @@ func (v *Vidrock) probe(ctx context.Context, c vidrockCandidate, qcap int) (vidr
 		return p, fmt.Errorf("server %s: not an HLS playlist", c.name)
 	}
 	if !c.hls {
+		if looksLikeHTML(ctype, text) {
+			return p, fmt.Errorf("server %s: answered with a web page, not video", c.name)
+		}
 		return p, nil
 	}
 
@@ -492,7 +514,7 @@ func (v *Vidrock) probe(ctx context.Context, c vidrockCandidate, qcap int) (vidr
 		if qcap <= 0 || p.pick.height >= p.maxH {
 			break
 		}
-		if vtext, _, err := v.fetchPlaylist(ctx, c.name, p.pick.url); err == nil && isHLSPlaylist(vtext) {
+		if vtext, _, _, err := v.fetchPlaylist(ctx, c.name, p.pick.url); err == nil && isHLSPlaylist(vtext) {
 			break
 		}
 		v.log("vidrock: server %s variant %dp is not a playable playlist; trying the next", c.name, p.pick.height)
