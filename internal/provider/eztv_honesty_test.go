@@ -193,3 +193,44 @@ func TestEZTVProbeTimesOutAndFailsOpen(t *testing.T) {
 		t.Fatalf("search took %s, want it bounded by the probe timeout", took)
 	}
 }
+
+func TestEZTVCarriesEpisodeConfirmsWhatAFailedWalkAlreadySaw(t *testing.T) {
+	var hits int32
+	eztvPagedServer(t, &hits, true, 2, 5)
+	e := NewEZTV()
+	_, _ = e.GetServers("eztv/1", "1x120")
+	if err := e.CarriesEpisode("eztv/1", 1, 1); err != nil {
+		t.Fatalf("seen episode: err = %v, want nil: page 1 listed S01E01 with a magnet", err)
+	}
+	err := e.CarriesEpisode("eztv/1", 1, 120)
+	if err == nil || errors.Is(err, ErrNotCarried) {
+		t.Fatalf("unseen episode: err = %v, want a lookup error: page 2 failed", err)
+	}
+}
+
+func TestEZTVLateFailedWalkDoesNotOverrideACompleteCatalogue(t *testing.T) {
+	e := NewEZTV()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "1" {
+			var ts []string
+			for i := 0; i < eztvPageSize; i++ {
+				ts = append(ts, fmt.Sprintf(`{"id":%d,"filename":"S.S01E01.mkv","magnet_url":"magnet:?xt=urn:btih:x","season":"1","episode":"1","seeds":1}`, i))
+			}
+			fmt.Fprintf(w, `{"torrents_count":999,"torrents":[%s]}`, strings.Join(ts, ","))
+			return
+		}
+		e.mu.Lock()
+		e.shows["1"] = eztvCachedShow{torrents: []eztvTorrent{{Season: 1, Episode: 1, MagnetURL: "magnet:?xt=urn:btih:x"}}, fetched: e.now()}
+		e.mu.Unlock()
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(srv.Close)
+	old := eztvBase
+	eztvBase = srv.URL
+	t.Cleanup(func() { eztvBase = old })
+
+	_, _ = e.GetServers("eztv/1", "1x1")
+	if err := e.CarriesEpisode("eztv/1", 1, 120); !errors.Is(err, ErrNotCarried) {
+		t.Fatalf("err = %v, want ErrNotCarried from the complete catalogue another walk stored", err)
+	}
+}

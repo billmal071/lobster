@@ -66,7 +66,12 @@ type EZTV struct {
 	shows   map[string]eztvCachedShow // imdb digits -> torrents
 	imdb    map[int]string            // tmdb tv id -> imdb digits ("" = none)
 	probes  map[string]eztvProbe      // imdb digits -> whether page 1 had torrents
-	partial map[string]time.Time      // imdb digits -> when a walk last ended short
+	partial map[string]eztvPartial    // imdb digits -> the prefix a walk that ended short fetched
+}
+
+type eztvPartial struct {
+	torrents []eztvTorrent
+	at       time.Time
 }
 
 type eztvProbe struct {
@@ -87,7 +92,7 @@ func NewEZTV() *EZTV {
 		shows:       map[string]eztvCachedShow{},
 		imdb:        map[int]string{},
 		probes:      map[string]eztvProbe{},
-		partial:     map[string]time.Time{},
+		partial:     map[string]eztvPartial{},
 		now:         time.Now,
 	}
 }
@@ -244,16 +249,17 @@ func (e *EZTV) catalogue(id string) ([]eztvTorrent, bool, error) {
 	}
 	truncated := !reachedEnd
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	if partial || truncated {
-		e.partial[imdb] = e.now()
+		if c, ok := e.shows[imdb]; ok && !c.truncated && e.now().Sub(c.fetched) < eztvCacheTTL {
+			return c.torrents, true, nil
+		}
+		e.partial[imdb] = eztvPartial{torrents: all, at: e.now()}
 	} else {
 		delete(e.partial, imdb)
 	}
-	e.mu.Unlock()
 	if !partial {
-		e.mu.Lock()
 		e.shows[imdb] = eztvCachedShow{torrents: all, fetched: e.now(), truncated: truncated}
-		e.mu.Unlock()
 	}
 	return all, !partial && !truncated, nil
 }
@@ -364,9 +370,14 @@ func (e *EZTV) hasTorrents(imdb string) bool {
 func (e *EZTV) CarriesEpisode(id string, season, episode int) error {
 	if imdb, err := eztvIMDB(id); err == nil {
 		e.mu.Lock()
-		at, short := e.partial[imdb]
+		p, short := e.partial[imdb]
 		e.mu.Unlock()
-		if short && e.now().Sub(at) < eztvCacheTTL {
+		if short && e.now().Sub(p.at) < eztvCacheTTL {
+			for _, t := range p.torrents {
+				if int(t.Season) == season && int(t.Episode) == episode && t.MagnetURL != "" {
+					return nil
+				}
+			}
 			return fmt.Errorf("eztv: release list for %s was not fully fetched", id)
 		}
 	}
