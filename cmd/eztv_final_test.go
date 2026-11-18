@@ -229,3 +229,40 @@ func TestResolveAndPlayWarnsOfGapsInAFallbackList(t *testing.T) {
 		t.Fatalf("warnings = %v, want the gap warning for the fallback's list", *warnings)
 	}
 }
+
+func TestResolveAndPlayNamesEZTVWhenAGappedSeasonListLacksTheSeason(t *testing.T) {
+	hostileEnv(t)
+	playStreamHarness(t, &stubPlayerImpl{})
+	withFallbackChain(t)
+
+	primary := &shortListStreamProvider{stubProvider: &stubProvider{
+		seasons:    []media.Season{{ID: "1", Number: 1}, {ID: "3", Number: 3}},
+		seasonsErr: gapErr(),
+	}}
+	withStubProviderBase(t, primary, "eztv")
+	sel := media.SearchResult{ID: "eztv/1", Title: "South Park", Type: media.TV}
+	err := resolveAndPlay(primary, sel, 2, 1)
+	var notFound errSeasonNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("err = %v, want errSeasonNotFound", err)
+	}
+	if !strings.Contains(err.Error(), "EZTV does not carry season 2") {
+		t.Errorf("err = %q, want it to name EZTV as the source whose catalogue lacks the season", err)
+	}
+}
+
+func TestResolveAndPlayKeepsGenericRefusalForAListedSeasonGap(t *testing.T) {
+	hostileEnv(t)
+	playStreamHarness(t, &stubPlayerImpl{})
+	withFallbackChain(t)
+
+	primary := &shortListStreamProvider{stubProvider: &stubProvider{
+		seasons: []media.Season{{ID: "1", Number: 1}, {ID: "3", Number: 3}},
+	}}
+	withStubProviderBase(t, primary, "eztv")
+	sel := media.SearchResult{ID: "eztv/1", Title: "South Park", Type: media.TV}
+	err := resolveAndPlay(primary, sel, 2, 1)
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("err = %v, want the generic season-not-found refusal for a complete list", err)
+	}
+}

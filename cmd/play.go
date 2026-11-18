@@ -383,8 +383,12 @@ func playTarget(title string, season, episode int) string {
 type errSeasonNotFound struct {
 	season int
 	title  string
+	source string
 }
 
 func (e errSeasonNotFound) Error() string {
+	if e.source != "" {
+		return fmt.Sprintf("%s does not carry season %d of %q", e.source, e.season, e.title)
+	}
 	return fmt.Sprintf("season %d not found for %q (list them with 'lobster episodes --ref ...')", e.season, e.title)
 }

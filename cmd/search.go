@@ -320,9 +320,10 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		stopSeasons := ui.StartSpinner("Fetching seasons...")
 		seasons, err := p.GetSeasons(selected.ID)
 		stopSeasons()
-		seasonsPartial := false
+		seasonsPartial, seasonsGapped := false, false
 		if err != nil && len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
-			seasonsPartial = !provider.IsCatalogueGap(err)
+			seasonsGapped = provider.IsCatalogueGap(err)
+			seasonsPartial = !seasonsGapped
 			warnf("%s could not list every season of %q, so the season list may be short: %v", providerLabel(p), title, err)
 			err = nil
 		}
@@ -434,7 +435,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				// the provider-call key moves with it, never selected.ID.
 				alt, altSeasons, altSel, ok := seasonAcrossHits(
 					chainPrimary, contentRequest(selected),
-					seasonAnswer{provider: p, id: providerID, seasons: seasons, fromPrimary: true, partial: seasonsPartial},
+					seasonAnswer{provider: p, id: providerID, seasons: seasons, fromPrimary: true, partial: seasonsPartial, gapped: seasonsGapped},
 					season,
 				)
 				if !ok && alt.partial {
@@ -446,7 +447,11 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 					return playStream(fbStream, title, selected, season, episode)
 				}
 				if !ok {
-					return errSeasonNotFound{season: season, title: title}
+					nf := errSeasonNotFound{season: season, title: title}
+					if alt.gapped {
+						nf.source = strings.ToUpper(searchProviderBase(p))
+					}
+					return nf
 				}
 				debugf("season %d recovered from %T", altSel.Number, alt.provider)
 				p, providerID, seasons = alt.provider, alt.id, altSeasons
