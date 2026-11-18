@@ -101,5 +101,6 @@ func resumeRow(p provider.Provider, e media.HistoryEntry) (media.SearchResult, b
 	if !catalog.IsID(e.ID) {
 		return media.SearchResult{}, false
 	}
-	return resolveCatalogueRow(p, media.SearchResult{ID: e.ID, Title: e.Title, Type: e.Type}), true
+	row := resolveCatalogueRow(p, media.SearchResult{ID: e.ID, Title: e.Title, Type: e.Type, FromCatalogue: true})
+	return row, !row.Unresolved
 }

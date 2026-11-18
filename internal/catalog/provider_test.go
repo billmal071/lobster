@@ -364,12 +364,12 @@ func TestResolveRowKeepsTheCatalogueIDAndNamesTheProvidersOwn(t *testing.T) {
 	p := Wrap(inner, okServer(t), General)
 	for _, tc := range []struct{ row, want media.SearchResult }{
 		{
-			media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, Year: "1999"},
-			media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, Year: "1999", ProviderID: "tv/one-piece-100"},
+			media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, Year: "1999", FromCatalogue: true},
+			media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, Year: "1999", FromCatalogue: true, ProviderID: "tv/one-piece-100"},
 		},
 		{
-			media.SearchResult{ID: "movie/603", Title: "The Matrix", Type: media.Movie, Year: "1999"},
-			media.SearchResult{ID: "movie/603", Title: "The Matrix", Type: media.Movie, Year: "1999", ProviderID: "movie/the-matrix-7"},
+			media.SearchResult{ID: "movie/603", Title: "The Matrix", Type: media.Movie, Year: "1999", FromCatalogue: true},
+			media.SearchResult{ID: "movie/603", Title: "The Matrix", Type: media.Movie, Year: "1999", FromCatalogue: true, ProviderID: "movie/the-matrix-7"},
 		},
 	} {
 		if got := p.ResolveRow(tc.row); got != tc.want {
@@ -381,7 +381,7 @@ func TestResolveRowKeepsTheCatalogueIDAndNamesTheProvidersOwn(t *testing.T) {
 func TestResolveRowMarksACatalogueRowTheProviderDoesNotHave(t *testing.T) {
 	inner := &showProvider{results: []media.SearchResult{{ID: "tv/x-1", Title: "X", Type: media.TV}}}
 	p := Wrap(inner, okServer(t), General)
-	row := media.SearchResult{ID: "tv/404", Title: "Missing", Type: media.TV}
+	row := media.SearchResult{ID: "tv/404", Title: "Missing", Type: media.TV, FromCatalogue: true}
 	got := p.ResolveRow(row)
 	want := row
 	want.Unresolved = true
@@ -396,10 +396,26 @@ func TestResolveRowLeavesNativeRowsAlone(t *testing.T) {
 	for _, row := range []media.SearchResult{
 		{ID: "tv/native-5", Title: "X", Type: media.TV},
 		{ID: "movie/free-the-exorcist-hd-75043", Title: "X", Type: media.Movie},
+		{ID: "movie/550", Title: "X", Type: media.Movie},
+		{ID: "tv/37854", Title: "X", Type: media.TV},
 	} {
 		if got := p.ResolveRow(row); got != row {
 			t.Fatalf("ResolveRow(%+v) = %+v", row, got)
 		}
+	}
+}
+
+func TestResolveRowRetryOfAFailedRowClearsUnresolved(t *testing.T) {
+	inner := &showProvider{}
+	p := Wrap(inner, okServer(t), General)
+	failed := p.ResolveRow(media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, FromCatalogue: true})
+	if !failed.Unresolved {
+		t.Fatalf("first resolve = %+v, want Unresolved", failed)
+	}
+	inner.results = []media.SearchResult{{ID: "tv/one-piece-100", Title: "One Piece", Type: media.TV}}
+	got := p.ResolveRow(failed)
+	if got.Unresolved || got.ProviderID != "tv/one-piece-100" || got.ID != "tv/37854" {
+		t.Fatalf("retry = %+v, want resolved with the catalogue ID kept", got)
 	}
 }
 
@@ -448,5 +464,17 @@ func TestDetailsFailureDoesNotQueueAListNotice(t *testing.T) {
 	}
 	if n := p.TakeNotice(); n != "" {
 		t.Fatalf("notice = %q, want none from a metadata failure", n)
+	}
+}
+
+func TestResolveRowWithoutAYearRefusesTwoSameTitleCandidates(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-2013", Title: "Utopia", Type: media.TV, Year: "2013"},
+		{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"},
+	}}
+	p := Wrap(inner, okServer(t), General)
+	got := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, FromCatalogue: true})
+	if !got.Unresolved || got.ProviderID != "" {
+		t.Fatalf("ResolveRow = %+v, want Unresolved when two works share the title", got)
 	}
 }

@@ -368,7 +368,7 @@ func decodeList(body []byte, def media.MediaType, imageBase func() string) ([]me
 			continue
 		}
 		seen[id] = true
-		r := media.SearchResult{ID: id, Title: title, Type: mt, Year: year(row.ReleaseDate, row.FirstAirDate)}
+		r := media.SearchResult{ID: id, Title: title, Type: mt, Year: year(row.ReleaseDate, row.FirstAirDate), FromCatalogue: true}
 		if row.PosterPath != "" && imageBase != nil {
 			r.Poster = imageBase() + posterSize + row.PosterPath
 		}

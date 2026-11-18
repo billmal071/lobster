@@ -49,6 +49,11 @@ type SearchResult struct {
 	// that history and resume key on.
 	ProviderID string
 	Unresolved bool
+
+	// FromCatalogue marks a row the TMDB catalogue produced, the only kind
+	// that needs a provider ID looked up. A provider's own row can carry
+	// the same movie/<n> shape and is passed through as it is.
+	FromCatalogue bool
 }
 
 // ContentDetail contains detailed metadata fetched from a content's detail page.

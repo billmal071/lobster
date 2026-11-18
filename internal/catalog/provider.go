@@ -110,10 +110,11 @@ func (p *Provider) providerID(id string) (string, error) {
 
 // ResolveRow names the wrapped provider's own ID for a catalogue row in
 // ProviderID and leaves ID, the catalogue identity, alone. A catalogue row
-// the provider has no match for is marked Unresolved; any other row is
-// returned unchanged.
+// the provider has no match for is marked Unresolved, and a later call on
+// that row clears it once the provider answers. A row the catalogue did not
+// produce is returned unchanged.
 func (p *Provider) ResolveRow(r media.SearchResult) media.SearchResult {
-	if !IsID(r.ID) || r.ProviderID != "" {
+	if !r.FromCatalogue || !IsID(r.ID) || r.ProviderID != "" {
 		return r
 	}
 	id, err := p.resolve(r)
@@ -122,6 +123,7 @@ func (p *Provider) ResolveRow(r media.SearchResult) media.SearchResult {
 		return r
 	}
 	r.ProviderID = id
+	r.Unresolved = false
 	return r
 }
 
@@ -138,6 +140,7 @@ func (p *Provider) resolve(row media.SearchResult) (string, error) {
 	}
 	want := titlekey.Normalize(row.Title)
 	pick := ""
+	candidates := map[string]bool{}
 	for _, r := range results {
 		if r.Type != row.Type || titlekey.Normalize(r.Title) != want {
 			continue
@@ -145,6 +148,7 @@ func (p *Provider) resolve(row media.SearchResult) (string, error) {
 		if row.Year != "" && r.Year != "" && r.Year != row.Year {
 			continue
 		}
+		candidates[r.ID] = true
 		if row.Year != "" && r.Year == row.Year {
 			pick = r.ID
 			break
@@ -155,6 +159,9 @@ func (p *Provider) resolve(row media.SearchResult) (string, error) {
 	}
 	if pick == "" {
 		return "", fmt.Errorf("%q was not found on this provider", row.Title)
+	}
+	if row.Year == "" && len(candidates) > 1 {
+		return "", fmt.Errorf("%q matches more than one work on this provider", row.Title)
 	}
 	p.mu.Lock()
 	if p.resolved == nil {

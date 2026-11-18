@@ -150,3 +150,34 @@ func TestTrendingAndRecentPlayCatalogueTVRowsKeepingTheirCatalogueID(t *testing.
 		})
 	}
 }
+
+type nativeListProvider struct {
+	provider.Provider
+}
+
+func (nativeListProvider) Trending(media.MediaType) ([]media.SearchResult, error) {
+	return []media.SearchResult{{ID: "movie/550", Title: "Fight Club", Type: media.Movie}}, nil
+}
+
+func (nativeListProvider) Search(string) ([]media.SearchResult, error) {
+	return nil, fmt.Errorf("search is down")
+}
+
+func TestTrendingPlaysAProviderRowWithoutResolvingIt(t *testing.T) {
+	catalogueFixture(t, "", func(http.ResponseWriter, *http.Request) {})
+	prevProv, prevSel, prevPlay := agentProvider, selectItem, playSelected
+	t.Cleanup(func() { agentProvider, selectItem, playSelected = prevProv, prevSel, prevPlay })
+	agentProvider = func() provider.Provider { return nativeListProvider{} }
+	selectItem = func(string, []string) (int, error) { return 0, nil }
+	var played media.SearchResult
+	playSelected = func(_ provider.Provider, sel media.SearchResult, _, _ int) error {
+		played = sel
+		return nil
+	}
+	if err := trendingRun(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if played.ID != "movie/550" || played.Unresolved || played.ProviderID != "" {
+		t.Fatalf("played %+v, want the provider's row untouched", played)
+	}
+}

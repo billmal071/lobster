@@ -342,3 +342,10 @@ func TestTruncatedResponseIsNotCachedAndTheNextCallRecovers(t *testing.T) {
 		t.Fatalf("retry = %v, %v; want the valid body, not the cached truncated one", got, err)
 	}
 }
+
+func TestDecodeListMarksRowsAsFromTheCatalogue(t *testing.T) {
+	got, err := decodeList([]byte(`{"results":[{"id":5,"title":"A"}]}`), media.Movie, nil)
+	if err != nil || len(got) != 1 || !got[0].FromCatalogue {
+		t.Fatalf("decodeList = %+v, %v; want one row with FromCatalogue", got, err)
+	}
+}

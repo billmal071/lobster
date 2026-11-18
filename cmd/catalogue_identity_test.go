@@ -115,3 +115,20 @@ func TestResumeRowResolvesACatalogueHistoryEntryForTheProvider(t *testing.T) {
 		t.Fatal("a non-catalogue entry the search does not list must not resolve")
 	}
 }
+
+type twinSearchProvider struct {
+	listProvider
+}
+
+func (twinSearchProvider) Search(string) ([]media.SearchResult, error) {
+	return []media.SearchResult{
+		{ID: "tv/utopia-2013", Title: "Utopia", Type: media.TV, Year: "2013"},
+		{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"},
+	}, nil
+}
+
+func TestResumeRowLeavesTwoSameTitleWorksToTheUser(t *testing.T) {
+	if _, ok := resumeRow(&twinSearchProvider{}, media.HistoryEntry{ID: "tv/1", Title: "Utopia", Type: media.TV}); ok {
+		t.Fatal("resumeRow picked one of two same-title works the history entry cannot tell apart")
+	}
+}

@@ -159,7 +159,7 @@ func (tvSearchStub) Search(string) ([]media.SearchResult, error) {
 func TestSelectionResolvesCatalogueTVRowForThePlaybackProvider(t *testing.T) {
 	inner := &tvSearchStub{}
 	general, _ := wrapProviders(inner, provider.NewAnimeOnsen(), &config.Config{TMDBAPIKey: "abc"})
-	row := &media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, Year: "1999"}
+	row := &media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, Year: "1999", FromCatalogue: true}
 	gotRow, gotProv := finishSelection(row, general)
 	if gotRow.ID != "tv/37854" || gotRow.ProviderID != "tv/one-piece-100" {
 		t.Errorf("row = %+v, want the catalogue id kept and the provider's id named", gotRow)
@@ -169,5 +169,15 @@ func TestSelectionResolvesCatalogueTVRowForThePlaybackProvider(t *testing.T) {
 	}
 	if r, _ := finishSelection(nil, inner); r != nil {
 		t.Errorf("nil selection became %+v", r)
+	}
+}
+
+func TestSelectionKeepsANativeProviderRowUnresolved(t *testing.T) {
+	inner := &tvSearchStub{}
+	general, _ := wrapProviders(inner, provider.NewAnimeOnsen(), &config.Config{})
+	row := &media.SearchResult{ID: "movie/550", Title: "Not Listed Here", Type: media.Movie}
+	got, _ := finishSelection(row, general)
+	if *got != *row {
+		t.Fatalf("native row = %+v, want it unchanged", *got)
 	}
 }
