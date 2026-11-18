@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -244,6 +245,102 @@ const pl_url = '` + tsURL + `/ajax/ajax.php?vds=episodehash456';
 
 	if len(servers) != 3 {
 		t.Fatalf("expected 3 servers, got %d", len(servers))
+	}
+}
+
+func newWSTestProvider(t *testing.T, h http.HandlerFunc) *FlixHQWS {
+	t.Helper()
+	ts := httptest.NewTLSServer(h)
+	t.Cleanup(ts.Close)
+	return &FlixHQWS{base: strings.TrimPrefix(ts.URL, "https://"), client: ts.Client()}
+}
+
+func serveFixture(name string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		http.ServeFile(w, r, "testdata/"+name)
+	}
+}
+
+func TestFlixHQWSSearchNoMatchIsNoResults(t *testing.T) {
+	p := newWSTestProvider(t, serveFixture("ws_search_noresults.html"))
+	_, err := p.Search("xyzzyqq")
+	if !errors.Is(err, ErrNoResults) || errors.Is(err, ErrUnrecognisedResponse) {
+		t.Fatalf("Search on the site's own no-match page = %v, want ErrNoResults and not ErrUnrecognisedResponse", err)
+	}
+	if !strings.Contains(err.Error(), "xyzzyqq") {
+		t.Errorf("error %q does not name the query", err)
+	}
+}
+
+func TestFlixHQWSSearchUnrecognisedPages(t *testing.T) {
+	cases := map[string]string{
+		"empty body": ``,
+		"cloudflare challenge": `<!DOCTYPE html><html><head><title>Just a moment...</title></head>` +
+			`<body><h1>Checking your browser before accessing flixhq.ws</h1>` +
+			`<form id="challenge-form" action="/cdn-cgi/challenge-platform/"><input type="hidden" name="md"></form></body></html>`,
+		"truncated before the search form": `<!DOCTYPE html><html lang="en"><head><title>FlixHQ | Watch Free TV Series Online HD</title>` +
+			`<link rel="canonical" href="https://flixhq.ws/search/"/><link rel="stylesheet" hr`,
+		"truncated after the keyword input": `<!DOCTYPE html><html lang="en"><head><link rel="canonical" href="https://flixhq.ws/search/"/></head>` +
+			`<body><div id="header"><div id="search"><form><input type="text" name="keyword" class="form-control search-input">`,
+		"canonical alone":    `<html><head><link rel="canonical" href="https://flixhq.ws/search/"/></head><body></body></html>`,
+		"keyword form alone": `<html><body><form action="/search"><input name="keyword"></form></body></html>`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			p := newWSTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/html")
+				_, _ = w.Write([]byte(body))
+			})
+			_, err := p.Search("xyzzyqq")
+			if !errors.Is(err, ErrUnrecognisedResponse) || errors.Is(err, ErrNoResults) {
+				t.Fatalf("Search = %v, want ErrUnrecognisedResponse and not ErrNoResults", err)
+			}
+		})
+	}
+}
+
+func TestFlixHQWSSearchEmptyResultContainerIsNoResults(t *testing.T) {
+	p := newWSTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><body><div class="film_list-wrap"></div></body></html>`))
+	})
+	if _, err := p.Search("xyzzyqq"); !errors.Is(err, ErrNoResults) {
+		t.Fatalf("Search = %v, want ErrNoResults", err)
+	}
+}
+
+func TestFlixHQWSSearchHTTPErrorsAreNotNoResults(t *testing.T) {
+	for _, code := range []int{http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		p := newWSTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "nope", code)
+		})
+		_, err := p.Search("dune")
+		if err == nil || errors.Is(err, ErrNoResults) {
+			t.Fatalf("status %d: Search = %v, want a non-ErrNoResults error", code, err)
+		}
+	}
+}
+
+func TestFlixHQWSRecentUsesLiveListingPaths(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/movies/", serveFixture("ws_recent_movies.html"))
+	mux.HandleFunc("/tv-series/", serveFixture("ws_recent_tv.html"))
+	p := newWSTestProvider(t, mux.ServeHTTP)
+
+	movies, err := p.Recent(media.Movie)
+	if err != nil {
+		t.Fatalf("Recent(Movie) = %v", err)
+	}
+	if len(movies) != 3 || movies[0].Type != media.Movie || movies[0].ID != "movie/you-me-us-49834" {
+		t.Errorf("Recent(Movie) = %+v, want 3 movie cards starting with movie/you-me-us-49834", movies)
+	}
+
+	shows, err := p.Recent(media.TV)
+	if err != nil {
+		t.Fatalf("Recent(TV) = %v", err)
+	}
+	if len(shows) != 3 || shows[0].Type != media.TV || shows[0].ID != "series/the-body-88253" {
+		t.Errorf("Recent(TV) = %+v, want 3 series cards starting with series/the-body-88253", shows)
 	}
 }
 

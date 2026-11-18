@@ -348,6 +348,16 @@ var warnf = func(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "lobster: "+format+"\n", args...)
 }
 
+// debugLogger decides once, from the current config, whether to log. Goroutines
+// that outlive the call that built it (the resolver's abandoned probes) must
+// log through it, not debugf, so they never read cfg after a caller reset it.
+func debugLogger() func(string, ...any) {
+	if cfg != nil && cfg.Debug {
+		return log.Printf
+	}
+	return func(string, ...any) {}
+}
+
 func debugf(format string, args ...interface{}) {
 	if cfg != nil && cfg.Debug {
 		log.Printf(format, args...)

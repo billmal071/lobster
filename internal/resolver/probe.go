@@ -110,10 +110,11 @@ type Request struct {
 func resolveWithProvider(p provider.Provider, req Request, log func(string, ...any)) (*media.Stream, string, error) {
 	results, err := p.Search(req.Title)
 	if err != nil {
+		log("search failed on %s: %v", ProviderName(p), err)
 		return nil, "search", fmt.Errorf("search failed: %w", err)
 	}
 
-	candidates := candidatesFor(results, req)
+	candidates := truncateCandidates(rankedCandidates(admittedCandidates(results, req, log), req))
 	if len(candidates) == 0 {
 		return nil, "match", fmt.Errorf("no matching result for %q", req.Title)
 	}
@@ -163,6 +164,23 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 	return nil, "resolve", fmt.Errorf("all %d candidates failed: %w", len(candidates), lastErr)
 }
 
+// admittedCandidates keeps the candidates that are the work req identifies. A
+// provider's search is relevance-ranked, not exact, so without this gate its
+// best-scoring unrelated row would be streamed under the requested title.
+func admittedCandidates(candidates []media.SearchResult, req Request, log func(string, ...any)) []media.SearchResult {
+	out := make([]media.SearchResult, 0, len(candidates))
+	for _, c := range candidates {
+		sameWork := req
+		sameWork.MediaType = c.Type
+		if Matches(c, sameWork) || sequelSeason(req.Title, c.ID, 1) != 1 || isNyaaSequelOf(c, req) {
+			out = append(out, c)
+			continue
+		}
+		log("fallback candidate %q (ID: %s) refused: not the requested title %q", c.Title, c.ID, req.Title)
+	}
+	return out
+}
+
 // confidentMatch reports whether c is the work req identifies: the same ID, or
 // a title Matches accepts with release years that are unknown or within one.
 func confidentMatch(c media.SearchResult, req Request) bool {
@@ -194,10 +212,9 @@ func FallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 // catalog by title (cmd.seasonSource).
 //
 // Ranking is not filtering. Every candidate of the right media type is
-// returned, including ones that match nothing about req: within resolution
-// that is safe, because a candidate still has to yield a playable stream. A
-// caller that only reads metadata off the candidate has no such check and must
-// gate on Matches first.
+// returned, including ones that match nothing about req. resolveWithProvider
+// filters them itself (admittedCandidates) before asking for a stream; a caller
+// that only reads metadata off the candidate must gate on Matches first.
 func Candidates(results []media.SearchResult, req Request) []media.SearchResult {
 	return candidatesFor(results, req)
 }
@@ -256,10 +273,11 @@ func Candidates(results []media.SearchResult, req Request) []media.SearchResult 
 //
 // Request.MediaType has no "unspecified": media.Movie is the zero value of
 // media.MediaType, so a Request that never sets it asks for a film and this
-// gate refuses every TV candidate. Callers must set it. Both production sites
+// gate refuses every TV candidate. Callers must set it. The production sites
 // do — cmd/episodes.go's seasonSource passes media.TV outright, and
 // cmd/fallback.go's tryFallbackStream copies Type off the search result the
-// user picked — and TestMatchesTreatsAnUnsetRequestMediaTypeAsMovie pins the
+// user picked — except admittedCandidates, which sets it to the candidate's own
+// type so that only the title is judged. TestMatchesTreatsAnUnsetRequestMediaTypeAsMovie pins the
 // consequence so a third caller finds out from a test rather than from an
 // empty season list. Adding a sentinel to media.MediaType was the alternative;
 // it renumbers an iota compared across the codebase to fix a hazard with no
@@ -271,7 +289,7 @@ func Matches(r media.SearchResult, req Request) bool {
 	if r.Type != req.MediaType {
 		return false
 	}
-	title, want := normalize(r.Title), normalize(req.Title)
+	title, want := titleKey(r.Title), titleKey(req.Title)
 	if title == "" || want == "" {
 		return false
 	}
@@ -279,10 +297,10 @@ func Matches(r media.SearchResult, req Request) bool {
 		return true
 	}
 	// Qualifier stripped from one side only, never both at once.
-	if base, ok := stripQualifier(r.Title); ok && base == want {
+	if base, ok := stripQualifier(r.Title); ok && canonSeason(base) == want {
 		return true
 	}
-	if base, ok := stripQualifier(req.Title); ok && base == title {
+	if base, ok := stripQualifier(req.Title); ok && canonSeason(base) == title {
 		return true
 	}
 	return false
@@ -413,8 +431,13 @@ func dedupeByType(results []media.SearchResult, mediaType media.MediaType) []med
 // by how well they match the work the user actually picked, best first. The
 // provider's own relevance ordering is only the tiebreaker.
 func candidatesFor(results []media.SearchResult, req Request) []media.SearchResult {
-	// Rank before capping at MaxCandidates: the right match is often outside a
-	// provider's own top five for a franchise title.
+	return truncateCandidates(rankedCandidates(results, req))
+}
+
+// rankedCandidates is candidatesFor before the MaxCandidates cap. Rank before
+// capping: the right match is often outside a provider's own top five for a
+// franchise title.
+func rankedCandidates(results []media.SearchResult, req Request) []media.SearchResult {
 	candidates := dedupeByType(results, req.MediaType)
 
 	scored := make([]struct {
@@ -431,7 +454,7 @@ func candidatesFor(results []media.SearchResult, req Request) []media.SearchResu
 	for i, s := range scored {
 		ranked[i] = s.result
 	}
-	return truncateCandidates(ranked)
+	return ranked
 }
 
 // candidateScore rates how confidently a search result is the requested work.
