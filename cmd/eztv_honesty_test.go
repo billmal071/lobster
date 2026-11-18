@@ -23,7 +23,7 @@ func notCarried() error {
 
 func TestTryFallbackStreamLeadsWithTheEZTVReason(t *testing.T) {
 	hostileEnv(t)
-	a, b := newDeadChain("Show")
+	a, b := newDeadChain("South Park")
 	withFallbackChain(t, a, b)
 
 	primary := &carrierStub{stubProvider: &stubProvider{}, carries: notCarried()}
