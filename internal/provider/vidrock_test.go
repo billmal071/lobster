@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"lobster/internal/media"
@@ -840,30 +841,30 @@ func TestVidrockWatchDoesNotRetryANonTransientAPIError(t *testing.T) {
 }
 
 func TestVidrockWatchDoesNotRetryAnAPIClientError(t *testing.T) {
-	hits := 0
+	var hits atomic.Int32
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits++
+		hits.Add(1)
 		http.Error(w, "nope", http.StatusForbidden)
 	}))
 	defer srv.Close()
 	v := NewVidrock()
 	v.base, v.client, v.allowLocal = srv.URL, srv.Client(), true
-	if _, err := v.Watch("movie/1", "", "Default", "1080"); err == nil || hits != 1 {
-		t.Fatalf("err %v hits %d, want an error after a single request", err, hits)
+	if _, err := v.Watch("movie/1", "", "Default", "1080"); err == nil || hits.Load() != 1 {
+		t.Fatalf("err %v hits %d, want an error after a single request", err, hits.Load())
 	}
 }
 
 func TestVidrockWatchDoesNotRetryARejectedAPIRedirect(t *testing.T) {
-	hits := 0
+	var hits atomic.Int32
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits++
+		hits.Add(1)
 		http.Redirect(w, r, "http://example.invalid/api/x", http.StatusFound)
 	}))
 	defer srv.Close()
 	v := NewVidrock()
 	v.base, v.client, v.allowLocal = srv.URL, srv.Client(), true
-	if _, err := v.Watch("tv/1", "1:1:1", "Default", "1080"); err == nil || hits != 1 {
-		t.Fatalf("err %v hits %d, want an error after a single request", err, hits)
+	if _, err := v.Watch("tv/1", "1:1:1", "Default", "1080"); err == nil || hits.Load() != 1 {
+		t.Fatalf("err %v hits %d, want an error after a single request", err, hits.Load())
 	}
 }
 
