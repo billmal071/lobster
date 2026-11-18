@@ -453,13 +453,17 @@ func (v *Vidrock) fetchPlaylist(ctx context.Context, name, target string) (strin
 	return strings.TrimPrefix(string(head), utf8BOM), resp.Request.URL, nil
 }
 
+func isHLSPlaylist(body string) bool {
+	return strings.HasPrefix(strings.TrimSpace(body), "#EXTM3U")
+}
+
 func (v *Vidrock) probe(ctx context.Context, c vidrockCandidate, qcap int) (vidrockProbe, error) {
 	p := vidrockProbe{c: c}
 	text, final, err := v.fetchPlaylist(ctx, c.name, c.url)
 	if err != nil {
 		return p, err
 	}
-	if c.hls && !strings.HasPrefix(strings.TrimSpace(text), "#EXTM3U") {
+	if c.hls && !isHLSPlaylist(text) {
 		return p, fmt.Errorf("server %s: not an HLS playlist", c.name)
 	}
 	if !c.hls {
@@ -485,10 +489,10 @@ func (v *Vidrock) probe(ctx context.Context, c vidrockCandidate, qcap int) (vidr
 		if qcap <= 0 || p.pick.height >= p.maxH {
 			break
 		}
-		if _, _, err := v.fetchPlaylist(ctx, c.name, p.pick.url); err == nil {
+		if vtext, _, err := v.fetchPlaylist(ctx, c.name, p.pick.url); err == nil && isHLSPlaylist(vtext) {
 			break
 		}
-		v.log("vidrock: server %s variant %dp did not answer; trying the next", c.name, p.pick.height)
+		v.log("vidrock: server %s variant %dp is not a playable playlist; trying the next", c.name, p.pick.height)
 		idx := p.pick
 		for i := range p.variants {
 			if &p.variants[i] == idx {

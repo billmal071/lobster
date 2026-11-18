@@ -394,6 +394,7 @@ func TestVidrockWatchPrefersHLSOverMP4InTheSameLanguage(t *testing.T) {
 			{Name: "B", Enc: vrSealURL(t, host, "hls"), Lang: "English", Type: "hls"},
 		})
 	}, "hls", "direct.mp4")
+	h.bodies["hls"] = "#EXTM3U\n#EXTINF:4,\nseg.ts\n"
 	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "1080")
 	if err != nil || !strings.HasSuffix(stream.URL, "/p/hls.m3u8") {
 		t.Fatalf("stream %v err %v, want the hls entry", stream, err)
@@ -709,6 +710,37 @@ func TestVidrockWatchFallsBackToTheMasterWhenNoVariantUnderTheCapAnswers(t *test
 	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "720")
 	if err != nil || !strings.HasSuffix(stream.URL, "/p/m.m3u8") {
 		t.Fatalf("stream %v err %v, want the master when the only variant under the cap is dead", stream, err)
+	}
+}
+
+func TestVidrockWatchRejectsAVariantWhoseBodyIsNotAPlaylistAndTriesTheNextBest(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "m") }, "m", "720p/index", "480p/index")
+	h.bodies["m"] = vrMaster(1080, 720, 480)
+	h.bodies["720p/index"] = "<html><body>Just a moment...</body></html>"
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "720")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/480p/index.m3u8") {
+		t.Fatalf("stream %v err %v, want the 480p variant once the 720p one answers 200 with HTML", stream, err)
+	}
+}
+
+func TestVidrockWatchFallsBackToTheMasterWhenEveryVariantBodyIsNotAPlaylist(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "m") }, "m", "720p/index", "480p/index")
+	h.bodies["m"] = vrMaster(1080, 720, 480)
+	h.bodies["720p/index"] = "<html>challenge</html>"
+	h.bodies["480p/index"] = ""
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "720")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/m.m3u8") {
+		t.Fatalf("stream %v err %v, want the master when no variant body is a playlist", stream, err)
+	}
+}
+
+func TestVidrockWatchAcceptsAVariantPlaylistWithABOMAndLeadingWhitespace(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "m") }, "m", "720p/index")
+	h.bodies["m"] = vrMaster(1080, 720)
+	h.bodies["720p/index"] = "\ufeff\n#EXTM3U\n#EXTINF:4,\nseg.ts\n"
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "720")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/720p/index.m3u8") {
+		t.Fatalf("stream %v err %v, want the 720p variant", stream, err)
 	}
 }
 
