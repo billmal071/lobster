@@ -531,13 +531,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		if sf := shortfallFor(err); sf.code != "" && len(episodes) > 0 &&
 			(episode == 0 || episodeIndex(episodes, episode) >= 0) {
 			err = nil
-			if sf.gap {
-				warnf("%s has no release for some episodes of season %d of %q: %s",
-					providerLabel(p), selectedSeason.Number, title, sf.reason)
-			} else {
-				warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",
-					providerLabel(p), selectedSeason.Number, title, sf.reason)
-			}
+			warnShortList(sf, p, selectedSeason.Number, title)
 		}
 
 		if err != nil || len(episodes) == 0 {
@@ -581,6 +575,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				selectedSeason = answer.season
 				episodes = answer.episodes
 				err = nil
+				warnShortList(answer.shortfall, p, selectedSeason.Number, title)
 			} else if episode > 0 {
 				// A caller who already knows which episode it wants does not
 				// need a list: the fallback resolver reaches a StreamProvider
@@ -1299,4 +1294,16 @@ func initDownloadManager(c *config.Config) (*dlmanager.Manager, func(), error) {
 	}
 
 	return mgr, cleanup, nil
+}
+
+func warnShortList(sf episodeShortfall, p provider.Provider, season int, title string) {
+	switch {
+	case sf.code == "":
+	case sf.gap:
+		warnf("%s has no release for some episodes of season %d of %q: %s",
+			providerLabel(p), season, title, sf.reason)
+	default:
+		warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",
+			providerLabel(p), season, title, sf.reason)
+	}
 }

@@ -203,3 +203,29 @@ func TestResolveAndPlayWarnsOfGapsInAKeptList(t *testing.T) {
 		t.Fatalf("warnings = %v, want the gap wording, not the enumeration-shortfall one", *warnings)
 	}
 }
+
+func TestResolveAndPlayWarnsOfGapsInAFallbackList(t *testing.T) {
+	hostileEnv(t)
+	playStreamHarness(t, &stubPlayerImpl{})
+	warnings := captureWarnings(t)
+
+	primary := &stubProvider{
+		seasons:     []media.Season{{ID: "5", Number: 5}},
+		episodesErr: errors.New("episodes: status 502"),
+	}
+	fb := &shortListStreamProvider{stubProvider: &stubProvider{
+		results:         []media.SearchResult{{ID: "fb/south-park", Title: "South Park", Type: media.TV}},
+		seasons:         []media.Season{{ID: "5", Number: 5}},
+		episodesWithErr: []media.Episode{{ID: "5x1", Number: 1}, {ID: "5x5", Number: 5}},
+		episodesErr:     gapErr(),
+	}}
+	withFallbackChain(t, fb)
+
+	sel := media.SearchResult{ID: "prim/1", Title: "South Park", Type: media.TV}
+	if err := resolveAndPlay(primary, sel, 5, 5); err != nil {
+		t.Fatalf("resolveAndPlay = %v", err)
+	}
+	if !containsSubstring(*warnings, "has no release for some episodes") {
+		t.Fatalf("warnings = %v, want the gap warning for the fallback's list", *warnings)
+	}
+}
