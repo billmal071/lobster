@@ -6,7 +6,10 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -741,6 +744,132 @@ func TestVidrockWatchAcceptsAVariantPlaylistWithABOMAndLeadingWhitespace(t *test
 	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "720")
 	if err != nil || !strings.HasSuffix(stream.URL, "/p/720p/index.m3u8") {
 		t.Fatalf("stream %v err %v, want the 720p variant", stream, err)
+	}
+}
+
+type vrFlaky struct {
+	rt    http.RoundTripper
+	mu    sync.Mutex
+	calls int
+	fail  func(n int) error
+}
+
+func (f *vrFlaky) RoundTrip(r *http.Request) (*http.Response, error) {
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		f.mu.Lock()
+		f.calls++
+		n := f.calls
+		f.mu.Unlock()
+		if err := f.fail(n); err != nil {
+			return nil, err
+		}
+	}
+	return f.rt.RoundTrip(r)
+}
+
+func (f *vrFlaky) apiCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+type vrTimeoutErr struct{}
+
+func (vrTimeoutErr) Error() string   { return "awaiting headers: timeout" }
+func (vrTimeoutErr) Timeout() bool   { return true }
+func (vrTimeoutErr) Temporary() bool { return true }
+
+var _ net.Error = vrTimeoutErr{}
+
+func vrFlakyHarness(t *testing.T, fail func(n int) error) (*vrHarness, *vrFlaky) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "m") }, "m")
+	f := &vrFlaky{rt: h.v.client.Transport, fail: fail}
+	h.v.client = &http.Client{Transport: f, Timeout: h.v.client.Timeout}
+	return h, f
+}
+
+func TestVidrockWatchRetriesTheAPIOnceAfterATimeout(t *testing.T) {
+	h, f := vrFlakyHarness(t, func(n int) error {
+		if n == 1 {
+			return vrTimeoutErr{}
+		}
+		return nil
+	})
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "1080")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/m.m3u8") {
+		t.Fatalf("stream %v err %v, want a stream after one retry", stream, err)
+	}
+	if f.apiCalls() != 2 {
+		t.Fatalf("api calls = %d, want 2", f.apiCalls())
+	}
+}
+
+func TestVidrockWatchRetriesTheAPIOnATransientConnectionError(t *testing.T) {
+	h, f := vrFlakyHarness(t, func(n int) error {
+		if n == 1 {
+			return io.ErrUnexpectedEOF
+		}
+		return nil
+	})
+	if _, err := h.v.Watch("tv/1", "1:1:1", "Default", "1080"); err != nil {
+		t.Fatalf("err %v, want success after one retry", err)
+	}
+	if f.apiCalls() != 2 {
+		t.Fatalf("api calls = %d, want 2", f.apiCalls())
+	}
+}
+
+func TestVidrockWatchRetriesTheAPIOnlyOnce(t *testing.T) {
+	h, f := vrFlakyHarness(t, func(int) error { return vrTimeoutErr{} })
+	if _, err := h.v.Watch("tv/1", "1:1:1", "Default", "1080"); err == nil {
+		t.Fatal("want an error when both attempts time out")
+	}
+	if f.apiCalls() != 2 {
+		t.Fatalf("api calls = %d, want exactly 2", f.apiCalls())
+	}
+}
+
+func TestVidrockWatchDoesNotRetryANonTransientAPIError(t *testing.T) {
+	h, f := vrFlakyHarness(t, func(int) error { return errors.New("x509: certificate signed by unknown authority") })
+	if _, err := h.v.Watch("tv/1", "1:1:1", "Default", "1080"); err == nil {
+		t.Fatal("want an error")
+	}
+	if f.apiCalls() != 1 {
+		t.Fatalf("api calls = %d, want 1", f.apiCalls())
+	}
+}
+
+func TestVidrockWatchDoesNotRetryAnAPIClientError(t *testing.T) {
+	hits := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		http.Error(w, "nope", http.StatusForbidden)
+	}))
+	defer srv.Close()
+	v := NewVidrock()
+	v.base, v.client, v.allowLocal = srv.URL, srv.Client(), true
+	if _, err := v.Watch("movie/1", "", "Default", "1080"); err == nil || hits != 1 {
+		t.Fatalf("err %v hits %d, want an error after a single request", err, hits)
+	}
+}
+
+func TestVidrockWatchDoesNotRetryARejectedAPIRedirect(t *testing.T) {
+	hits := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		http.Redirect(w, r, "http://example.invalid/api/x", http.StatusFound)
+	}))
+	defer srv.Close()
+	v := NewVidrock()
+	v.base, v.client, v.allowLocal = srv.URL, srv.Client(), true
+	if _, err := v.Watch("tv/1", "1:1:1", "Default", "1080"); err == nil || hits != 1 {
+		t.Fatalf("err %v hits %d, want an error after a single request", err, hits)
+	}
+}
+
+func TestVidrockAPIAttemptsFitInsideTheWatchBudget(t *testing.T) {
+	if 2*vidrockAPITimeout+vidrockProbeTimeout > vidrockWatchBudget {
+		t.Fatalf("two API attempts plus a probe exceed the watch budget")
 	}
 }
 

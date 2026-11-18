@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"lobster/internal/lang"
@@ -38,7 +39,9 @@ const (
 
 var errVidrockNoStream = errors.New("vidrock has no stream for this title")
 
-var vidrockWatchBudget = 20 * time.Second
+var vidrockWatchBudget = 24 * time.Second
+
+var vidrockAPITimeout = 8 * time.Second
 
 var vidrockProbeTimeout = 6 * time.Second
 
@@ -162,7 +165,7 @@ func (v *Vidrock) Watch(mediaID, episodeID, server, quality string) (*media.Stre
 	ctx, cancel := context.WithTimeout(context.Background(), vidrockWatchBudget)
 	defer cancel()
 
-	body, err := v.get(ctx, strings.TrimRight(v.base, "/")+"/api/"+path, strings.TrimRight(v.base, "/")+"/", "application/json, */*", vidrockMaxBody)
+	body, err := v.getAPI(ctx, strings.TrimRight(v.base, "/")+"/api/"+path)
 	if err != nil {
 		return nil, fmt.Errorf("vidrock: %w", err)
 	}
@@ -511,6 +514,28 @@ func (v *Vidrock) probe(ctx context.Context, c vidrockCandidate, qcap int) (vidr
 		p.maxH = p.height
 	}
 	return p, nil
+}
+
+func (v *Vidrock) getAPI(ctx context.Context, apiURL string) ([]byte, error) {
+	var body []byte
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		actx, cancel := context.WithTimeout(ctx, vidrockAPITimeout)
+		body, err = v.get(actx, apiURL, strings.TrimRight(v.base, "/")+"/", "application/json, */*", vidrockMaxBody)
+		cancel()
+		if err == nil || ctx.Err() != nil || !vidrockTransient(err) {
+			break
+		}
+		v.log("vidrock: API request failed (%v); retrying once", err)
+	}
+	return body, err
+}
+
+func vidrockTransient(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout() ||
+		errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) ||
+		errors.Is(err, syscall.ECONNRESET)
 }
 
 func (v *Vidrock) get(ctx context.Context, rawURL, referer, accept string, max int64) ([]byte, error) {
