@@ -1,12 +1,13 @@
 package cmd
 
 import (
-	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/playlist"
 )
 
 var flagAutoplay bool
+
+const autoplayEndSlackSeconds = 10
 
 var playEpisode = playCurrentEpisode
 
@@ -15,7 +16,7 @@ func playFinished(res player.PlayResult) bool {
 	if res.PositionUnknown || res.Duration <= 0 || res.Position <= 0 {
 		return false
 	}
-	return resumePosition(media.HistoryEntry{Position: res.Position, Duration: res.Duration}) == 0
+	return res.Duration-res.Position <= autoplayEndSlackSeconds
 }
 
 func sessionFinished(sess *playlist.Session) bool {

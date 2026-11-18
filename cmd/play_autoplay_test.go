@@ -95,7 +95,10 @@ func TestAutoplayStopsWhenPlayerQuitEarly(t *testing.T) {
 }
 
 func TestAutoplayStopsWhenPositionUnknown(t *testing.T) {
-	got, _ := runLoop(t, true, 1, 1, []player.PlayResult{{PositionUnknown: true}}, 0)
+	got, err := runLoop(t, true, 1, 1, []player.PlayResult{{PositionUnknown: true}}, 0)
+	if err != nil {
+		t.Fatalf("runPlaybackLoop: %v", err)
+	}
 	if len(got) != 1 {
 		t.Fatalf("played %v with no measured position, want only the first episode", got)
 	}
@@ -115,6 +118,9 @@ func TestAutoplayIsNoOpForMovies(t *testing.T) {
 	hostileEnv(t)
 	captureAgentOut(t)
 	plays := 0
+	prevCheck := agentPlayerCheck
+	agentPlayerCheck = func() (bool, string) { return true, "stub" }
+	t.Cleanup(func() { agentPlayerCheck = prevCheck })
 	prevPlay := agentResolveAndPlay
 	agentResolveAndPlay = func(provider.Provider, media.SearchResult, int, int) error { plays++; return nil }
 	t.Cleanup(func() { agentResolveAndPlay = prevPlay })
@@ -155,7 +161,8 @@ func TestPlayFinished(t *testing.T) {
 		want bool
 	}{
 		{"ran to the end", player.PlayResult{Position: 1440, Duration: 1440}, true},
-		{"inside the credits tail", player.PlayResult{Position: 1400, Duration: 1440}, true},
+		{"last seconds", player.PlayResult{Position: 1435, Duration: 1440}, true},
+		{"closed in the credits", player.PlayResult{Position: 1400, Duration: 1440}, false},
 		{"quit mid-episode", player.PlayResult{Position: 600, Duration: 1440}, false},
 		{"unknown duration", player.PlayResult{Position: 600}, false},
 		{"never started", player.PlayResult{}, false},
