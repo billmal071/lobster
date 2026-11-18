@@ -228,11 +228,12 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 // content carries the ID and year of the work the user actually selected so the
 // resolver can tell a franchise entry apart from its sequels.
 func tryFallbackStream(primary provider.Provider, content media.SearchResult, season, episode int) (*media.Stream, error) {
+	deadline := time.Now().Add(fallbackBudget)
 	stream, err := tryFallbackStreamFrom(streamChain(primary), content, season, episode)
 	if err != nil {
 		var failure *resolveFailure
 		if errors.As(err, &failure) {
-			failure.lead = primaryCatalogueVerdict(primary, content, season, episode)
+			failure.lead = primaryCatalogueVerdict(primary, content, season, episode, deadline)
 		}
 	}
 	return stream, err
@@ -244,13 +245,27 @@ type episodeCarrier interface {
 
 // primaryCatalogueVerdict is the sentence that leads a failed resolve when the
 // primary's catalogue lacks the episode, and empty when it has it or the lookup
-// itself failed, since only a catalogue answer is a verdict.
-func primaryCatalogueVerdict(primary provider.Provider, content media.SearchResult, season, episode int) string {
+// itself failed, since only a catalogue answer is a verdict. It gives up at
+// deadline, the end of the fallback budget, rather than hold the report back.
+func primaryCatalogueVerdict(primary provider.Provider, content media.SearchResult, season, episode int, deadline time.Time) string {
 	carrier, ok := primary.(episodeCarrier)
 	if !ok || season <= 0 || episode <= 0 {
 		return ""
 	}
-	if err := carrier.CarriesEpisode(content.ID, season, episode); !errors.Is(err, provider.ErrNotCarried) {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return ""
+	}
+	answer := make(chan error, 1)
+	go func() { answer <- carrier.CarriesEpisode(content.ID, season, episode) }()
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case err := <-answer:
+		if !errors.Is(err, provider.ErrNotCarried) {
+			return ""
+		}
+	case <-timer.C:
 		return ""
 	}
 	return fmt.Sprintf("%s has no standalone release of %s S%02dE%02d", strings.ToUpper(searchProviderBase(primary)), fallbackTitle(content), season, episode)

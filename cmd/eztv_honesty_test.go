@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"lobster/internal/media"
 	"lobster/internal/provider"
@@ -219,5 +220,36 @@ func TestEpisodesFromFallbackForAnotherSeasonDoesNotClaimTheyWillNotPlayViaEZTV(
 	}
 	if strings.Contains(w[0].Message, "will not play via EZTV") {
 		t.Errorf("message = %q: EZTV was only checked for season 2, the list shown is season 1", w[0].Message)
+	}
+}
+
+type blockingCarrier struct {
+	*stubProvider
+	release chan struct{}
+}
+
+func (b *blockingCarrier) CarriesEpisode(string, int, int) error {
+	<-b.release
+	return notCarried()
+}
+
+func TestPrimaryCatalogueVerdictDoesNotOutlastTheFallbackDeadline(t *testing.T) {
+	hostileEnv(t)
+	primary := &blockingCarrier{stubProvider: &stubProvider{}, release: make(chan struct{})}
+	t.Cleanup(func() { close(primary.release) })
+	withStubProviderBase(t, primary, "eztv")
+	content := media.SearchResult{ID: "eztv/121955", Title: "South Park", Type: media.TV}
+
+	done := make(chan string, 1)
+	go func() {
+		done <- primaryCatalogueVerdict(primary, content, 5, 4, time.Now().Add(50*time.Millisecond))
+	}()
+	select {
+	case got := <-done:
+		if got != "" {
+			t.Errorf("verdict = %q, want none when the lookup cannot finish before the deadline", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("primaryCatalogueVerdict kept waiting on a lookup past the fallback deadline")
 	}
 }
