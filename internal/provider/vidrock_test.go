@@ -958,3 +958,41 @@ func TestVidrockWatchAcceptsAnMP4EntryServingVideo(t *testing.T) {
 		}
 	}
 }
+
+func TestVidrockWatchSendsTheProbeUserAgentWithTheStream(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "big") }, "big")
+	h.bodies["big"] = vrMaster(1080)
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "best")
+	if err != nil || stream.UserAgent != vidrockUA {
+		t.Fatalf("stream %+v err %v, want UserAgent %q", stream, err, vidrockUA)
+	}
+}
+
+func TestVidrockWatchKeepsTheMasterWhenOnlySomeAudioEntriesInTheGroupHaveAURI(t *testing.T) {
+	h := vrNew(t, func(host string) string { return vrEnglish(t, host, "big") }, "big", "720p/index")
+	h.bodies["big"] = "#EXTM3U\n" +
+		"#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"main\",DEFAULT=YES\n" +
+		"#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"en\",URI=\"audio/en.m3u8\"\n" +
+		"#EXT-X-STREAM-INF:BANDWIDTH=3240000,RESOLUTION=1920x1080,AUDIO=\"aud\"\n1080p/index.m3u8\n" +
+		"#EXT-X-STREAM-INF:BANDWIDTH=2160000,RESOLUTION=1280x720,AUDIO=\"aud\"\n720p/index.m3u8\n"
+	stream, err := h.v.Watch("tv/1", "1:1:1", "Default", "720")
+	if err != nil || !strings.HasSuffix(stream.URL, "/p/big.m3u8") {
+		t.Fatalf("stream %v err %v, want the master", stream, err)
+	}
+}
+
+func TestVidrockWatchRejectsAnErrorBodyServedForAnMP4Entry(t *testing.T) {
+	for name, tc := range map[string]struct{ ctype, body string }{
+		"json":                 {"application/json", `{"error":"blocked"}`},
+		"json as octet-stream": {"application/octet-stream", ` {"error":"blocked"}`},
+		"json array":           {"application/octet-stream", `[{"error":"blocked"}]`},
+		"plain text":           {"text/plain", "Forbidden"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := vrMP4Server(t, tc.ctype, tc.body)
+			if stream, err := v.Watch("tv/1", "1:1:1", "Default", "1080"); err == nil {
+				t.Fatalf("an error body was accepted as video: %v", stream)
+			}
+		})
+	}
+}

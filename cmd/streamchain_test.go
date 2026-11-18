@@ -134,3 +134,30 @@ func TestOpenBatchStreamStreamingFallbackAsksAFlixHQWSPrimary(t *testing.T) {
 		t.Fatalf("FlixHQWS asked %d times, want at least %d: the streaming retry after a failed torrent must include it", got, 2*perCall)
 	}
 }
+
+func TestStreamTiersRunANamedVidrockAloneBeforeTheFallbackRace(t *testing.T) {
+	withDefaultConfig(t)
+	cfg.TorrentFallback = true
+	chain := streamChain(provider.NewVidrock())
+	tiers := streamTiers(chain)
+	if len(tiers) != 3 {
+		t.Fatalf("tiers = %d, want vidrock, streaming, torrent", len(tiers))
+	}
+	if len(tiers[0]) != 1 || indexOfProvider[*provider.Vidrock](tiers[0]) != 0 {
+		t.Fatalf("first tier = %v, want Vidrock alone", providerNames(tiers[0]))
+	}
+	if hasProvider[*provider.Vidrock](tiers[1]) || hasProvider[*provider.Vidrock](tiers[2]) {
+		t.Fatalf("Vidrock reappears in a later tier: %v / %v", providerNames(tiers[1]), providerNames(tiers[2]))
+	}
+	if len(onlyMagnetSources(tiers[1])) != 0 || len(tiers[2]) == 0 || len(withoutMagnetSources(tiers[2])) != 0 {
+		t.Fatalf("streaming tier %v and torrent tier %v are mixed", providerNames(tiers[1]), providerNames(tiers[2]))
+	}
+}
+
+func TestStreamTiersRaceAFallbackVidrockWithTheOtherStreamingSources(t *testing.T) {
+	withDefaultConfig(t)
+	tiers := streamTiers(streamChain(provider.NewTBCPL("tbcpl")))
+	if len(tiers) != 1 || !hasProvider[*provider.Vidrock](tiers[0]) {
+		t.Fatalf("tiers = %v, want one streaming tier holding Vidrock", tiers)
+	}
+}

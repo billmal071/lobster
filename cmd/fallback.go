@@ -360,22 +360,40 @@ func tryFallbackStreamAccepting(providers []provider.Provider, content media.Sea
 	ctx, cancel := context.WithTimeout(context.Background(), fallbackBudget)
 	defer cancel()
 
+	var failure *resolveFailure
+	var lastErr error
+	for _, tier := range streamTiers(providers) {
+		stream, err := resolveTier(ctx, tier, req, failure)
+		if err == nil || ctx.Err() != nil {
+			return stream, err
+		}
+		// A request the resolver refuses is the caller's mistake, not a provider
+		// failure; the later tiers would refuse it too and bury the reason.
+		if errors.Is(err, resolver.ErrSeasonEpisodeRequired) {
+			return nil, err
+		}
+		lastErr = err
+		errors.As(err, &failure)
+	}
+	return nil, lastErr
+}
+
+// streamTiers orders a chain into the sets that are raced one after another:
+// a Vidrock the user named alone, then the streaming providers, then the
+// torrent providers, so a magnet never beats a scraper still being checked.
+func streamTiers(providers []provider.Provider) [][]provider.Provider {
+	var tiers [][]provider.Provider
+	if len(providers) > 1 {
+		if _, ok := providers[0].(*provider.Vidrock); ok {
+			tiers = append(tiers, providers[:1])
+			providers = providers[1:]
+		}
+	}
 	plain, magnets := withoutMagnetSources(providers), onlyMagnetSources(providers)
 	if len(plain) == 0 || len(magnets) == 0 {
-		return resolveTier(ctx, providers, req, nil)
+		return append(tiers, providers)
 	}
-	stream, err := resolveTier(ctx, plain, req, nil)
-	if err == nil || ctx.Err() != nil {
-		return stream, err
-	}
-	// A request the resolver refuses is the caller's mistake, not a provider
-	// failure; the torrent tier would refuse it too and bury the reason.
-	if errors.Is(err, resolver.ErrSeasonEpisodeRequired) {
-		return nil, err
-	}
-	var first *resolveFailure
-	errors.As(err, &first)
-	return resolveTier(ctx, magnets, req, first)
+	return append(tiers, plain, magnets)
 }
 
 // resolveTier races providers for req. A failure is wrapped in a resolveFailure, which carries earlier's attempts too when a previous tier failed.

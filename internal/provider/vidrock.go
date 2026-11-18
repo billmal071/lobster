@@ -184,7 +184,7 @@ func (v *Vidrock) Watch(mediaID, episodeID, server, quality string) (*media.Stre
 	if len(probes) > 0 {
 		best := v.rank(probes, quality)
 		v.log("vidrock: using server %s (%s) at %dp", best.c.name, best.c.language, best.height)
-		return &media.Stream{URL: best.streamURL(quality), Quality: quality}, nil
+		return &media.Stream{URL: best.streamURL(quality), Quality: quality, UserAgent: vidrockUA}, nil
 	}
 
 	if lastErr != nil {
@@ -470,9 +470,13 @@ func (v *Vidrock) fetchPlaylist(ctx context.Context, name, target string) (strin
 	return strings.TrimPrefix(string(head), utf8BOM), resp.Request.URL, resp.Header.Get("Content-Type"), nil
 }
 
-func looksLikeHTML(contentType, body string) bool {
+func looksLikeErrorPage(contentType, body string) bool {
 	ct := strings.ToLower(contentType)
-	return strings.Contains(ct, "html") || strings.HasPrefix(strings.TrimSpace(body), "<")
+	if strings.Contains(ct, "html") || strings.Contains(ct, "json") || strings.Contains(ct, "xml") || strings.HasPrefix(ct, "text/") {
+		return true
+	}
+	b := strings.TrimSpace(body)
+	return strings.HasPrefix(b, "<") || strings.HasPrefix(b, "{") || strings.HasPrefix(b, "[")
 }
 
 func isHLSPlaylist(body string) bool {
@@ -489,8 +493,8 @@ func (v *Vidrock) probe(ctx context.Context, c vidrockCandidate, qcap int) (vidr
 		return p, fmt.Errorf("server %s: not an HLS playlist", c.name)
 	}
 	if !c.hls {
-		if looksLikeHTML(ctype, text) {
-			return p, fmt.Errorf("server %s: answered with a web page, not video", c.name)
+		if looksLikeErrorPage(ctype, text) {
+			return p, fmt.Errorf("server %s: answered with a web page or error body, not video", c.name)
 		}
 		return p, nil
 	}
