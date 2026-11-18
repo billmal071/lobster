@@ -142,7 +142,7 @@ func TestEpisodesFromFallbackUnderOtherBasesDoesNotMentionEZTV(t *testing.T) {
 	withBase(t, "animeonsen")
 
 	primary := twoSeasonStub()
-	primary.episodesErr = errors.New("episodes: animeonsen: manifest status 429")
+	primary.episodesErr = fmt.Errorf("animeonsen: no episodes for animeonsen/1 (%w)", provider.ErrNotCarried)
 	withStubProvider(t, primary)
 	withStubProviderBase(t, primary, "animeonsen")
 
