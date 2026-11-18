@@ -332,7 +332,9 @@ listing is the whole season:
   not fetch its whole release list, or (for EZTV) holds only some of the show's
   seasons, so `seasons` may be missing some. A season absent from it is not
   proof the season does not exist. EZTV's `episode_list_incomplete` reason
-  names the episodes of the season it has no release for.
+  names missing episode numbers only when its fully fetched release list has a
+  numbering gap; when a page failed or a limit cut the fetch short it says only
+  that the list could not be fully fetched.
 - `{"code": "episode_list_from_fallback", "base": "flixhq.ws",
   "provider": "tbcpl", "episodes_listed": 10}` — the source named by `--base`
   (or by the ref) could not list this season, so the listing came from a
@@ -341,7 +343,7 @@ listing is the whole season:
   and the one that matters: a fallback can list episodes it has no way to
   stream. Check that a ref from this listing actually plays before relying on
   the count. When the base is `eztv` and EZTV itself answered that it has none
-  of the show (or none of the requested season), the message also says the
+  of the show (or none of the season that was checked), the message also says the
   listed episodes will not play via EZTV; after a transient EZTV failure it
   keeps the generic wording, as does a season missing from a season list that
   was cut short by a failed fetch.
