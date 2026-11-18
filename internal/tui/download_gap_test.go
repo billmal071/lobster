@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"lobster/internal/media"
@@ -31,5 +32,46 @@ func TestFetchEpisodesKeepsAListWithGaps(t *testing.T) {
 	}
 	if msg.err != nil || len(msg.episodes) != 2 {
 		t.Fatalf("err = %v, episodes = %d; want the 2 listed episodes and no error", msg.err, len(msg.episodes))
+	}
+}
+
+func TestFetchEpisodesFlagsAListWithGapsAsPartial(t *testing.T) {
+	prev := EpisodeListFallback
+	EpisodeListFallback = nil
+	t.Cleanup(func() { EpisodeListFallback = prev })
+
+	d := &downloadDialog{
+		item:     media.SearchResult{ID: "eztv/1", Type: media.TV},
+		provider: gappedListProvider{},
+		seasons:  []media.Season{{ID: "2", Number: 2}},
+	}
+	msg := d.fetchEpisodes(0)().(dlEpisodesMsg)
+	if !msg.partial {
+		t.Fatal("a list kept despite gaps was passed on as if it were complete")
+	}
+}
+
+func TestRangeViewDisclosesAPartialList(t *testing.T) {
+	d := newDownloadDialog()
+	d.active = true
+	d.Update(dlEpisodesMsg{episodes: []media.Episode{{ID: "2x2", Number: 2}, {ID: "2x5", Number: 5}}, partial: true})
+	d.step = dlStepRangeInput
+
+	view := d.View(120, 40)
+	if strings.Contains(view, "Available: 1-5") {
+		t.Errorf("view presents a contiguous 1-5 range for a list with gaps:\n%s", view)
+	}
+	if !strings.Contains(view, "Partial list") || !strings.Contains(view, "2, 5") {
+		t.Errorf("view does not say the list is partial and which episodes exist:\n%s", view)
+	}
+}
+
+func TestRangeViewOfACompleteListKeepsTheContiguousRange(t *testing.T) {
+	d := newDownloadDialog()
+	d.active = true
+	d.Update(dlEpisodesMsg{episodes: []media.Episode{{ID: "1x1", Number: 1}, {ID: "1x2", Number: 2}}})
+	d.step = dlStepRangeInput
+	if view := d.View(120, 40); !strings.Contains(view, "Available: 1-2") {
+		t.Errorf("view = %s, want the contiguous range for a complete list", view)
 	}
 }

@@ -41,6 +41,7 @@ type downloadDialog struct {
 
 	seasons  []media.Season
 	episodes []media.Episode
+	partial  bool
 
 	seasonCursor  int
 	modeCursor    int
@@ -74,7 +75,7 @@ func (d *downloadDialog) start(item media.SearchResult, p provider.Provider, mgr
 	d.manager = mgr
 	d.outputDir = outputDir
 	d.seasons = nil
-	d.episodes = nil
+	d.episodes, d.partial = nil, false
 	d.seasonCursor = 0
 	d.modeCursor = 0
 	d.episodeCursor = 0
@@ -107,6 +108,7 @@ type dlSeasonsMsg struct {
 type dlEpisodesMsg struct {
 	episodes []media.Episode
 	err      error
+	partial  bool
 }
 
 // --- Update ---
@@ -137,6 +139,7 @@ func (d *downloadDialog) Update(msg tea.Msg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		d.episodes = msg.episodes
+		d.partial = msg.partial
 		d.step = dlStepPickMode
 		return true, nil
 
@@ -291,8 +294,9 @@ func (d *downloadDialog) fetchEpisodes(seasonIdx int) tea.Cmd {
 	season := d.seasons[seasonIdx]
 	return func() tea.Msg {
 		episodes, err := prov.GetEpisodes(item.ID, season.ID)
+		partial := false
 		if err != nil && len(episodes) > 0 && provider.IsCatalogueGap(err) {
-			err = nil
+			err, partial = nil, true
 		}
 		if (err != nil || len(episodes) == 0) && EpisodeListFallback != nil {
 			if eps, ferr := EpisodeListFallback(prov, item, season.Number); ferr == nil && len(eps) > 0 {
@@ -302,7 +306,7 @@ func (d *downloadDialog) fetchEpisodes(seasonIdx int) tea.Cmd {
 		if err != nil {
 			return dlEpisodesMsg{err: err}
 		}
-		return dlEpisodesMsg{episodes: episodes}
+		return dlEpisodesMsg{episodes: episodes, partial: partial}
 	}
 }
 
@@ -497,7 +501,15 @@ func (d *downloadDialog) View(width, height int) string {
 	case dlStepRangeInput:
 		var lines []string
 		lines = append(lines, titleStyle.Render("Episode Range"))
-		if len(d.episodes) > 0 {
+		switch {
+		case len(d.episodes) == 0:
+		case d.partial:
+			nums := make([]string, len(d.episodes))
+			for i, ep := range d.episodes {
+				nums[i] = strconv.Itoa(ep.Number)
+			}
+			lines = append(lines, labelStyle.Render("Partial list, only these exist: "+strings.Join(nums, ", ")))
+		default:
 			lines = append(lines, labelStyle.Render(fmt.Sprintf("Available: 1-%d", d.episodes[len(d.episodes)-1].Number)))
 		}
 		lines = append(lines, "")
