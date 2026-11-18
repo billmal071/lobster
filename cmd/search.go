@@ -298,6 +298,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	// using selected.ID for the provider calls.
 	p, routed := routeByType(p, selected)
 
+	routedAway := routed.ID != selected.ID
 	callID := selected.ID
 	if selected.ProviderID != "" {
 		callID = selected.ProviderID
@@ -735,7 +736,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		stopStream := ui.StartSpinner("Negotiating stream servers...")
 		var servers []media.Server
 		err := errUnresolved
-		if !selected.Unresolved {
+		if !selected.Unresolved || routedAway {
 			servers, err = p.GetServers(routed.ID, episodeID)
 		}
 		stopStream()
