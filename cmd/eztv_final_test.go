@@ -266,3 +266,20 @@ func TestResolveAndPlayKeepsGenericRefusalForAListedSeasonGap(t *testing.T) {
 		t.Fatalf("err = %v, want the generic season-not-found refusal for a complete list", err)
 	}
 }
+
+func TestResolveAndPlayPlaysAListedSeasonOfAGappedSeasonList(t *testing.T) {
+	hostileEnv(t)
+	playStreamHarness(t, &stubPlayerImpl{})
+	withFallbackChain(t)
+
+	primary := &shortListStreamProvider{stubProvider: &stubProvider{
+		seasons:         []media.Season{{ID: "5", Number: 5}},
+		seasonsErr:      gapErr(),
+		episodesWithErr: []media.Episode{{ID: "5x1", Number: 1}, {ID: "5x5", Number: 5}},
+		episodesErr:     gapErr(),
+	}}
+	sel := media.SearchResult{ID: "eztv/1", Title: "South Park", Type: media.TV}
+	if err := resolveAndPlay(primary, sel, 5, 5); err != nil {
+		t.Fatalf("resolveAndPlay = %v, want season 5 to play from a gapped season list", err)
+	}
+}
