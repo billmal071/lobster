@@ -66,7 +66,8 @@ func runLoop(t *testing.T, autoplay bool, season, episode int, outcomes []player
 	cfg = &config.Config{History: false}
 	t.Cleanup(func() { flagAutoplay, cfg = prevAuto, prevCfg })
 
-	return played, runPlaybackLoop(sess)
+	err := runPlaybackLoop(sess)
+	return played, err
 }
 
 func TestAutoplayContinuesThroughSeasonsToEndOfSeries(t *testing.T) {
