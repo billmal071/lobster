@@ -280,6 +280,7 @@ lobster find "the matrix" --limit 5      # JSON candidates, each with a ref
 lobster find "the bear" --type tv        # filter to movie | tv (case-insensitive)
 lobster episodes --ref <REF> --season 2  # JSON season/episode listing
 lobster play --ref <REF> --detach        # start playback, return immediately
+lobster play --ref <REF> --season 1 --episode 1 --detach --autoplay  # keep going to the next episode
 lobster channels                         # JSON categories + channel counts
 lobster channels --category news         # JSON channels in a category, each with a ref
 ```
@@ -365,7 +366,7 @@ carries — the source that actually produced that row, which is not necessarily
 the `--base` the search was run with, since `find` also searches a fallback
 chain — and `play` forwards any flags you pass explicitly (`--base`,
 `--quality`, `--player`, `--provider`, `--language`, `--audio-language`,
-`--no-subs`, `--debug`, `--continue`) to the detached child so overrides still
+`--no-subs`, `--debug`, `--continue`, `--autoplay`) to the detached child so overrides still
 apply in the background.
 
 `--detach` is what makes the stdout-is-only-JSON guarantee hold: attached, the

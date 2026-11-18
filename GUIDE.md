@@ -209,7 +209,17 @@ reports playback position — only mpv does.
 Attached, playing an episode starts the same continuous-playback session
 described above: the countdown runs when it ends and the next episode follows.
 Detached there is no terminal for that menu, so playback stops after the episode
-you asked for.
+you asked for, unless you pass `--autoplay`.
+
+`--autoplay` (off by default) makes `play` carry on by itself: when an episode
+plays to its end, the next one in the season starts, and after a season's last
+episode the next season's first. It stops at the end of the series, when an
+episode fails to resolve, and whenever you close the player before the credits.
+It also stops when the player cannot report a position (only mpv does), because
+an early quit would be indistinguishable from an ending. It does nothing for a
+movie, and does not read `auto_next`, which only controls the attached countdown.
+It applies when the show's seasons can be listed; a title served only by the
+fallback chain plays the one episode.
 
 `--download` is not supported by `play` — batch downloading is a prompt-driven
 path. Use the interactive CLI for that.

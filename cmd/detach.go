@@ -53,6 +53,7 @@ var forwardedBoolFlags = []struct {
 	{"no-subs", &flagNoSubs},
 	{"debug", &flagDebug},
 	{"continue", &flagContinue},
+	{"autoplay", &flagAutoplay},
 }
 
 // forwardedArgs returns argv fragments for every persistent flag the caller

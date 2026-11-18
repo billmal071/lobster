@@ -25,7 +25,7 @@ var cachedServerName string
 // countdown/menu for continuous playback.
 func runPlaybackLoop(sess *playlist.Session) error {
 	for {
-		if err := playCurrentEpisode(sess); err != nil {
+		if err := playEpisode(sess); err != nil {
 			return err
 		}
 
@@ -36,6 +36,17 @@ func runPlaybackLoop(sess *playlist.Session) error {
 		if !sess.HasNext() {
 			fmt.Fprintln(os.Stderr, "\n  End of series.")
 			return nil
+		}
+
+		if flagAutoplay {
+			if !sessionFinished(sess) {
+				return nil
+			}
+			if _, err := sess.Next(); err != nil {
+				return fmt.Errorf("advancing to next episode: %w", err)
+			}
+			debugf("autoplay next: %s", sess.Title())
+			continue
 		}
 
 		// Build menu items
