@@ -108,12 +108,16 @@ func TestSeasonAbsentFromAGappedListIsNoResultsNotProvidersFailed(t *testing.T) 
 func TestValidateRefusesASeasonAbsentFromAGappedList(t *testing.T) {
 	hostileEnv(t)
 	chainOf(t)
-	captureAgentOut(t)
+	buf := captureAgentOut(t)
 	primary := &stubProvider{seasons: []media.Season{{ID: "3", Number: 3}}, seasonsErr: gapErr()}
+	withStubProviderBase(t, primary, "eztv")
 	err := validateSeasonEpisode(primary, playRef{ID: "eztv/1", Title: "Show", Type: "tv"}, 1, 1)
 	var ee *exitError
 	if !errors.As(err, &ee) || ee.code != exitNoResults {
 		t.Fatalf("err = %v, want exit %d for a season missing from a gapped season list", err, exitNoResults)
+	}
+	if !strings.Contains(buf.String(), "EZTV does not carry season 1") {
+		t.Errorf("output = %s, want the refusal to name EZTV as the source that lacks the season", buf.String())
 	}
 }
 

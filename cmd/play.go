@@ -207,6 +207,7 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 		// still runs none.
 		scanned, _, _, ok := seasonAcrossHits(p, seasonRequest(r), seasonAnswer{
 			provider: p, id: r.ID, seasons: seasons, fromPrimary: true, partial: partial,
+			gapped: usable && !partial,
 		}, season)
 		if ok {
 			debugf("play: the primary's season list lacks %d but a chain hit has it; deferring to the resolver", season)
@@ -215,6 +216,10 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 		if scanned.partial {
 			debugf("play: season %d is absent only from season lists flagged incomplete; deferring to the resolver", season)
 			return nil
+		}
+		if scanned.gapped {
+			return emitErr("no_results", exitNoResults, "%s does not carry season %d of %q",
+				strings.ToUpper(searchProviderBase(p)), season, r.Title)
 		}
 		// Formatted through errSeasonNotFound rather than inline, so this
 		// refusal and the one raised from inside the chain scan (search.go)
