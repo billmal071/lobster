@@ -723,7 +723,7 @@ func (e *EZTV) episodeTorrents(id, episodeID string) ([]eztvTorrent, error) {
 		case !complete:
 			return nil, fmt.Errorf("eztv: no torrents for %s S%02dE%02d in the part of the release list that was fetched", id, season, episode)
 		}
-		return nil, fmt.Errorf("eztv: no torrents for %s S%02dE%02d (%w)", id, season, episode, ErrNotCarried)
+		return nil, fmt.Errorf("eztv: no standalone release for %s S%02dE%02d (%w)", id, season, episode, ErrNotCarried)
 	}
 	return sortedEZTVTorrents(out), nil
 }

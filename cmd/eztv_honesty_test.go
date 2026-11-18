@@ -32,7 +32,7 @@ func TestTryFallbackStreamLeadsWithTheEZTVReason(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error from a chain that streams nothing")
 	}
-	if !strings.HasPrefix(err.Error(), "EZTV does not carry South Park S05E04") {
+	if !strings.HasPrefix(err.Error(), "EZTV has no standalone release of South Park S05E04") {
 		t.Errorf("error = %q, want it to lead with the EZTV reason", err)
 	}
 	if !strings.Contains(err.Error(), "status 404 alpha") {
@@ -52,7 +52,7 @@ func TestTryFallbackStreamAddsNoEZTVReasonWhenEZTVHasTheEpisode(t *testing.T) {
 	primary := &carrierStub{stubProvider: &stubProvider{}, carries: nil}
 	withStubProviderBase(t, primary, "eztv")
 	_, err := tryFallbackStream(primary, media.SearchResult{ID: "eztv/121955", Title: "South Park", Type: media.TV}, 5, 4)
-	if err == nil || strings.Contains(err.Error(), "EZTV does not carry") {
+	if err == nil || strings.Contains(err.Error(), "EZTV has no standalone release") {
 		t.Fatalf("error = %v, want no EZTV verdict when EZTV does carry the episode", err)
 	}
 }
@@ -65,7 +65,7 @@ func TestTryFallbackStreamAddsNoEZTVReasonWhenTheLookupFailed(t *testing.T) {
 	primary := &carrierStub{stubProvider: &stubProvider{}, carries: errors.New("eztv: unexpected status 429")}
 	withStubProviderBase(t, primary, "eztv")
 	_, err := tryFallbackStream(primary, media.SearchResult{ID: "eztv/121955", Title: "South Park", Type: media.TV}, 5, 4)
-	if err == nil || strings.Contains(err.Error(), "EZTV does not carry") {
+	if err == nil || strings.Contains(err.Error(), "EZTV has no standalone release") {
 		t.Fatalf("error = %v, want no claim that EZTV lacks the episode when the lookup itself failed", err)
 	}
 }
@@ -99,7 +99,7 @@ func TestPlayReportsTheEZTVReasonFirst(t *testing.T) {
 	if env.Error.Code != "providers_failed" {
 		t.Errorf("code = %q, want providers_failed", env.Error.Code)
 	}
-	if !strings.HasPrefix(env.Error.Message, "EZTV does not carry Some Show S05E04") {
+	if !strings.HasPrefix(env.Error.Message, "EZTV has no standalone release of Some Show S05E04") {
 		t.Errorf("message = %q, want the EZTV reason first", env.Error.Message)
 	}
 	if len(env.Error.Providers) != 2 {

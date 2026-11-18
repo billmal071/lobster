@@ -234,3 +234,14 @@ func TestEZTVLateFailedWalkDoesNotOverrideACompleteCatalogue(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNotCarried from the complete catalogue another walk stored", err)
 	}
 }
+
+func TestEZTVAbsenceMessageIsScopedToStandaloneReleases(t *testing.T) {
+	p := eztvServeBody(t, eztvEpisodesBody([2]int{5, 1}))
+	err := p.CarriesEpisode("eztv/1", 5, 4)
+	if !errors.Is(err, ErrNotCarried) {
+		t.Fatalf("err = %v, want ErrNotCarried", err)
+	}
+	if !strings.Contains(err.Error(), "no standalone release") {
+		t.Errorf("err = %q, want it to say no standalone release was found: a season pack may hold the episode", err)
+	}
+}

@@ -253,7 +253,7 @@ func primaryCatalogueVerdict(primary provider.Provider, content media.SearchResu
 	if err := carrier.CarriesEpisode(content.ID, season, episode); !errors.Is(err, provider.ErrNotCarried) {
 		return ""
 	}
-	return fmt.Sprintf("%s does not carry %s S%02dE%02d", strings.ToUpper(searchProviderBase(primary)), fallbackTitle(content), season, episode)
+	return fmt.Sprintf("%s has no standalone release of %s S%02dE%02d", strings.ToUpper(searchProviderBase(primary)), fallbackTitle(content), season, episode)
 }
 
 // streamChain is the fallback chain for resolving an episode's stream. A
