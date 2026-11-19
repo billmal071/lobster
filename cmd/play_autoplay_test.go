@@ -234,3 +234,40 @@ func TestAttachedPlayDoesNotAutoplayByDefault(t *testing.T) {
 		t.Fatalf("--autoplay default = %q, attached play must stay off", f.DefValue)
 	}
 }
+
+func TestSupervisedWithoutAutoplayEndsAfterOneEpisodeWithoutMenu(t *testing.T) {
+	menuCalls := 0
+	prevMenu, prevSup := postPlayMenu, flagSupervised
+	postPlayMenu = func(*playlist.Session) (postPlayAction, error) {
+		menuCalls++
+		return actionQuit, nil
+	}
+	flagSupervised = true
+	t.Cleanup(func() { postPlayMenu, flagSupervised = prevMenu, prevSup })
+
+	got, err := runLoop(t, false, 1, 1, []player.PlayResult{endedNaturally}, 0)
+	if err != nil {
+		t.Fatalf("runPlaybackLoop: %v", err)
+	}
+	if len(got) != 1 || menuCalls != 0 {
+		t.Fatalf("played %d episodes, menu shown %d times; want 1 and 0", len(got), menuCalls)
+	}
+}
+
+func TestAttachedWithoutAutoplayStillShowsMenu(t *testing.T) {
+	menuCalls := 0
+	prevMenu, prevSup := postPlayMenu, flagSupervised
+	postPlayMenu = func(*playlist.Session) (postPlayAction, error) {
+		menuCalls++
+		return actionQuit, nil
+	}
+	flagSupervised = false
+	t.Cleanup(func() { postPlayMenu, flagSupervised = prevMenu, prevSup })
+
+	if _, err := runLoop(t, false, 1, 1, []player.PlayResult{endedNaturally}, 0); err != nil {
+		t.Fatalf("runPlaybackLoop: %v", err)
+	}
+	if menuCalls != 1 {
+		t.Fatalf("menu shown %d times, want 1", menuCalls)
+	}
+}

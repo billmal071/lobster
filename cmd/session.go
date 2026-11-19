@@ -49,7 +49,10 @@ func runPlaybackLoop(sess *playlist.Session) error {
 			continue
 		}
 
-		// Build menu items
+		if flagSupervised {
+			return nil
+		}
+
 		action, err := postPlayMenu(sess)
 		if err != nil {
 			return err
@@ -90,7 +93,9 @@ const (
 )
 
 // postPlayMenu shows the countdown or immediate menu based on config.
-func postPlayMenu(sess *playlist.Session) (postPlayAction, error) {
+var postPlayMenu = showPostPlayMenu
+
+func showPostPlayMenu(sess *playlist.Session) (postPlayAction, error) {
 	items := buildMenuItems(sess)
 	labels := make([]string, len(items))
 	for i, item := range items {
