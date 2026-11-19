@@ -93,8 +93,31 @@ func historyRun(cmd *cobra.Command, args []string) error {
 		return resolveAndPlay(p, row, selected.Season, selected.Episode)
 	}
 
+	if catalog.IsID(selected.ID) {
+		return resumeViaPicker(p, selected)
+	}
+
 	// If exact ID not found, let user pick from search results
 	return playFlow(p, selected.Title)
+}
+
+func resumeViaPicker(p provider.Provider, e media.HistoryEntry) error {
+	results, err := gatherSearchResults(p, fallbackSearchProviders(p), e.Title)
+	if err != nil {
+		return err
+	}
+	items := make([]string, len(results))
+	for i, r := range results {
+		items[i] = provider.FormatDisplayTitle(r)
+	}
+	idx, err := selectItem("Select", items)
+	if err != nil {
+		return err
+	}
+	picked := results[idx]
+	row := picked
+	row.ID, row.ProviderID, row.Title, row.Type, row.FromCatalogue = e.ID, picked.ID, e.Title, e.Type, true
+	return resolveAndPlay(p, row, e.Season, e.Episode)
 }
 
 func resumeRow(p provider.Provider, e media.HistoryEntry) (media.SearchResult, bool) {

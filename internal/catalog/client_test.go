@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -347,5 +349,37 @@ func TestDecodeListMarksRowsAsFromTheCatalogue(t *testing.T) {
 	got, err := decodeList([]byte(`{"results":[{"id":5,"title":"A"}]}`), media.Movie, nil)
 	if err != nil || len(got) != 1 || !got[0].FromCatalogue {
 		t.Fatalf("decodeList = %+v, %v; want one row with FromCatalogue", got, err)
+	}
+}
+
+func TestCacheDropsExpiredEntriesOnWrite(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"results":[]}`)
+	})
+	c.Trending(media.Movie)
+	c.now = func() time.Time { return time.Now().Add(cacheTTL + time.Second) }
+	c.Trending(media.TV)
+	if len(c.cache) != 1 {
+		t.Errorf("cache holds %d entries after expiry, want 1", len(c.cache))
+	}
+}
+
+func TestCacheIsBoundedAndKeepsFreshHits(t *testing.T) {
+	var n atomic.Int32
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		io.WriteString(w, `{"results":[]}`)
+	})
+	for i := 0; i < maxCacheEntries+20; i++ {
+		c.get("/search/tv", url.Values{"query": {strconv.Itoa(i)}})
+	}
+	if len(c.cache) > maxCacheEntries {
+		t.Fatalf("cache holds %d entries, limit %d", len(c.cache), maxCacheEntries)
+	}
+	before := n.Load()
+	last := maxCacheEntries + 19
+	c.get("/search/tv", url.Values{"query": {strconv.Itoa(last)}})
+	if n.Load() != before {
+		t.Error("most recent entry was evicted; fresh hit should be served from cache")
 	}
 }

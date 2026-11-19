@@ -26,6 +26,7 @@ const (
 	posterSize       = "w342"
 	maxBody          = 4 << 20
 	cacheTTL         = 10 * time.Minute
+	maxCacheEntries  = 128
 	requestTimeout   = 10 * time.Second
 )
 
@@ -128,7 +129,23 @@ func (c *Client) get(path string, q url.Values) ([]byte, error) {
 	}
 
 	c.mu.Lock()
-	c.cache[cacheKey] = cacheEntry{body: body, at: c.now()}
+	now := c.now()
+	for k, e := range c.cache {
+		if now.Sub(e.at) >= cacheTTL {
+			delete(c.cache, k)
+		}
+	}
+	for len(c.cache) >= maxCacheEntries {
+		oldest, first := "", true
+		var oldestAt time.Time
+		for k, e := range c.cache {
+			if first || e.at.Before(oldestAt) {
+				oldest, oldestAt, first = k, e.at, false
+			}
+		}
+		delete(c.cache, oldest)
+	}
+	c.cache[cacheKey] = cacheEntry{body: body, at: now}
 	c.mu.Unlock()
 	return body, nil
 }

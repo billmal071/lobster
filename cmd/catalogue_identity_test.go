@@ -132,3 +132,32 @@ func TestResumeRowLeavesTwoSameTitleWorksToTheUser(t *testing.T) {
 		t.Fatal("resumeRow picked one of two same-title works the history entry cannot tell apart")
 	}
 }
+
+type twinPlayProvider struct {
+	*idRecordingProvider
+}
+
+func (twinPlayProvider) Search(string) ([]media.SearchResult, error) {
+	return twinSearchProvider{}.Search("")
+}
+
+func TestHistoryResumeThroughThePickerKeepsTheSavedIdentity(t *testing.T) {
+	url := catalogueHarness(t)
+	withFallbackChain(t, newListingChainProvider(url))
+	inner := &idRecordingProvider{stubProvider: &stubProvider{
+		seasons:          []media.Season{{ID: "s1", Number: 1}},
+		episodesBySeason: map[string][]media.Episode{"s1": twentyTwoEpisodes()},
+	}}
+	saved := media.HistoryEntry{ID: "tv/1", Title: "Some Show", Type: media.TV, Season: 1, Episode: 22}
+
+	if err := resumeViaPicker(twinPlayProvider{inner}, saved); err != nil {
+		t.Fatalf("resumeViaPicker = %v", err)
+	}
+	if len(inner.seasonIDs) == 0 || inner.seasonIDs[0] != "tv/utopia-2013" {
+		t.Fatalf("provider asked for %v, want the picked tv/utopia-2013", inner.seasonIDs)
+	}
+	entries, err := history.Load()
+	if err != nil || len(entries) != 1 || entries[0].ID != "tv/1" || entries[0].Season != 1 || entries[0].Episode != 22 {
+		t.Fatalf("history = %+v, %v; want one row tv/1 S1E22", entries, err)
+	}
+}
