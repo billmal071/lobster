@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
 
 	"lobster/internal/media"
+	"lobster/internal/player"
 	"lobster/internal/provider"
 	"lobster/internal/resolver"
 )
@@ -176,6 +178,95 @@ func TestSeasonSourceKeepsAFailedScanWhenTheSeasonIsAbsent(t *testing.T) {
 			}
 			if got.partial != c.wantPartial {
 				t.Errorf("partial = %v, want %v", got.partial, c.wantPartial)
+			}
+		})
+	}
+}
+
+type seasonsFailingStream struct {
+	*recordingStreamProvider
+}
+
+func (seasonsFailingStream) GetSeasons(string) ([]media.Season, error) { return nil, errBoom }
+
+func episodesErrCode(t *testing.T, primary *stubProvider, chain ...provider.Provider) string {
+	t.Helper()
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+	chainOf(t, chain...)
+	withStubProvider(t, primary)
+	withEpisodesFlags(t, tvRef(t, ""), 2)
+	if err := episodesRun(episodesCmd, nil); err == nil {
+		t.Fatalf("episodesRun succeeded, want an error\n%s", buf.String())
+	}
+	var env struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
+		t.Fatalf("output is not JSON: %v (%q)", err, buf.String())
+	}
+	return env.Error.Code
+}
+
+func TestEpisodesSeasonLookupTruthTable(t *testing.T) {
+	down := func() provider.Provider { return &scriptedLookup{stubProvider: &stubProvider{}, searchErr: errBoom} }
+	empty := func() provider.Provider {
+		return &scriptedLookup{stubProvider: &stubProvider{}, searchErr: provider.ErrNoResults}
+	}
+	cases := []struct {
+		name    string
+		primary *stubProvider
+		chain   func() []provider.Provider
+		want    string
+	}{
+		{"primary lists nothing, fallback lookup failed", &stubProvider{}, func() []provider.Provider { return []provider.Provider{down()} }, "providers_failed"},
+		{"primary lists nothing, every fallback answers ErrNoResults", &stubProvider{}, func() []provider.Provider { return []provider.Provider{empty()} }, "no_results"},
+		{"primary lists nothing, one fallback failed and one answers empty", &stubProvider{}, func() []provider.Provider { return []provider.Provider{empty(), down()} }, "providers_failed"},
+		{"primary errors, fallback lookup failed", &stubProvider{seasonsErr: errBoom}, func() []provider.Provider { return []provider.Provider{down()} }, "providers_failed"},
+		{"complete non-empty primary omits the season, fallback down", &stubProvider{seasons: seasonsOf(1, 3)}, func() []provider.Provider { return []provider.Provider{down()} }, "no_results"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := episodesErrCode(t, c.primary, c.chain()...); got != c.want {
+				t.Fatalf("error code = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestResolveAndPlaySeasonLookupTruthTable(t *testing.T) {
+	sel := media.SearchResult{ID: "tv/1403", Title: "Show", Type: media.TV}
+	listsOneAndThree := func() provider.Provider {
+		return scripted(showResults("a"), seasonOutcome{seasons: seasonsOf(1, 3)})
+	}
+	cases := []struct {
+		name        string
+		failedFirst bool
+		wantRefused bool
+	}{
+		{"another fallback could not enumerate: the resolver is tried by number", true, false},
+		{"every fallback answered: season is absent", false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hostileEnv(t)
+			playStreamHarness(t, &stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}})
+			rec := &recordingStreamProvider{result: sel, url: stubStreamServer(t)}
+			var streamer provider.Provider = rec
+			if c.failedFirst {
+				streamer = seasonsFailingStream{rec}
+			}
+			withFallbackChain(t, listsOneAndThree(), streamer)
+
+			err := resolveAndPlay(&stubProvider{seasonsErr: errBoom}, sel, 2, 1)
+			var notFound errSeasonNotFound
+			if refused := errors.As(err, &notFound); refused != c.wantRefused {
+				t.Fatalf("resolveAndPlay = %v, refused = %v, want %v", err, refused, c.wantRefused)
+			}
+			if !c.wantRefused && rec.episodeAsked() != "1403:2:1" {
+				t.Fatalf("resolver asked for %q, want 1403:2:1", rec.episodeAsked())
 			}
 		})
 	}

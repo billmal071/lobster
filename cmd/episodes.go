@@ -53,7 +53,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	primary := agentProvider()
 	src := seasonSource(primary, r)
 	if len(src.seasons) == 0 {
-		if src.err != nil {
+		if src.err != nil || src.scanFailed {
 			// Name both halves of what happened. seasonSource only ever puts
 			// a non-nil err here on its `len(hits) == 0` return, so reaching
 			// this line means the primary failed AND the whole fallback chain
@@ -68,6 +68,11 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 			// `play` can legitimately miss this scan — and a reader comparing
 			// the two commands on one ref needs to know a deadline was in
 			// play before concluding the chain does not have the show.
+			if src.err == nil {
+				return emitErr("providers_failed", exitProvidersFailed,
+					"%s listed no seasons of %q, and a fallback provider's lookup failed within %s, so the show may still exist",
+					providerLabel(primary), r.Title, episodesFallbackTimeout)
+			}
 			return emitErr("providers_failed", exitProvidersFailed,
 				"no provider could list the seasons of %q: %s reported %v, and no fallback provider answered within %s",
 				r.Title, providerLabel(primary), src.err, episodesFallbackTimeout)
@@ -524,7 +529,8 @@ func seasonSource(primary provider.Provider, r playRef) seasonAnswer {
 	}
 	debugf("episodes: primary could not enumerate %q (err=%v, seasons=%d); re-searching the fallback chain by title", r.ID, err, len(seasons))
 
-	if hits, scanFailed := fallbackSeasonScan(primary, seasonRequest(r)); len(hits) > 0 {
+	hits, scanFailed := fallbackSeasonScan(primary, seasonRequest(r))
+	if len(hits) > 0 {
 		return seasonAnswer{
 			scanFailed:   scanFailed,
 			primaryLacks: lacksTheWork(err, len(seasons)),
@@ -536,7 +542,7 @@ func seasonSource(primary provider.Provider, r playRef) seasonAnswer {
 			alts:         hits[1:],
 		}
 	}
-	return seasonAnswer{provider: primary, id: r.ID, fromPrimary: true, err: err}
+	return seasonAnswer{provider: primary, id: r.ID, fromPrimary: true, err: err, scanFailed: scanFailed}
 }
 
 // seasonAcrossHits looks for wantSeason in the chain hits src did not pick,
@@ -579,7 +585,8 @@ func seasonAcrossHits(primary provider.Provider, req resolver.Request, src seaso
 	for _, h := range alts {
 		src.partial = src.partial || h.partial
 	}
-	src.partial = src.partial || (scanFailed && (src.gapped || !src.fromPrimary))
+	src.partial = src.partial || (scanFailed && (src.gapped || !src.fromPrimary || len(src.seasons) == 0))
+	src.chainAnswered = len(alts) > 0
 	return src, src.seasons, media.Season{}, false
 }
 
@@ -610,9 +617,12 @@ type seasonAnswer struct {
 	gapped  bool
 	// scanFailed reports that a fallback lookup behind alts errored rather
 	// than answering, so a season absent from every hit is not proven absent.
-	scanFailed   bool
-	err          error
-	primaryLacks bool
+	scanFailed bool
+	// chainAnswered is set by seasonAcrossHits when it found no match: at
+	// least one fallback enumerated seasons, so absence is evidence.
+	chainAnswered bool
+	err           error
+	primaryLacks  bool
 }
 
 // seasonRequest is the ref as the resolver sees it: the ID/Title/Year all

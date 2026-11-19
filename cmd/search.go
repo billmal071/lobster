@@ -350,7 +350,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// over, and it is also `episodes --season 5` answering no_results
 			// about the very ref `play --season 5` just played.
 			//
-			// Only positive evidence refuses. If some chain member enumerated
+			// Only positive evidence refuses, and a fallback lookup that failed is not evidence. If some chain member enumerated
 			// seasons and none carries this one, the number is wrong. If
 			// nothing in the chain can enumerate at all, there is no evidence
 			// either way, and refusing would break the case this branch is
@@ -359,18 +359,9 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// answers no_results there, because it has no list to print, while
 			// `play` goes ahead on a number the user supplied.
 			if season > 0 {
-				if hits := fallbackSeasonHits(chainPrimary, contentRequest(selected)); len(hits) > 0 {
-					enumerated, anyPartial := false, false
-					for _, h := range hits {
-						if _, ok := pickSeason(h.seasons, season); ok {
-							enumerated = true
-							break
-						}
-						anyPartial = anyPartial || h.partial
-					}
-					if !enumerated && !anyPartial {
-						return errSeasonNotFound{season: season, title: title}
-					}
+				none := seasonAnswer{provider: chainPrimary, fromPrimary: true}
+				if alt, _, _, ok := seasonAcrossHits(chainPrimary, contentRequest(selected), none, season); !ok && alt.chainAnswered && !alt.partial {
+					return errSeasonNotFound{season: season, title: title}
 				}
 			}
 			fbStream, fbErr := tryFallbackStream(chainPrimary, selected, season, episode)
