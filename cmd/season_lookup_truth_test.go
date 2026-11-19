@@ -75,6 +75,9 @@ func TestProbeSeasonsOutcomes(t *testing.T) {
 		{"candidate for another show", scripted([]media.SearchResult{{ID: "a", Title: "Other", Type: media.TV}}), false, false, false},
 		{"matching candidate with no seasons", scripted(showResults("a"), seasonOutcome{}), false, false, false},
 		{"matching candidate whose lookup errors", scripted(showResults("a"), seasonOutcome{err: errBoom}), false, false, true},
+		{"matching candidate whose GetSeasons says ErrNotCarried is a completed absence", scripted(showResults("a"), seasonOutcome{err: provider.ErrNotCarried}), false, false, false},
+		{"wrapped ErrNotCarried is a completed absence", scripted(showResults("a"), seasonOutcome{err: fmt.Errorf("x: %w", provider.ErrNotCarried)}), false, false, false},
+		{"ErrNotCarried candidate then failed candidate still fails", scripted(showResults("a", "b"), seasonOutcome{err: provider.ErrNotCarried}, seasonOutcome{err: errBoom}), false, false, true},
 		{"matching candidate with seasons", scripted(showResults("a"), seasonOutcome{seasons: seasonsOf(1)}), true, false, false},
 		{"gapped hit is not a failure", scripted(showResults("a"), seasonOutcome{seasons: seasonsOf(1), err: gapErr()}), true, true, false},
 		{"failed candidate then hit keeps the failure", scripted(showResults("a", "b"), seasonOutcome{err: errBoom}, seasonOutcome{seasons: seasonsOf(1)}), true, false, true},
@@ -110,6 +113,9 @@ func TestSeasonAnswerAfterScan(t *testing.T) {
 	empty := &scriptedLookup{stubProvider: &stubProvider{}, searchErr: provider.ErrNoResults}
 	other := func() *scriptedLookup { return scripted(showResults("a"), seasonOutcome{seasons: seasonsOf(3)}) }
 	hasTwo := func() *scriptedLookup { return scripted(showResults("a"), seasonOutcome{seasons: seasonsOf(2)}) }
+	notCarried := func() *scriptedLookup {
+		return scripted(showResults("a"), seasonOutcome{err: provider.ErrNotCarried})
+	}
 	flaky := func() *scriptedLookup {
 		return scripted(showResults("a", "b"), seasonOutcome{err: errBoom}, seasonOutcome{seasons: seasonsOf(3)})
 	}
@@ -125,6 +131,9 @@ func TestSeasonAnswerAfterScan(t *testing.T) {
 		{"gapped, fallback lists another season: definitive absence", gappedPrimary, []provider.Provider{other()}, false, false},
 		{"gapped, fallback ErrNoResults: definitive absence", gappedPrimary, []provider.Provider{empty}, false, false},
 		{"gapped, fallback search fails: uncertain", gappedPrimary, []provider.Provider{down}, false, true},
+		{"gapped, fallback GetSeasons ErrNotCarried: definitive absence", gappedPrimary, []provider.Provider{notCarried()}, false, false},
+		{"gapped, ErrNotCarried fallback and a listing fallback: definitive", gappedPrimary, []provider.Provider{notCarried(), other()}, false, false},
+		{"gapped, ErrNotCarried fallback and a failing fallback: uncertain", gappedPrimary, []provider.Provider{notCarried(), down}, false, true},
 		{"gapped, ErrNoResults fallback and a listing fallback: definitive", gappedPrimary, []provider.Provider{empty, other()}, false, false},
 		{"gapped, earlier candidate failed then lists another season: uncertain", gappedPrimary, []provider.Provider{flaky()}, false, true},
 		{"gapped, one fallback down but another has the season: accepted", gappedPrimary, []provider.Provider{down, hasTwo()}, true, false},

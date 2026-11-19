@@ -838,7 +838,7 @@ type seasonHit struct {
 // enumerate its seasons. It returns nil for "no", including when the context
 // expires mid-call. failed is true when any lookup errored or timed out rather
 // than answering, including one tried before the candidate that returned hit;
-// ErrNoResults and an empty season list are answers, not failures.
+// ErrNoResults, ErrNotCarried and an empty season list are answers, not failures.
 func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request) (hit *seasonHit, failed bool) {
 	results, err := searchWithContext(ctx, p, req.Title)
 	if errors.Is(err, provider.ErrNoResults) {
@@ -855,7 +855,7 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 		}
 		seasons, err := seasonsWithContext(ctx, p, c.ID)
 		incomplete := err != nil && len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList)
-		if err != nil && !incomplete {
+		if err != nil && !incomplete && !errors.Is(err, provider.ErrNotCarried) {
 			failed = true
 		}
 		if (err != nil && !incomplete) || len(seasons) == 0 {
