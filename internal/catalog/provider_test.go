@@ -490,3 +490,60 @@ func TestTrendingWithNoticeReturnsTheNoticeAndLeavesNoPendingOne(t *testing.T) {
 		t.Fatalf("pending notice = %q, want none: another fetch could have taken it", n)
 	}
 }
+
+func TestResolveRowWithAYearRefusesTwoYearlessSameTitleCandidates(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-a", Title: "Utopia", Type: media.TV},
+		{ID: "tv/utopia-b", Title: "Utopia", Type: media.TV},
+	}}
+	p := Wrap(inner, okServer(t), General)
+	got := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, Year: "2020", FromCatalogue: true})
+	if !got.Unresolved || got.ProviderID != "" {
+		t.Fatalf("ResolveRow = %+v, want Unresolved for two yearless candidates", got)
+	}
+}
+
+func TestResolveRowWithAYearIgnoresWrongYearsAmongYearlessCandidates(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-2013", Title: "Utopia", Type: media.TV, Year: "2013"},
+		{ID: "tv/utopia-x", Title: "Utopia", Type: media.TV},
+	}}
+	p := Wrap(inner, okServer(t), General)
+	got := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, Year: "2020", FromCatalogue: true})
+	if got.Unresolved || got.ProviderID != "tv/utopia-x" {
+		t.Fatalf("ResolveRow = %+v, want the single yearless candidate", got)
+	}
+}
+
+func TestResolveRowWithAYearPrefersTheExactYearOverYearlessCandidates(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-a", Title: "Utopia", Type: media.TV},
+		{ID: "tv/utopia-b", Title: "Utopia", Type: media.TV},
+		{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"},
+	}}
+	p := Wrap(inner, okServer(t), General)
+	got := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, Year: "2020", FromCatalogue: true})
+	if got.Unresolved || got.ProviderID != "tv/utopia-2020" {
+		t.Fatalf("ResolveRow = %+v, want tv/utopia-2020", got)
+	}
+}
+
+func TestResolveRowTreatsDuplicateIDsAsOneCandidate(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-a", Title: "Utopia", Type: media.TV},
+		{ID: "tv/utopia-a", Title: "Utopia", Type: media.TV},
+	}}
+	p := Wrap(inner, okServer(t), General)
+	got := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, Year: "2020", FromCatalogue: true})
+	if got.Unresolved || got.ProviderID != "tv/utopia-a" {
+		t.Fatalf("ResolveRow = %+v, want tv/utopia-a", got)
+	}
+}
+
+func TestResolveRowWithNoCandidatesIsUnresolved(t *testing.T) {
+	p := Wrap(&showProvider{}, okServer(t), General)
+	got := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, Year: "2020", FromCatalogue: true})
+	if !got.Unresolved {
+		t.Fatalf("ResolveRow = %+v, want Unresolved", got)
+	}
+}

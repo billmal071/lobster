@@ -141,6 +141,7 @@ func (p *Provider) resolve(row media.SearchResult) (string, error) {
 	}
 	want := titlekey.Normalize(row.Title)
 	pick := ""
+	exact := false
 	candidates := map[string]bool{}
 	for _, r := range results {
 		if r.Type != row.Type || titlekey.Normalize(r.Title) != want {
@@ -152,6 +153,7 @@ func (p *Provider) resolve(row media.SearchResult) (string, error) {
 		candidates[r.ID] = true
 		if row.Year != "" && r.Year == row.Year {
 			pick = r.ID
+			exact = true
 			break
 		}
 		if pick == "" {
@@ -161,7 +163,7 @@ func (p *Provider) resolve(row media.SearchResult) (string, error) {
 	if pick == "" {
 		return "", fmt.Errorf("%q was not found on this provider", row.Title)
 	}
-	if row.Year == "" && len(candidates) > 1 {
+	if !exact && len(candidates) > 1 {
 		return "", fmt.Errorf("%q matches more than one work on this provider", row.Title)
 	}
 	p.mu.Lock()
