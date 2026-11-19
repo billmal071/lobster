@@ -524,8 +524,9 @@ func seasonSource(primary provider.Provider, r playRef) seasonAnswer {
 	}
 	debugf("episodes: primary could not enumerate %q (err=%v, seasons=%d); re-searching the fallback chain by title", r.ID, err, len(seasons))
 
-	if hits := fallbackSeasonHits(primary, seasonRequest(r)); len(hits) > 0 {
+	if hits, scanFailed := fallbackSeasonScan(primary, seasonRequest(r)); len(hits) > 0 {
 		return seasonAnswer{
+			scanFailed:   scanFailed,
 			primaryLacks: lacksTheWork(err, len(seasons)),
 			provider:     hits[0].provider,
 			id:           hits[0].id,
@@ -553,7 +554,7 @@ func seasonSource(primary provider.Provider, r playRef) seasonAnswer {
 // agree on what one ref means.
 func seasonAcrossHits(primary provider.Provider, req resolver.Request, src seasonAnswer, wantSeason int) (seasonAnswer, []media.Season, media.Season, bool) {
 	alts := src.alts
-	scanFailed := false
+	scanFailed := src.scanFailed
 	if src.fromPrimary {
 		alts, scanFailed = fallbackSeasonScan(primary, req)
 	}
@@ -578,7 +579,7 @@ func seasonAcrossHits(primary provider.Provider, req resolver.Request, src seaso
 	for _, h := range alts {
 		src.partial = src.partial || h.partial
 	}
-	src.partial = src.partial || (src.gapped && scanFailed)
+	src.partial = src.partial || (scanFailed && (src.gapped || !src.fromPrimary))
 	return src, src.seasons, media.Season{}, false
 }
 
@@ -605,8 +606,11 @@ type seasonAnswer struct {
 	// provider's own or a chain hit's, was flagged incomplete
 	// (provider.ErrIncompleteEpisodeList), so a season absent from all of them
 	// may still exist.
-	partial      bool
-	gapped       bool
+	partial bool
+	gapped  bool
+	// scanFailed reports that a fallback lookup behind alts errored rather
+	// than answering, so a season absent from every hit is not proven absent.
+	scanFailed   bool
 	err          error
 	primaryLacks bool
 }
@@ -832,10 +836,14 @@ type seasonHit struct {
 
 // probeSeasons asks one fallback provider whether it has req's work and can
 // enumerate its seasons. It returns nil for "no", including when the context
-// expires mid-call; failed is true when the lookup errored or timed out rather
-// than answering.
+// expires mid-call. failed is true when any lookup errored or timed out rather
+// than answering, including one tried before the candidate that returned hit;
+// ErrNoResults and an empty season list are answers, not failures.
 func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request) (hit *seasonHit, failed bool) {
 	results, err := searchWithContext(ctx, p, req.Title)
+	if errors.Is(err, provider.ErrNoResults) {
+		return nil, false
+	}
 	if err != nil {
 		debugf("episodes: fallback %T search failed: %v", p, err)
 		return nil, true
@@ -854,7 +862,7 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 			continue
 		}
 		return &seasonHit{provider: p, id: c.ID, title: c.Title, seasons: seasons,
-			partial: incomplete && !provider.IsCatalogueGap(err), gapped: incomplete && provider.IsCatalogueGap(err)}, false
+			partial: incomplete && !provider.IsCatalogueGap(err), gapped: incomplete && provider.IsCatalogueGap(err)}, failed
 	}
 	return nil, failed
 }
