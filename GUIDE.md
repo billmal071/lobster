@@ -221,8 +221,10 @@ episode fails to resolve, and whenever you close the player before its last ten 
 It also stops when the player cannot report a position (only mpv does), because
 an early quit would be indistinguishable from an ending. It does nothing for a
 movie, and does not read `auto_next`, which only controls the attached countdown.
-It applies when the show's seasons can be listed; a title served only by the
-fallback chain plays the one episode.
+It applies whenever the show's seasons or episodes can be listed, including by a
+fallback provider. Only a title that resolves as a single stream, with no episode
+list from any source, plays the one episode, and so does a detached play with
+`--autoplay=false` (nothing can answer the post-episode menu there).
 
 `--download` is not supported by `play` — batch downloading is a prompt-driven
 path. Use the interactive CLI for that.

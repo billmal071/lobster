@@ -369,7 +369,7 @@ chain — and `play` forwards any flags you pass explicitly (`--base`,
 `--quality`, `--player`, `--provider`, `--language`, `--audio-language`,
 `--no-subs`, `--debug`, `--continue`, `--autoplay`) to the detached child so overrides still
 apply in the background. A detached play of a series turns `--autoplay` on for the child unless you
-pass `--autoplay=false`, so scripts and agents that relied on one episode per `play --detach` must
+pass `--autoplay=false`, which plays just the one episode. A title that resolves as a single stream with no episode list plays one episode either way. Scripts and agents that relied on one episode per `play --detach` must
 now pass `--autoplay=false`.
 
 `--detach` is what makes the stdout-is-only-JSON guarantee hold: attached, the
