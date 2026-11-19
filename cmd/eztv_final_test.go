@@ -283,3 +283,30 @@ func TestResolveAndPlayPlaysAListedSeasonOfAGappedSeasonList(t *testing.T) {
 		t.Fatalf("resolveAndPlay = %v, want season 5 to play from a gapped season list", err)
 	}
 }
+
+func TestValidateDefersWhenAFallbackLookupFailsOnAGappedList(t *testing.T) {
+	hostileEnv(t)
+	chainOf(t, &stubProvider{searchErr: errors.New("fallback down")})
+	captureAgentOut(t)
+	primary := &stubProvider{seasons: []media.Season{{ID: "3", Number: 3}}, seasonsErr: gapErr()}
+	withStubProviderBase(t, primary, "eztv")
+	if err := validateSeasonEpisode(primary, playRef{ID: "eztv/1", Title: "Show", Type: "tv"}, 1, 1); err != nil {
+		t.Fatalf("err = %v, want nil: a fallback that could not answer leaves season 1 uncertain, so the resolver must still try the chain", err)
+	}
+}
+
+func TestEpisodesIsProvidersFailedWhenAFallbackLookupFailsOnAGappedList(t *testing.T) {
+	hostileEnv(t)
+	chainOf(t, &stubProvider{searchErr: errors.New("fallback down")})
+	captureAgentOut(t)
+	withBase(t, "eztv")
+	primary := &stubProvider{seasons: []media.Season{{ID: "3", Number: 3}}, seasonsErr: gapErr()}
+	withStubProvider(t, primary)
+	withStubProviderBase(t, primary, "eztv")
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+	err := episodesRun(episodesCmd, nil)
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != exitProvidersFailed {
+		t.Fatalf("err = %v, want exit %d: a failed fallback lookup must not read as 'EZTV does not carry the season'", err, exitProvidersFailed)
+	}
+}

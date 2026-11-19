@@ -553,8 +553,9 @@ func seasonSource(primary provider.Provider, r playRef) seasonAnswer {
 // agree on what one ref means.
 func seasonAcrossHits(primary provider.Provider, req resolver.Request, src seasonAnswer, wantSeason int) (seasonAnswer, []media.Season, media.Season, bool) {
 	alts := src.alts
+	scanFailed := false
 	if src.fromPrimary {
-		alts = fallbackSeasonHits(primary, req)
+		alts, scanFailed = fallbackSeasonScan(primary, req)
 	}
 	for i, h := range alts {
 		sel, ok := pickSeason(h.seasons, wantSeason)
@@ -577,6 +578,7 @@ func seasonAcrossHits(primary provider.Provider, req resolver.Request, src seaso
 	for _, h := range alts {
 		src.partial = src.partial || h.partial
 	}
+	src.partial = src.partial || (src.gapped && scanFailed)
 	return src, src.seasons, media.Season{}, false
 }
 
@@ -691,18 +693,27 @@ func pickSeason(seasons []media.Season, want int) (media.Season, bool) {
 // enumerating episodes, so the caller needs somewhere to go when its first
 // choice cannot answer the second question.
 func fallbackSeasonHits(primary provider.Provider, req resolver.Request) []*seasonHit {
+	hits, _ := fallbackSeasonScan(primary, req)
+	return hits
+}
+
+// fallbackSeasonScan is fallbackSeasonHits plus whether any provider's lookup
+// failed rather than answering, so a caller can tell "the chain lacks it" from
+// "the chain could not say".
+func fallbackSeasonScan(primary provider.Provider, req resolver.Request) ([]*seasonHit, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), episodesFallbackTimeout)
 	defer cancel()
 
 	fallbacks := agentFallbackProviders(primary)
 	// Indexed by provider so the result is provider order, not arrival order.
 	hits := make([]*seasonHit, len(fallbacks))
+	failures := make([]bool, len(fallbacks))
 	var wg sync.WaitGroup
 	for i, fb := range fallbacks {
 		wg.Add(1)
 		go func(idx int, p provider.Provider) {
 			defer wg.Done()
-			hits[idx] = probeSeasons(ctx, p, req)
+			hits[idx], failures[idx] = probeSeasons(ctx, p, req)
 		}(i, fb)
 	}
 	// Every worker returns at the deadline even when a provider call is still
@@ -717,7 +728,11 @@ func fallbackSeasonHits(primary provider.Provider, req resolver.Request) []*seas
 			found = append(found, h)
 		}
 	}
-	return found
+	failed := false
+	for _, f := range failures {
+		failed = failed || f
+	}
+	return found, failed
 }
 
 // episodeAnswer is one fallback provider's episode list for the requested
@@ -817,12 +832,13 @@ type seasonHit struct {
 
 // probeSeasons asks one fallback provider whether it has req's work and can
 // enumerate its seasons. It returns nil for "no", including when the context
-// expires mid-call.
-func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request) *seasonHit {
+// expires mid-call; failed is true when the lookup errored or timed out rather
+// than answering.
+func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request) (hit *seasonHit, failed bool) {
 	results, err := searchWithContext(ctx, p, req.Title)
 	if err != nil {
 		debugf("episodes: fallback %T search failed: %v", p, err)
-		return nil
+		return nil, true
 	}
 	for _, c := range resolver.Candidates(results, req) {
 		if !resolver.Matches(c, req) {
@@ -831,13 +847,16 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 		}
 		seasons, err := seasonsWithContext(ctx, p, c.ID)
 		incomplete := err != nil && len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList)
+		if err != nil && !incomplete {
+			failed = true
+		}
 		if (err != nil && !incomplete) || len(seasons) == 0 {
 			continue
 		}
 		return &seasonHit{provider: p, id: c.ID, title: c.Title, seasons: seasons,
-			partial: incomplete && !provider.IsCatalogueGap(err), gapped: incomplete && provider.IsCatalogueGap(err)}
+			partial: incomplete && !provider.IsCatalogueGap(err), gapped: incomplete && provider.IsCatalogueGap(err)}, false
 	}
-	return nil
+	return nil, failed
 }
 
 // seasonsWithContext runs GetSeasons, abandoning the result if the context
