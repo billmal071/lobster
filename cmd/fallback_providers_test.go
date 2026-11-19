@@ -126,7 +126,8 @@ func TestFallbackProvidersOmitsConsumetWithNilConfig(t *testing.T) {
 }
 
 // The chain is exactly the sources verified working on 2026-11-13, in
-// priority order: TBCPL, FlixHQWS, AnimeOnsen. (TBCPLEmbed joins
+// priority order: TBCPL, FlixHQWS, AnimeOnsen, then Vidrock (added
+// 2026-11-16, after the other HTTP sources). (TBCPLEmbed joins
 // when the catalog feed is on, Consumet when api_url is set, YTS when
 // torrent_fallback is set — none of which this fixture enables.)
 func TestFallbackProvidersIsExactlyTheWorkingSources(t *testing.T) {
@@ -134,7 +135,7 @@ func TestFallbackProvidersIsExactlyTheWorkingSources(t *testing.T) {
 	cfg = &config.Config{}
 	t.Cleanup(func() { cfg = prev })
 
-	want := []string{"*provider.TBCPL", "*provider.FlixHQWS", "*provider.AnimeOnsen"}
+	want := []string{"*provider.TBCPL", "*provider.FlixHQWS", "*provider.AnimeOnsen", "*provider.Vidrock"}
 	got := providerNames(fallbackProviders(nil))
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("fallbackProviders(nil) = %v, want %v", got, want)
@@ -148,7 +149,7 @@ func TestFallbackProvidersExcludesTheFlixHQWSPrimary(t *testing.T) {
 	cfg = &config.Config{}
 	t.Cleanup(func() { cfg = prev })
 
-	want := []string{"*provider.TBCPL", "*provider.AnimeOnsen"}
+	want := []string{"*provider.TBCPL", "*provider.AnimeOnsen", "*provider.Vidrock"}
 	got := providerNames(fallbackProviders(provider.NewFlixHQWS("flixhq.ws")))
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("fallbackProviders(FlixHQWS) = %v, want %v", got, want)

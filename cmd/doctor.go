@@ -16,6 +16,8 @@ const (
 	doctorAnimeOnsenQuery = "One Punch Man"
 	// Probed against EZTV, which carries TV series only.
 	doctorEZTVQuery = "Severance"
+	// Probed against Vidrock, which has no listing endpoints, so a film (TMDB movie 603) reaches Watch directly.
+	doctorVidrockQuery = "The Matrix"
 )
 
 var doctorCmd = &cobra.Command{
@@ -43,6 +45,7 @@ func doctorProviders() []doctor.Named {
 		// 1shows.org is the same TBCPL provider on a different base, and the two
 		// domains fail independently — worth probing as its own entry.
 		{Name: "TBCPL(1shows)", Provider: provider.NewTBCPL("1shows.org")},
+		{Name: "Vidrock", Provider: provider.NewVidrock(), Query: doctorVidrockQuery},
 		{Name: "YTS", Provider: provider.NewYTS()},
 		// Anime catalogues need an anime title, or they report broken for being
 		// asked about the wrong film.
@@ -55,7 +58,7 @@ func doctorProviders() []doctor.Named {
 	}
 }
 
-// doctorRun probes a fixed list of providers, each with query (the first argument, or a well-known default) except AnimeOnsen, AnimeHeaven, Nyaa, EZTV and 1337x, which use their own fixed queries, prints the health table to stdout, and fails only when no provider is usable.
+// doctorRun probes a fixed list of providers, each with query (the first argument, or a well-known default) except AnimeOnsen, AnimeHeaven, Nyaa, EZTV, Vidrock and 1337x, which use their own fixed queries, prints the health table to stdout, and fails only when no provider is usable.
 func doctorRun(cmd *cobra.Command, args []string) error {
 	query := doctorDefaultQuery
 	if len(args) > 0 && args[0] != "" {

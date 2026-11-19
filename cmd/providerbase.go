@@ -29,6 +29,8 @@ func providerBase(p provider.Provider) string {
 		return "flixhq.ws"
 	case *provider.TBCPL:
 		return "tbcpl"
+	case *provider.Vidrock:
+		return "vidrock"
 	case *provider.YTS:
 		return "yts"
 	case *provider.AnimeOnsen:
