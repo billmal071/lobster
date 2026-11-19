@@ -547,3 +547,55 @@ func TestResolveRowWithNoCandidatesIsUnresolved(t *testing.T) {
 		t.Fatalf("ResolveRow = %+v, want Unresolved", got)
 	}
 }
+
+func TestResolveRowDoesNotReuseACachedMatchForTheSameIDWithAnotherYear(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-2013", Title: "Utopia", Type: media.TV, Year: "2013"},
+	}}
+	p := Wrap(inner, okServer(t), General)
+	first := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, Year: "2013", FromCatalogue: true})
+	if first.ProviderID != "tv/utopia-2013" {
+		t.Fatalf("first ResolveRow = %+v", first)
+	}
+	got := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, Year: "2020", FromCatalogue: true})
+	if !got.Unresolved || got.ProviderID != "" {
+		t.Fatalf("ResolveRow = %+v, want Unresolved: the cached 2013 match is not the 2020 row", got)
+	}
+}
+
+func TestResolveRowDoesNotReuseACachedMatchForTheSameIDWithAnotherTitle(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia", Title: "Utopia", Type: media.TV},
+	}}
+	p := Wrap(inner, okServer(t), General)
+	p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, FromCatalogue: true})
+	got := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Dystopia", Type: media.TV, FromCatalogue: true})
+	if !got.Unresolved || got.ProviderID != "" {
+		t.Fatalf("ResolveRow = %+v, want Unresolved for a different title", got)
+	}
+}
+
+func TestResolveRowReusesACachedMatchForTheSameRow(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia", Title: "Utopia", Type: media.TV, Year: "2020"},
+	}}
+	p := Wrap(inner, okServer(t), General)
+	row := media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, Year: "2020", FromCatalogue: true}
+	p.ResolveRow(row)
+	p.ResolveRow(row)
+	if len(inner.searches) != 1 {
+		t.Fatalf("searches = %d, want 1", len(inner.searches))
+	}
+}
+
+func TestResolveRowRefusesTwoDistinctWorksWithTheExactYear(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-a", Title: "Utopia", Type: media.TV, Year: "2020"},
+		{ID: "tv/utopia-b", Title: "Utopia", Type: media.TV, Year: "2020"},
+	}}
+	p := Wrap(inner, okServer(t), General)
+	got := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, Year: "2020", FromCatalogue: true})
+	if !got.Unresolved || got.ProviderID != "" {
+		t.Fatalf("ResolveRow = %+v, want Unresolved when two works share title and year", got)
+	}
+}

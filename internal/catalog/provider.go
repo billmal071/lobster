@@ -34,7 +34,7 @@ type Provider struct {
 	notice   string
 	hintDone bool
 	rows     map[string]media.SearchResult
-	resolved map[string]string
+	resolved map[resolveKey]string
 }
 
 // Wrap returns inner with catalogue lists. A nil client keeps inner's lists
@@ -128,9 +128,15 @@ func (p *Provider) ResolveRow(r media.SearchResult) media.SearchResult {
 	return r
 }
 
+type resolveKey struct {
+	id, title, year string
+	mt              media.MediaType
+}
+
 func (p *Provider) resolve(row media.SearchResult) (string, error) {
+	key := resolveKey{row.ID, titlekey.Normalize(row.Title), row.Year, row.Type}
 	p.mu.Lock()
-	if r, ok := p.resolved[row.ID]; ok {
+	if r, ok := p.resolved[key]; ok {
 		p.mu.Unlock()
 		return r, nil
 	}
@@ -139,38 +145,40 @@ func (p *Provider) resolve(row media.SearchResult) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	want := titlekey.Normalize(row.Title)
-	pick := ""
-	exact := false
-	candidates := map[string]bool{}
+	exact := map[string]bool{}
+	loose := map[string]bool{}
 	for _, r := range results {
-		if r.Type != row.Type || titlekey.Normalize(r.Title) != want {
+		if r.Type != row.Type || titlekey.Normalize(r.Title) != key.title {
 			continue
 		}
 		if row.Year != "" && r.Year != "" && r.Year != row.Year {
 			continue
 		}
-		candidates[r.ID] = true
 		if row.Year != "" && r.Year == row.Year {
-			pick = r.ID
-			exact = true
-			break
-		}
-		if pick == "" {
-			pick = r.ID
+			exact[r.ID] = true
+		} else {
+			loose[r.ID] = true
 		}
 	}
-	if pick == "" {
+	candidates := loose
+	if len(exact) > 0 {
+		candidates = exact
+	}
+	if len(candidates) == 0 {
 		return "", fmt.Errorf("%q was not found on this provider", row.Title)
 	}
-	if !exact && len(candidates) > 1 {
+	if len(candidates) > 1 {
 		return "", fmt.Errorf("%q matches more than one work on this provider", row.Title)
+	}
+	pick := ""
+	for id := range candidates {
+		pick = id
 	}
 	p.mu.Lock()
 	if p.resolved == nil {
-		p.resolved = map[string]string{}
+		p.resolved = map[resolveKey]string{}
 	}
-	p.resolved[row.ID] = pick
+	p.resolved[key] = pick
 	p.mu.Unlock()
 	return pick, nil
 }
