@@ -539,7 +539,9 @@ func TestVidrockSearchReturnsTMDBIDs(t *testing.T) {
 	tmdbBaseURL = srv.URL
 	defer func() { tmdbBaseURL = prev }()
 
-	got, err := NewVidrock().Search("kyle xy")
+	v := NewVidrock()
+	v.allowLocal = true
+	got, err := v.Search("kyle xy")
 	if err != nil {
 		t.Fatal(err)
 	}

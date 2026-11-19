@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"sort"
@@ -60,6 +63,10 @@ type Vidrock struct {
 	base       string
 	client     *http.Client
 	allowLocal bool
+	lookup     func(ctx context.Context, host string) ([]netip.Addr, error)
+	dial       func(ctx context.Context, network, addr string) (net.Conn, error)
+	proxy      func(*http.Request) (*url.URL, error)
+	tlsRoots   *x509.CertPool
 
 	mu        sync.RWMutex
 	audioLang string
@@ -419,6 +426,14 @@ func vidrockDecrypt(s string) (string, error) {
 	return string(plain), nil
 }
 
+var vidrockCGNAT = netip.MustParsePrefix("100.64.0.0/10")
+
+func vidrockBlockedAddr(a netip.Addr) bool {
+	a = a.Unmap()
+	return a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsMulticast() ||
+		a.IsUnspecified() || vidrockCGNAT.Contains(a)
+}
+
 func (v *Vidrock) checkURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
@@ -431,15 +446,83 @@ func (v *Vidrock) checkURL(raw string) error {
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return fmt.Errorf("refusing local stream host %q", host)
 	}
-	if ip := net.ParseIP(host); ip != nil &&
-		(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()) {
+	if strings.Contains(host, "%") {
+		return fmt.Errorf("refusing scoped stream host %q", host)
+	}
+	if a, err := netip.ParseAddr(host); err == nil && vidrockBlockedAddr(a) {
 		return fmt.Errorf("refusing local stream host %q", host)
 	}
 	return nil
 }
 
+func (v *Vidrock) dialPublic(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	lookup := v.lookup
+	if lookup == nil {
+		lookup = func(ctx context.Context, h string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", h)
+		}
+	}
+	addrs, err := lookup(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	dial := v.dial
+	if dial == nil {
+		dial = (&net.Dialer{Timeout: 10 * time.Second}).DialContext
+	}
+	var lastErr error = fmt.Errorf("no address for %q", host)
+	for _, a := range addrs {
+		if a.Zone() != "" || vidrockBlockedAddr(a) {
+			lastErr = fmt.Errorf("refusing local stream host %q (%s)", host, a)
+			continue
+		}
+		conn, err := dial(ctx, network, net.JoinHostPort(a.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func (v *Vidrock) guardedTransport() http.RoundTripper {
+	proxy := v.proxy
+	if proxy == nil {
+		proxy = http.ProxyFromEnvironment
+	}
+	direct := http.DefaultTransport.(*http.Transport).Clone()
+	direct.Proxy = nil
+	direct.DialContext = v.dialPublic
+	proxied := http.DefaultTransport.(*http.Transport).Clone()
+	proxied.Proxy = proxy
+	if v.tlsRoots != nil {
+		direct.TLSClientConfig = &tls.Config{RootCAs: v.tlsRoots}
+		proxied.TLSClientConfig = &tls.Config{RootCAs: v.tlsRoots}
+	}
+	return vidrockRouter{direct: direct, proxied: proxied, proxy: proxy}
+}
+
+type vidrockRouter struct {
+	direct, proxied *http.Transport
+	proxy           func(*http.Request) (*url.URL, error)
+}
+
+func (r vidrockRouter) RoundTrip(req *http.Request) (*http.Response, error) {
+	if u, err := r.proxy(req); err == nil && u != nil {
+		return r.proxied.RoundTrip(req)
+	}
+	return r.direct.RoundTrip(req)
+}
+
 func (v *Vidrock) httpClient() *http.Client {
 	client := *v.client
+	if !v.allowLocal && client.Transport == nil {
+		client.Transport = v.guardedTransport()
+	}
 	client.CheckRedirect = func(r *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
 			return errors.New("too many redirects")
