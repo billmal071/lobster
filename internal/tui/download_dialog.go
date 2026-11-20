@@ -426,6 +426,22 @@ func (d *downloadDialog) View(width, height int) string {
 	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Bold(true)
 	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F8F8F2"))
 
+	footer := labelStyle.Render("[ESC] Cancel  [ENTER] Select  [j/k] Navigate")
+
+	boxWidth := width / 2
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+	if boxWidth > 60 {
+		boxWidth = 60
+	}
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#FF0055")).
+		Padding(1, 2).
+		Width(boxWidth)
+	frame := func(content string) string { return boxStyle.Render(content + "\n\n" + footer) }
+
 	var content string
 
 	switch d.step {
@@ -502,15 +518,13 @@ func (d *downloadDialog) View(width, height int) string {
 
 	case dlStepRangeInput:
 		var lines []string
-		lines = append(lines, titleStyle.Render("Episode Range"))
+		title := titleStyle.Render("Episode Range")
+		lines = append(lines, title)
 		switch {
 		case len(d.episodes) == 0:
 		case d.partial:
-			nums := make([]string, len(d.episodes))
-			for i, ep := range d.episodes {
-				nums[i] = strconv.Itoa(ep.Number)
-			}
-			lines = append(lines, labelStyle.Render("Partial list, only these exist: "+strings.Join(nums, ", ")))
+			rows := height - lipgloss.Height(frame(title+"\n\n"+d.rangeInput.View()))
+			lines = append(lines, labelStyle.Render(partialListLabel(d.episodes, boxWidth-boxStyle.GetHorizontalPadding(), rows)))
 		default:
 			lines = append(lines, labelStyle.Render(fmt.Sprintf("Available: 1-%d", d.episodes[len(d.episodes)-1].Number)))
 		}
@@ -524,23 +538,73 @@ func (d *downloadDialog) View(width, height int) string {
 		content = errStyle.Render(fmt.Sprintf("Error: %v\n\nPress any key to dismiss.", d.err))
 	}
 
-	footer := labelStyle.Render("[ESC] Cancel  [ENTER] Select  [j/k] Navigate")
-
-	boxWidth := width / 2
-	if boxWidth < 40 {
-		boxWidth = 40
-	}
-	if boxWidth > 60 {
-		boxWidth = 60
-	}
-
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#FF0055")).
-		Padding(1, 2).
-		Width(boxWidth).
-		Render(content + "\n\n" + footer)
-
 	// Center the dialog
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, frame(content))
+}
+
+const partialListPrefix = "Partial list, only these exist:"
+
+// partialListLabel names the episodes of a list with gaps as ranges ("2-4, 7")
+// on lines of at most width, leaving out trailing ranges to stay within rows lines.
+func partialListLabel(episodes []media.Episode, width, rows int) string {
+	runs := episodeRuns(episodes)
+	lines := func(keep int) []string {
+		words := strings.Fields(partialListPrefix)
+		for i, r := range runs[:keep] {
+			word := strconv.Itoa(r[0])
+			if r[1] > r[0] {
+				word = fmt.Sprintf("%d-%d", r[0], r[1])
+			}
+			if i < keep-1 {
+				word += ","
+			}
+			words = append(words, word)
+		}
+		if keep < len(runs) {
+			hidden := 0
+			for _, r := range runs[keep:] {
+				hidden += r[1] - r[0] + 1
+			}
+			words = append(words, "and", strconv.Itoa(hidden), "more")
+		}
+		return wrapWords(words, width)
+	}
+	keep := len(runs)
+	if len(lines(keep)) > rows {
+		keep = sort.Search(len(runs)-1, func(i int) bool { return len(lines(i+1)) > rows })
+		keep = min(max(keep, 1), len(runs))
+	}
+	return strings.Join(lines(keep), "\n")
+}
+
+func wrapWords(words []string, width int) []string {
+	var lines []string
+	for _, w := range words {
+		if last := len(lines) - 1; last >= 0 && len(lines[last])+1+len(w) <= width {
+			lines[last] += " " + w
+			continue
+		}
+		lines = append(lines, w)
+	}
+	return lines
+}
+
+// episodeRuns groups the episode numbers into ascending [first, last] runs of consecutive numbers.
+func episodeRuns(episodes []media.Episode) [][2]int {
+	nums := make([]int, len(episodes))
+	for i, ep := range episodes {
+		nums[i] = ep.Number
+	}
+	sort.Ints(nums)
+	var runs [][2]int
+	for _, n := range nums {
+		switch last := len(runs) - 1; {
+		case last >= 0 && n <= runs[last][1]:
+		case last >= 0 && n == runs[last][1]+1:
+			runs[last][1] = n
+		default:
+			runs = append(runs, [2]int{n, n})
+		}
+	}
+	return runs
 }
