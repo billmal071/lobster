@@ -528,11 +528,10 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		// that says it may be short is not evidence that an episode above it
 		// does not exist, so that case still falls through to the recovery
 		// below, which needs no list.
-		if sf := shortfallFor(err); provider.PartialEpisodeList(episodes, err) &&
+		if provider.PartialEpisodeList(episodes, err) &&
 			(episode == 0 || episodeIndex(episodes, episode) >= 0) {
+			warnPartialSeason(p, selectedSeason, title, err)
 			err = nil
-			warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",
-				providerLabel(p), selectedSeason.Number, title, sf.reason)
 		}
 
 		if err != nil || len(episodes) == 0 {
@@ -711,7 +710,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		debugf("episode: %d (ID: %s)", selectedEpisode.Number, selectedEpisode.ID)
 
 		// Create a playlist session for continuous playback
-		sess := playlist.NewWithProviderID(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx)
+		sess := newPlaybackSession(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx)
 		cachedServerName = ""
 		return runPlaybackLoop(sess)
 	}
@@ -1294,4 +1293,18 @@ func initDownloadManager(c *config.Config) (*dlmanager.Manager, func(), error) {
 	}
 
 	return mgr, cleanup, nil
+}
+
+func warnPartialSeason(p provider.Provider, season media.Season, title string, err error) {
+	warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",
+		providerLabel(p), season.Number, title, shortfallFor(err).reason)
+}
+
+func newPlaybackSession(p provider.Provider, selected media.SearchResult, providerID string, chainPrimary provider.Provider,
+	seasons []media.Season, episodes []media.Episode, seasonIdx, episodeIdx int) *playlist.Session {
+	sess := playlist.NewWithProviderID(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx)
+	sess.OnPartialSeason = func(season media.Season, err error) {
+		warnPartialSeason(sess.Provider, season, selected.Title, err)
+	}
+	return sess
 }

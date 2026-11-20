@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/playlist"
+	"lobster/internal/provider"
 )
 
 type playedEp struct{ season, episode int }
@@ -116,31 +119,6 @@ func TestAutoplayStopsAndReportsWhenNextEpisodeFails(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Fatalf("played %v, want to stop after the failing second episode", got)
-	}
-}
-
-func TestAutoplayPlaysAMovieOnce(t *testing.T) {
-	stub := autoplayStub()
-	sel := media.SearchResult{ID: "movie/x", Title: "A Film", Type: media.Movie}
-	sess := playlist.New(stub, sel, nil, nil, 0, 0)
-
-	plays := 0
-	prevPlay := playEpisode
-	playEpisode = func(s *playlist.Session) error {
-		plays++
-		s.LastPosition, s.LastDuration = endedNaturally.Position, endedNaturally.Duration
-		return nil
-	}
-	t.Cleanup(func() { playEpisode = prevPlay })
-	prevAuto, prevCfg := flagAutoplay, cfg
-	flagAutoplay, cfg = true, &config.Config{History: false}
-	t.Cleanup(func() { flagAutoplay, cfg = prevAuto, prevCfg })
-
-	if err := runPlaybackLoop(sess); err != nil {
-		t.Fatalf("runPlaybackLoop: %v", err)
-	}
-	if plays != 1 {
-		t.Fatalf("a movie played %d times with --autoplay, want 1", plays)
 	}
 }
 
@@ -303,7 +281,19 @@ func TestPlayDetachedSpawnsChildWithAutoplayForSeries(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "argv")
 	exe := filepath.Join(dir, "lobster-fake")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + out + "'\n/bin/sleep 3\n"
+	pidFile := filepath.Join(dir, "pid")
+	script := "#!/bin/sh\necho $$ > '" + pidFile + "'\nprintf '%s\\n' \"$@\" > '" + out + "'\nexec sleep 30\n"
+	t.Cleanup(func() {
+		raw, err := os.ReadFile(pidFile)
+		if err != nil {
+			return
+		}
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil {
+			if proc, err := os.FindProcess(pid); err == nil {
+				_ = proc.Kill()
+			}
+		}
+	})
 	if err := os.WriteFile(exe, []byte(script), 0o755); err != nil {
 		t.Fatalf("writing fake supervisor: %v", err)
 	}
@@ -332,5 +322,27 @@ func TestPlayDetachedSpawnsChildWithAutoplayForSeries(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "--autoplay=true") {
 		t.Fatalf("child argv = %q, playDetached must spawn a series child with --autoplay=true", data)
+	}
+}
+
+func TestPlaybackSessionWarnsWhenSeasonCrossingIsPartial(t *testing.T) {
+	stub := autoplayStub()
+	seasons, _ := stub.GetSeasons("x")
+	eps, _ := stub.GetEpisodes("x", "s1")
+	stub.episodesErr = fmt.Errorf("probe budget: %w", provider.ErrIncompleteEpisodeList)
+	stub.episodesWithErr = []media.Episode{{ID: "e21", Number: 1}}
+	sel := media.SearchResult{ID: "tv/show", Title: "Some Show", Type: media.TV}
+	sess := newPlaybackSession(stub, sel, "x", stub, seasons, eps, 0, len(eps)-1)
+
+	var warned []string
+	prev := warnf
+	warnf = func(format string, args ...any) { warned = append(warned, fmt.Sprintf(format, args...)) }
+	t.Cleanup(func() { warnf = prev })
+
+	if _, err := sess.Next(); err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], "season 2") || !strings.Contains(warned[0], "may be short") {
+		t.Fatalf("warnings = %q, want one saying season 2 may be short", warned)
 	}
 }

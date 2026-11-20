@@ -294,3 +294,43 @@ func TestNextAcrossSeasonEpisodeListErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestNextReportsMeasuredPrefixOnSeasonCrossing(t *testing.T) {
+	partial := fmt.Errorf("probe budget: %w", provider.ErrIncompleteEpisodeList)
+	build := func(err error) (*Session, *[]error) {
+		mp := &mockProvider{
+			episodes: map[string][]media.Episode{"s2": {{Number: 1, ID: "n1"}}},
+			errs:     map[string]error{},
+		}
+		if err != nil {
+			mp.errs["s2"] = err
+		}
+		seasons := []media.Season{{Number: 1, ID: "s1"}, {Number: 2, ID: "s2"}}
+		s := New(mp, media.SearchResult{ID: "x", Title: "X", Type: media.TV}, seasons,
+			[]media.Episode{{Number: 1, ID: "e1"}}, 0, 0)
+		var got []error
+		s.OnPartialSeason = func(season media.Season, err error) {
+			if season.Number != 2 {
+				t.Errorf("reported season %d, want 2", season.Number)
+			}
+			got = append(got, err)
+		}
+		return s, &got
+	}
+
+	s, got := build(partial)
+	if _, err := s.Next(); err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if len(*got) != 1 || !errors.Is((*got)[0], provider.ErrIncompleteEpisodeList) {
+		t.Fatalf("OnPartialSeason calls = %v, want one with the incomplete error", *got)
+	}
+
+	s, got = build(nil)
+	if _, err := s.Next(); err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if len(*got) != 0 {
+		t.Fatalf("OnPartialSeason fired for a complete season: %v", *got)
+	}
+}

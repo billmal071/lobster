@@ -129,7 +129,7 @@ The `log` path is randomly generated (`play-<random>.log` in the user cache
 dir) — it is not derived from the pid, so the only way to find a given run's
 log is the `log` key in that run's own JSON output. `resume_tracking` reflects
 whether the *configured player* reports playback position (true for mpv,
-false for vlc/iina and other players) — it has nothing to do with whether you
+false for vlc, iina, celluloid and other players) — it has nothing to do with whether you
 detached; a detached play runs the same attached playback internally, in a
 background process.
 
@@ -171,7 +171,7 @@ A detached series play carries on to the following episodes by itself unless
 you pass `--autoplay=false`. Pass it when the user asked for one named episode;
 omit it only when they asked to watch on from there ("start The Bear from season
 2", "binge it"). Autoplay continues only with mpv, which reports when an episode
-ends; vlc and iina stop after the one episode either way.
+ends; vlc, iina and celluloid stop after the one episode either way.
 
 ## Rules
 

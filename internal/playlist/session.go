@@ -45,6 +45,10 @@ type Session struct {
 	// reading this directly.
 	ChainPrimary provider.Provider
 
+	// OnPartialSeason is called when Next crosses into a season whose episode
+	// list is a measured prefix that may be short.
+	OnPartialSeason func(season media.Season, err error)
+
 	Seasons      []media.Season
 	Episodes     []media.Episode // episodes for current season
 	SeasonIdx    int
@@ -176,6 +180,10 @@ func (s *Session) Next() (media.Episode, error) {
 	if len(episodes) == 0 {
 		s.SeasonIdx--
 		return media.Episode{}, fmt.Errorf("season %d has no episodes", nextSeason.Number)
+	}
+
+	if err != nil && s.OnPartialSeason != nil {
+		s.OnPartialSeason(nextSeason, err)
 	}
 
 	s.Episodes = episodes
