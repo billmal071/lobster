@@ -424,11 +424,14 @@ func TestPreviousIntoACompleteSeasonDropsThePrefixFlag(t *testing.T) {
 	if s.EpisodesPartial {
 		t.Fatal("the prefix flag of season 2 stayed set after moving into season 1")
 	}
-	ep, err := s.Next()
-	if err == nil && ep.ID != "" && s.SeasonIdx != 1 {
-		t.Fatalf("Next stayed in season idx %d", s.SeasonIdx)
+	if s.SeasonIdx != 0 || s.EpisodeIdx != 1 {
+		t.Fatalf("Previous left season idx %d episode idx %d, want the last episode of season 1", s.SeasonIdx, s.EpisodeIdx)
 	}
+	ep, err := s.Next()
 	if err != nil {
 		t.Fatalf("Next at the end of season 1: %v", err)
+	}
+	if ep.ID != "b1" || s.SeasonIdx != 1 {
+		t.Fatalf("Next = %v in season idx %d, want b1 in season idx 1", ep, s.SeasonIdx)
 	}
 }

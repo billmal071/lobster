@@ -355,7 +355,7 @@ func partialSeasonSession(trailingSeason bool) *playlist.Session {
 	seasons, _ := stub.GetSeasons("x")
 	eps, _ := stub.GetEpisodes("x", "s1")
 	stub.episodesErr = fmt.Errorf("probe budget: %w", provider.ErrIncompleteEpisodeList)
-	stub.episodesWithErr = []media.Episode{{ID: "e21", Number: 1}}
+	stub.episodesWithErr = []media.Episode{{ID: "e21", Number: 1}, {ID: "e22", Number: 2}}
 	sel := media.SearchResult{ID: "tv/show", Title: "Some Show", Type: media.TV}
 	return newPlaybackSession(stub, sel, "x", stub, seasons, eps, 0, len(eps)-1, false)
 }
@@ -390,9 +390,7 @@ func TestAutoplayStopsCleanlyAtEndOfMeasuredPrefixBeforeALaterSeason(t *testing.
 	if err != nil {
 		t.Fatalf("err = %v, want a clean stop", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("played %v, want season 1's last episode and the measured prefix only", got)
-	}
+	wantPlayed(t, got, []playedEp{{1, 2}, {2, 1}, {2, 2}})
 	if !containsSubstring(*warned, "season 2 episode list may be incomplete") {
 		t.Fatalf("warnings = %q, want one saying season 2's list may be incomplete", *warned)
 	}
@@ -406,11 +404,9 @@ func TestMenuIsNotShownAtEndOfMeasuredPrefixBeforeALaterSeason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err = %v, want a clean stop", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("played %v, want season 1's last episode and the measured prefix only", got)
-	}
-	if menuCalls != 1 {
-		t.Fatalf("menu shown %d times, want once (after season 1) and not again at the end of the prefix", menuCalls)
+	wantPlayed(t, got, []playedEp{{1, 2}, {2, 1}, {2, 2}})
+	if menuCalls != 2 {
+		t.Fatalf("menu shown %d times, want twice (after season 1 and inside the prefix) and not at the end of the prefix", menuCalls)
 	}
 	if !containsSubstring(*warned, "season 2 episode list may be incomplete") {
 		t.Fatalf("warnings = %q, want one saying season 2's list may be incomplete", *warned)
@@ -426,14 +422,24 @@ func TestAutoplayWarnsInsteadOfEndOfSeriesWhenLastSeasonIsAMeasuredPrefix(t *tes
 	if err != nil {
 		t.Fatalf("err = %v, want a clean stop with a warning", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("played %v, want season 1's last episode and the measured prefix", got)
-	}
+	wantPlayed(t, got, []playedEp{{1, 2}, {2, 1}, {2, 2}})
 	found := false
 	for _, w := range warned {
 		found = found || strings.Contains(w, "season 2 episode list may be incomplete")
 	}
 	if !found {
 		t.Fatalf("warnings = %q, want one saying season 2's list may be incomplete", warned)
+	}
+}
+
+func wantPlayed(t *testing.T, got, want []playedEp) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("played %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("played %v, want %v", got, want)
+		}
 	}
 }

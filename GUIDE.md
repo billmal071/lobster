@@ -226,7 +226,7 @@ movie, and does not read `auto_next`, which only controls the attached countdown
 It needs a playlist session, which exists only when the play resolves a season and an episode list. When the primary lists
 seasons but not a season's episodes, a fallback provider's episode list is used
 instead, and the session moves to that fallback provider and its season list, so autoplay carries on through its episodes and into its following
-seasons. Moving into the next season asks only the provider the session
+seasons, unless that fallback's list is itself marked possibly short, in which case it stops at the end of that list as described below. Moving into the next season asks only the provider the session
 holds, with no fallback: if it cannot list that season, autoplay stops with an error, and a list it marks as possibly short is
 played as measured with a warning that it may be short, and playback ends cleanly after its last measured episode with a warning that the season's list may be incomplete, rather than moving on to the next season (even when later seasons exist). At that point the post-episode menu is not shown and no Next episode is offered. When the primary cannot list seasons at
 all, when it lists a season you ask for only partially and the chain resolves a stream by number, or when no episode list
