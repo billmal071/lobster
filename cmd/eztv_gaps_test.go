@@ -199,18 +199,69 @@ func TestIncompleteFallbackListBeatsAGappedOneForSeasonVerdict(t *testing.T) {
 	}
 }
 
-func TestBatchUsesAFallbackPrefixWhenThePrimaryFails(t *testing.T) {
-	hostileEnv(t)
+func batchFallbackWith(t *testing.T, eps []media.Episode, err error) {
+	t.Helper()
 	fb := chainShow()
-	fb.episodesWithErr = []media.Episode{{ID: "1x1", Number: 1}}
-	fb.episodesErr = fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList)
+	fb.episodesBySeason = nil
+	fb.episodes = eps
+	fb.episodesWithErr = eps
+	fb.episodesErr = err
 	fb.seasons = []media.Season{{ID: "1", Number: 1}}
 	chainOf(t, fb)
-	primary := &stubProvider{episodesErr: errors.New("boom")}
-	l := newSeasonLister(primary, media.SearchResult{ID: "x", Title: "Some Show", Type: media.TV})
+}
+
+func TestBatchRejectsAFallbackPrefixThatMayBeTruncated(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"cut short by a failed probe", fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList)},
+		{"end not confirmed", fmt.Errorf("%w: %w: episode 2 answered 404 once", provider.ErrIncompleteEpisodeList, provider.ErrUnconfirmedEpisodeList)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hostileEnv(t)
+			batchFallbackWith(t, []media.Episode{{ID: "1x1", Number: 1}}, c.err)
+			boom := errors.New("boom")
+			primary := &stubProvider{episodesErr: boom}
+			l := newSeasonLister(primary, media.SearchResult{ID: "x", Title: "Some Show", Type: media.TV})
+			eps, err := l.episodes(media.Season{ID: "1", Number: 1})
+			if !errors.Is(err, boom) {
+				t.Fatalf("episodes = %d, err = %v; want the primary's own error, not a fallback prefix downloaded as the whole season", len(eps), err)
+			}
+		})
+	}
+}
+
+func TestBatchFailsASeasonWhenThePrimaryListsNothingAndTheFallbackPrefixMayBeTruncated(t *testing.T) {
+	hostileEnv(t)
+	batchFallbackWith(t, []media.Episode{{ID: "1x1", Number: 1}}, fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList))
+	l := newSeasonLister(&stubProvider{}, media.SearchResult{ID: "x", Title: "Some Show", Type: media.TV})
 	eps, err := l.episodes(media.Season{ID: "1", Number: 1})
-	if err != nil || len(eps) != 1 {
-		t.Fatalf("episodes = %d, err = %v; GUIDE.md says a fallback's flagged prefix is used as it comes", len(eps), err)
+	if err == nil {
+		t.Fatalf("episodes = %d, err = nil; want a failure, not a season skipped as empty or downloaded short", len(eps))
+	}
+}
+
+func TestBatchUsesAFallbackListThatIsCompleteOrGapped(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"complete", nil},
+		{"catalogue gap", gapErr()},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hostileEnv(t)
+			batchFallbackWith(t, []media.Episode{{ID: "1x1", Number: 1}, {ID: "1x3", Number: 3}}, c.err)
+			primary := &stubProvider{episodesErr: errors.New("boom")}
+			l := newSeasonLister(primary, media.SearchResult{ID: "x", Title: "Some Show", Type: media.TV})
+			eps, err := l.episodes(media.Season{ID: "1", Number: 1})
+			if err != nil || len(eps) != 2 {
+				t.Fatalf("episodes = %d, err = %v; want the fallback's 2 episodes", len(eps), err)
+			}
+		})
 	}
 }
 

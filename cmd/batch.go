@@ -438,9 +438,13 @@ func (l *seasonLister) episodes(season media.Season) ([]media.Episode, error) {
 		l.scanned = true
 		l.hits = fallbackSeasonHits(l.primary, contentRequest(l.selected))
 	}
-	if a := firstEpisodeList(l.hits, season.Number); a != nil {
+	a := firstEpisodeList(l.hits, season.Number)
+	if a != nil && !a.shortfall.mayBeTruncated() {
 		debugf("batch: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), season.Number)
 		return a.episodes, nil
+	}
+	if a != nil && err == nil {
+		err = fmt.Errorf("no fallback provider could confirm season %d of %q: %s", season.Number, l.selected.Title, a.shortfall.reason)
 	}
 	return episodes, err
 }

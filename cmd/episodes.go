@@ -346,6 +346,10 @@ type episodeShortfall struct {
 	gap    bool
 }
 
+func (s episodeShortfall) mayBeTruncated() bool {
+	return s.code != "" && !s.gap
+}
+
 // shortfallFor reads a GetEpisodes error and says which warning code it is, or
 // nothing at all when the error is not a provider reporting a short list.
 //

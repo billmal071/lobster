@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"testing"
 
 	"lobster/internal/media"
@@ -194,6 +195,35 @@ func TestTUIEpisodeListFallbackCarriesTheGapStatus(t *testing.T) {
 			}
 			if partial != c.want {
 				t.Fatalf("partial = %v, want %v", partial, c.want)
+			}
+		})
+	}
+}
+
+func TestTUIEpisodeListFallbackRefusesAPrefixThatMayBeTruncated(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"a prefix cut short by a failed probe", fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList)},
+		{"a prefix whose end was not confirmed", fmt.Errorf("%w: %w: episode 3 answered 404 once", provider.ErrIncompleteEpisodeList, provider.ErrUnconfirmedEpisodeList)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hostileEnv(t)
+			fb := &stubProvider{
+				results:         []media.SearchResult{{ID: "tv/1", Title: "Show", Type: media.TV}},
+				seasons:         seasonsOf(2),
+				episodesWithErr: []media.Episode{{ID: "a", Number: 1}, {ID: "b", Number: 2}},
+				episodesErr:     c.err,
+			}
+			chainOf(t, fb)
+			eps, partial, err := tuiEpisodeListFallback(&stubProvider{}, media.SearchResult{ID: "tv/1", Title: "Show", Type: media.TV}, 2)
+			if err == nil {
+				t.Fatalf("offered %d episodes (partial=%v) as the season; want an error so the dialog reports its own provider's failure", len(eps), partial)
+			}
+			if len(eps) != 0 {
+				t.Fatalf("returned %d episodes beside the error; want none", len(eps))
 			}
 		})
 	}

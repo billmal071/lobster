@@ -241,6 +241,9 @@ func tuiEpisodeListFallback(prov provider.Provider, item media.SearchResult, sea
 	if a == nil {
 		return nil, false, fmt.Errorf("no fallback provider could list season %d of %q", seasonNumber, item.Title)
 	}
+	if a.shortfall.mayBeTruncated() {
+		return nil, false, fmt.Errorf("no fallback provider could confirm season %d of %q: %s", seasonNumber, item.Title, a.shortfall.reason)
+	}
 	return a.episodes, a.shortfall.gap, nil
 }
 
