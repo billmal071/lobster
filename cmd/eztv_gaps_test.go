@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -210,5 +211,34 @@ func TestBatchUsesAFallbackPrefixWhenThePrimaryFails(t *testing.T) {
 	eps, err := l.episodes(media.Season{ID: "1", Number: 1})
 	if err != nil || len(eps) != 1 {
 		t.Fatalf("episodes = %d, err = %v; GUIDE.md says a fallback's flagged prefix is used as it comes", len(eps), err)
+	}
+}
+
+func TestEpisodesOffersTheOnlySeasonOfAGappedSeasonList(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+	primary := &stubProvider{
+		seasons:    []media.Season{{ID: "9", Number: 9}},
+		seasonsErr: gapErr(),
+		episodes:   []media.Episode{{ID: "9x1", Number: 1}},
+	}
+	withStubProvider(t, primary)
+	chainOf(t)
+
+	withEpisodesFlags(t, tvRef(t, ""), 9)
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	var out struct {
+		Seasons  []int `json:"seasons"`
+		Warnings []struct {
+			Code string `json:"code"`
+		} `json:"warnings"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatalf("output is not JSON: %v", err)
+	}
+	if len(out.Seasons) != 1 || out.Seasons[0] != 9 || len(out.Warnings) == 0 || out.Warnings[0].Code != "season_list_incomplete" {
+		t.Fatalf("output = %s, want season 9 offered with a season_list_incomplete warning", buf.String())
 	}
 }
