@@ -79,8 +79,13 @@ func historyRun(cmd *cobra.Command, args []string) error {
 	return resumeSaved(p, selected, results)
 }
 
+var (
+	resumePicker = resumeViaPicker
+	resumeFlow   = playFlow
+)
+
 func catalogueEntry(p provider.Provider, e media.HistoryEntry) bool {
-	if _, mintsOwnTMDBShapedIDs := p.(*provider.TBCPL); mintsOwnTMDBShapedIDs {
+	if n, ok := p.(interface{ MintsTMDBShapedIDs() bool }); ok && n.MintsTMDBShapedIDs() {
 		return false
 	}
 	return catalog.IsID(e.ID)
@@ -99,11 +104,11 @@ func resumeSaved(p provider.Provider, selected media.HistoryEntry, results []med
 	}
 
 	if catalogueEntry(p, selected) {
-		return resumeViaPicker(p, selected)
+		return resumePicker(p, selected, results)
 	}
 
 	// If exact ID not found, let user pick from search results
-	return playFlow(p, selected.Title)
+	return resumeFlow(p, selected.Title)
 }
 
 func historySearch(p provider.Provider, e media.HistoryEntry) ([]media.SearchResult, error) {
@@ -114,10 +119,7 @@ func historySearch(p provider.Provider, e media.HistoryEntry) ([]media.SearchRes
 	return results, err
 }
 
-func resumeViaPicker(p provider.Provider, e media.HistoryEntry) error {
-	stop := ui.StartSpinner(fmt.Sprintf("Searching for %q...", e.Title))
-	results, _ := p.Search(e.Title)
-	stop()
+func resumeViaPicker(p provider.Provider, e media.HistoryEntry, results []media.SearchResult) error {
 	var rows []media.SearchResult
 	var items []string
 	for _, r := range results {

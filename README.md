@@ -482,8 +482,11 @@ key or a v4 read access token works.
   printed by `lobster doctor`, and is not shipped with lobster.
 - Playback is unchanged: picking a catalogue title searches the usual sources
   by title and year. The catalogue supplies lists and details, never streams.
-  Resuming such a title from history, which stores no year, always opens the
-  usual picker so you confirm which work it is.
+  Resuming such a title from history, which stores no year, opens the usual
+  picker when the source lists that title, so you confirm which work it is;
+  if the source lists none, the usual fallback sources are tried. Under
+  `--base tbcpl` or `1shows.org`, whose own IDs look like TMDB's, history
+  entries are treated as the source's own and resume as before.
 - Without a key nothing changes, except one line saying the key enables richer
   lists. If TMDB rejects the key, rate-limits you or cannot be reached, lobster
   says so in one line and shows the source's own list instead.

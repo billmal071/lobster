@@ -59,6 +59,8 @@ func (t *TBCPL) SetAudioLanguage(lang string) {
 	t.mu.Unlock()
 }
 
+func (t *TBCPL) MintsTMDBShapedIDs() bool { return true }
+
 // NewTBCPL creates a new TBCPL provider.
 func NewTBCPL(base string) *TBCPL {
 	// Use a custom transport that resolves player.vidzee.wtf to known Cloudflare IPs.

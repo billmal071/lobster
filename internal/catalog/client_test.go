@@ -495,3 +495,30 @@ func TestTMDBErrorAndEmptyBodiesAreNotCached(t *testing.T) {
 		})
 	}
 }
+
+func TestEmptyButWellFormedBodiesAreValidAndCached(t *testing.T) {
+	cases := map[string]struct {
+		body string
+		do   func(c *Client) error
+	}{
+		"empty list":     {`{"results":[]}`, func(c *Client) error { _, err := c.Trending(media.Movie); return err }},
+		"unaired season": {`{"episodes":[]}`, func(c *Client) error { _, err := c.Season("tv/1399", 3); return err }},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var calls atomic.Int32
+			c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				io.WriteString(w, tc.body)
+			})
+			for i := 0; i < 2; i++ {
+				if err := tc.do(c); err != nil {
+					t.Fatalf("call %d = %v, want no error for a well-formed empty body", i+1, err)
+				}
+			}
+			if n := calls.Load(); n != 1 {
+				t.Fatalf("server saw %d requests, want 1 (the empty body is cached)", n)
+			}
+		})
+	}
+}

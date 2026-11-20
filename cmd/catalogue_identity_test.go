@@ -136,7 +136,7 @@ func TestHistoryResumeThroughThePickerKeepsTheSavedIdentity(t *testing.T) {
 	}}
 	saved := media.HistoryEntry{ID: "tv/1", Title: "Some Show", Type: media.TV, Season: 1, Episode: 22}
 
-	if err := resumeViaPicker(twinPlayProvider{inner}, saved); err != nil {
+	if err := resumeViaPicker(twinPlayProvider{inner}, saved, twinSearchResults()); err != nil {
 		t.Fatalf("resumeViaPicker = %v", err)
 	}
 	if len(inner.seasonIDs) == 0 || inner.seasonIDs[0] != "tv/utopia-2013" {
@@ -170,7 +170,7 @@ func TestResumeViaPickerOffersOnlyTheSavedMediaType(t *testing.T) {
 	}}
 	saved := media.HistoryEntry{ID: "tv/1", Title: "Some Show", Type: media.TV, Season: 1, Episode: 22}
 
-	if err := resumeViaPicker(mixedTypePlayProvider{inner}, saved); err != nil {
+	if err := resumeViaPicker(mixedTypePlayProvider{inner}, saved, mustSearch(t, mixedTypePlayProvider{inner})); err != nil {
 		t.Fatalf("resumeViaPicker = %v", err)
 	}
 	if len(*offered) == 0 || len((*offered)[0]) != 2 {
@@ -196,7 +196,7 @@ func TestResumeViaPickerNeverHandsAFallbackIDToThePrimary(t *testing.T) {
 	inner := &idRecordingProvider{stubProvider: &stubProvider{}}
 	saved := media.HistoryEntry{ID: "tv/1", Title: "Some Show", Type: media.TV, Season: 1, Episode: 22}
 
-	if err := resumeViaPicker(emptySearchPlayProvider{inner}, saved); err != nil {
+	if err := resumeViaPicker(emptySearchPlayProvider{inner}, saved, nil); err != nil {
 		t.Fatalf("resumeViaPicker = %v", err)
 	}
 	if len(inner.seasonIDs) != 0 {
@@ -280,3 +280,58 @@ type singleResultPlayProvider struct {
 }
 
 func (p singleResultPlayProvider) Search(string) ([]media.SearchResult, error) { return p.rows, nil }
+
+func twinSearchResults() []media.SearchResult {
+	rows, _ := twinSearchProvider{}.Search("")
+	return rows
+}
+
+func mustSearch(t *testing.T, p provider.Provider) []media.SearchResult {
+	t.Helper()
+	rows, err := p.Search("")
+	if err != nil {
+		t.Fatalf("Search = %v", err)
+	}
+	return rows
+}
+
+type nativeTMDBIDProvider struct {
+	*stubProvider
+}
+
+func (nativeTMDBIDProvider) MintsTMDBShapedIDs() bool { return true }
+
+func TestNativeTMDBShapedHistoryEntryNeverTakesTheCataloguePicker(t *testing.T) {
+	var picker, flow int
+	prevPicker, prevFlow := resumePicker, resumeFlow
+	resumePicker = func(provider.Provider, media.HistoryEntry, []media.SearchResult) error { picker++; return nil }
+	resumeFlow = func(provider.Provider, string) error { flow++; return nil }
+	t.Cleanup(func() { resumePicker, resumeFlow = prevPicker, prevFlow })
+
+	native := nativeTMDBIDProvider{&stubProvider{searchErr: provider.ErrNoResults}}
+	entry := media.HistoryEntry{ID: "movie/550", Title: "Fight Club", Type: media.Movie}
+
+	results, err := historySearch(native, entry)
+	if !errors.Is(err, provider.ErrNoResults) {
+		t.Fatalf("historySearch err = %v, want ErrNoResults passed through for a native entry", err)
+	}
+	if err := resumeSaved(native, entry, results); err != nil {
+		t.Fatalf("resumeSaved = %v", err)
+	}
+	if picker != 0 || flow != 1 {
+		t.Fatalf("picker=%d flow=%d, want the plain search flow only", picker, flow)
+	}
+
+	picker, flow = 0, 0
+	plain := &stubProvider{searchErr: provider.ErrNoResults}
+	results, err = historySearch(plain, entry)
+	if err != nil {
+		t.Fatalf("historySearch under a catalogue-shaped provider = %v, want ErrNoResults treated as empty", err)
+	}
+	if err := resumeSaved(plain, entry, results); err != nil {
+		t.Fatalf("resumeSaved = %v", err)
+	}
+	if picker != 1 || flow != 0 {
+		t.Fatalf("picker=%d flow=%d, want the catalogue picker only", picker, flow)
+	}
+}
