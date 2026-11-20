@@ -195,8 +195,6 @@ func (s *Session) Next() (media.Episode, error) {
 	return s.Current(), nil
 }
 
-// IncompleteListError is why playback stops at the end of a season whose
-// episode list was only a measured prefix.
 func (s *Session) IncompleteListError() error {
 	return fmt.Errorf("season %d episode list may be incomplete: stopping after its last measured episode", s.CurrentSeason().Number)
 }
