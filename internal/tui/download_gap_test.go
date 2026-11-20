@@ -75,3 +75,32 @@ func TestRangeViewOfACompleteListKeepsTheContiguousRange(t *testing.T) {
 		t.Errorf("view = %s, want the contiguous range for a complete list", view)
 	}
 }
+
+func TestFetchEpisodesCarriesAFallbackListsGapStatus(t *testing.T) {
+	cases := []struct {
+		name    string
+		partial bool
+	}{
+		{"a fallback list with gaps stays partial", true},
+		{"a complete fallback list is not partial", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			prev := EpisodeListFallback
+			EpisodeListFallback = func(provider.Provider, media.SearchResult, int) ([]media.Episode, bool, error) {
+				return []media.Episode{{ID: "2x2", Number: 2}, {ID: "2x5", Number: 5}}, c.partial, nil
+			}
+			t.Cleanup(func() { EpisodeListFallback = prev })
+
+			d := &downloadDialog{
+				item:     media.SearchResult{ID: "tv/1", Type: media.TV},
+				provider: listlessProvider{},
+				seasons:  []media.Season{{ID: "2", Number: 2}},
+			}
+			msg := d.fetchEpisodes(0)().(dlEpisodesMsg)
+			if msg.partial != c.partial {
+				t.Fatalf("partial = %v, want %v", msg.partial, c.partial)
+			}
+		})
+	}
+}

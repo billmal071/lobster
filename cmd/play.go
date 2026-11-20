@@ -154,14 +154,13 @@ func applyRefBase(cmd *cobra.Command, r playRef) {
 // fallbacks and reports exit 3 itself if they fail too, which is both later and
 // better informed.
 func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) error {
-	seasons, err := p.GetSeasons(r.ID)
-	usable := len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList)
-	partial := usable && !provider.IsCatalogueGap(err)
-	if (err != nil && !usable) || len(seasons) == 0 {
+	look := lookupPrimarySeasons(p, r.ID)
+	if look.kind != lookupListed {
 		// Same condition resolveAndPlay branches on. Let it do its job.
-		debugf("play: cannot validate season/episode against primary (err=%v, seasons=%d); deferring to the resolver", err, len(seasons))
+		debugf("play: cannot validate season/episode against primary (err=%v, seasons=%d); deferring to the resolver", look.err, len(look.seasons))
 		return nil
 	}
+	seasons := look.seasons
 
 	seasonID := ""
 	found := false
@@ -180,7 +179,7 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 		// VidNest's GetSeasons probes each season for streams and stops at the
 		// first it cannot reach, so a real, non-empty list is not proof the
 		// show ends there. `episodes` asks the chain before refusing
-		// (seasonAcrossHits), and if this gate refused on the primary's list
+		// (resolveSeason), and if this gate refused on the primary's list
 		// alone the two commands would contradict each other on one ref:
 		// `episodes --season 5` printing the season, `play --season 5`
 		// answering no_results and pointing the caller back at the command
@@ -205,36 +204,24 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 		// All of it happens only on a request the command used to refuse
 		// outright — the ordinary play, where the primary lists the season,
 		// still runs none.
-		scanned, _, _, ok := seasonAcrossHits(p, seasonRequest(r), seasonAnswer{
-			provider: p, id: r.ID, seasons: seasons, fromPrimary: true, partial: partial,
-			gapped: usable && !partial,
-		}, season)
-		if ok {
+		switch res := resolveSeason(p, seasonRequest(r), look, season); {
+		case res.verdict == seasonFound:
 			debugf("play: the primary's season list lacks %d but a chain hit has it; deferring to the resolver", season)
 			return nil
-		}
-		if scanned.partial {
-			debugf("play: season %d is absent only from season lists flagged incomplete; deferring to the resolver", season)
+		case res.verdict != seasonAbsent:
+			debugf("play: season %d is absent only from lookups that failed or lists flagged incomplete; deferring to the resolver", season)
 			return nil
+		default:
+			return emitErr("no_results", exitNoResults, "%v", seasonNotFound(res, season, r.Title))
 		}
-		if scanned.gapped {
-			return emitErr("no_results", exitNoResults, "%s does not carry season %d of %q",
-				strings.ToUpper(searchProviderBase(p)), season, r.Title)
-		}
-		// Formatted through errSeasonNotFound rather than inline, so this
-		// refusal and the one raised from inside the chain scan (search.go)
-		// cannot drift apart: a caller comparing the two messages is
-		// comparing one format string, not two that happen to match today.
-		return emitErr("no_results", exitNoResults, "%v",
-			errSeasonNotFound{season: season, title: r.Title})
 	}
 
 	eps, err := p.GetEpisodes(r.ID, seasonID)
 	// A list that is short only because the source lacks some episodes
 	// (provider.ErrNotCarried) is still a complete answer about what it has.
-	gapped := provider.IsCatalogueGap(err)
-	complete := len(eps) > 0 && gapped
-	if (err != nil && !complete) || len(eps) == 0 {
+	epsKind, epsGap := classifyList(len(eps), err)
+	gapped := epsGap == gapCatalogue
+	if epsKind != lookupListed || epsGap == gapShort {
 		debugf("play: cannot validate episode against primary (err=%v, episodes=%d); deferring to the resolver", err, len(eps))
 		return nil
 	}
@@ -380,6 +367,14 @@ func playTarget(title string, season, episode int) string {
 // answers the first and times out in the second flips the exit code on
 // identical input. An agent branching on "providers are down" versus "ask for
 // a different season" would branch wrongly at random.
+func seasonNotFound(res seasonResolution, season int, title string) errSeasonNotFound {
+	nf := errSeasonNotFound{season: season, title: title}
+	if res.gapSource != nil {
+		nf.source = strings.ToUpper(searchProviderBase(res.gapSource))
+	}
+	return nf
+}
+
 type errSeasonNotFound struct {
 	season int
 	title  string

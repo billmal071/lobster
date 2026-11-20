@@ -94,8 +94,8 @@ func TestProbeSeasonsOutcomes(t *testing.T) {
 			if (hit != nil) != c.wantHit {
 				t.Fatalf("hit = %v, want hit %v", hit, c.wantHit)
 			}
-			if hit != nil && hit.gapped != c.wantGapped {
-				t.Errorf("gapped = %v, want %v", hit.gapped, c.wantGapped)
+			if hit != nil && (hit.gap == gapCatalogue) != c.wantGapped {
+				t.Errorf("gapped = %v, want %v", hit.gap == gapCatalogue, c.wantGapped)
 			}
 			if failed != c.wantFailed {
 				t.Errorf("failed = %v, want %v", failed, c.wantFailed)
@@ -105,11 +105,11 @@ func TestProbeSeasonsOutcomes(t *testing.T) {
 }
 
 func TestSeasonAnswerAfterScan(t *testing.T) {
-	gappedPrimary := func() seasonAnswer {
-		return seasonAnswer{provider: &stubProvider{}, id: "p", seasons: seasonsOf(3), fromPrimary: true, gapped: true}
+	gappedPrimary := func() seasonLookup {
+		return seasonLookup{provider: &stubProvider{}, id: "p", kind: lookupListed, gap: gapCatalogue, seasons: seasonsOf(3)}
 	}
-	completePrimary := func() seasonAnswer {
-		return seasonAnswer{provider: &stubProvider{}, id: "p", seasons: seasonsOf(3), fromPrimary: true}
+	completePrimary := func() seasonLookup {
+		return seasonLookup{provider: &stubProvider{}, id: "p", kind: lookupListed, seasons: seasonsOf(3)}
 	}
 	down := &scriptedLookup{stubProvider: &stubProvider{}, searchErr: errBoom}
 	empty := &scriptedLookup{stubProvider: &stubProvider{}, searchErr: provider.ErrNoResults}
@@ -124,7 +124,7 @@ func TestSeasonAnswerAfterScan(t *testing.T) {
 
 	cases := []struct {
 		name        string
-		src         func() seasonAnswer
+		src         func() seasonLookup
 		chain       []provider.Provider
 		wantOK      bool
 		wantPartial bool
@@ -144,18 +144,18 @@ func TestSeasonAnswerAfterScan(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			chainOf(t, c.chain...)
-			got, _, _, ok := seasonAcrossHits(&stubProvider{}, resolver.Request{ID: "p", Title: "Show", MediaType: media.TV}, c.src(), 2)
-			if ok != c.wantOK {
-				t.Fatalf("ok = %v, want %v", ok, c.wantOK)
+			got := resolveSeason(&stubProvider{}, resolver.Request{ID: "p", Title: "Show", MediaType: media.TV}, c.src(), 2)
+			if ok := got.verdict == seasonFound; ok != c.wantOK {
+				t.Fatalf("verdict = %v, want found %v", got.verdict, c.wantOK)
 			}
-			if !ok && got.partial != c.wantPartial {
-				t.Errorf("partial = %v, want %v", got.partial, c.wantPartial)
+			if got.verdict != seasonFound && (got.verdict == seasonUndetermined) != c.wantPartial {
+				t.Errorf("verdict = %v, want undetermined %v", got.verdict, c.wantPartial)
 			}
 		})
 	}
 }
 
-func TestSeasonSourceKeepsAFailedScanWhenTheSeasonIsAbsent(t *testing.T) {
+func TestResolveSeasonKeepsAFailedScanWhenTheSeasonIsAbsent(t *testing.T) {
 	req := resolver.Request{ID: "p", Title: "Show", MediaType: media.TV}
 	listsThree := func() *scriptedLookup { return scripted(showResults("a"), seasonOutcome{seasons: seasonsOf(3)}) }
 	cases := []struct {
@@ -171,13 +171,12 @@ func TestSeasonSourceKeepsAFailedScanWhenTheSeasonIsAbsent(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			chainOf(t, listsThree(), c.other)
 			primary := &stubProvider{seasonsErr: errBoom}
-			src := seasonSource(primary, playRef{ID: "p", Title: "Show", Type: "tv"})
-			got, _, _, ok := seasonAcrossHits(primary, req, src, 2)
-			if ok {
+			got := resolveSeason(primary, req, lookupPrimarySeasons(primary, "p"), 2)
+			if got.verdict == seasonFound {
 				t.Fatal("season 2 must not be found")
 			}
-			if got.partial != c.wantPartial {
-				t.Errorf("partial = %v, want %v", got.partial, c.wantPartial)
+			if (got.verdict == seasonUndetermined) != c.wantPartial {
+				t.Errorf("verdict = %v, want undetermined %v", got.verdict, c.wantPartial)
 			}
 		})
 	}

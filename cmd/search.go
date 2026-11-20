@@ -236,12 +236,12 @@ func init() {
 
 // tuiEpisodeListFallback is tui.EpisodeListFallback: the chain's answer for a
 // season the TUI's own provider could not list.
-func tuiEpisodeListFallback(prov provider.Provider, item media.SearchResult, seasonNumber int) ([]media.Episode, error) {
+func tuiEpisodeListFallback(prov provider.Provider, item media.SearchResult, seasonNumber int) ([]media.Episode, bool, error) {
 	a := fallbackEpisodeList(prov, item, seasonNumber)
 	if a == nil {
-		return nil, fmt.Errorf("no fallback provider could list season %d of %q", seasonNumber, item.Title)
+		return nil, false, fmt.Errorf("no fallback provider could list season %d of %q", seasonNumber, item.Title)
 	}
-	return a.episodes, nil
+	return a.episodes, a.shortfall.gap, nil
 }
 
 // episodeIndex is the position of the episode numbered n, or -1. It is the
@@ -318,13 +318,13 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	if selected.Type == media.TV {
 		// Get seasons
 		stopSeasons := ui.StartSpinner("Fetching seasons...")
-		seasons, err := p.GetSeasons(selected.ID)
+		look := lookupPrimarySeasons(p, selected.ID)
 		stopSeasons()
-		seasonsPartial, seasonsGapped := false, false
-		if err != nil && len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
-			seasonsGapped = provider.IsCatalogueGap(err)
-			seasonsPartial = !seasonsGapped
-			warnf("%s could not list every season of %q, so the season list may be short: %v", providerLabel(p), title, err)
+		seasons, err := look.seasons, look.err
+		if look.kind == lookupListed {
+			if look.gap != gapNone {
+				warnf("%s could not list every season of %q, so the season list may be short: %v", providerLabel(p), title, err)
+			}
 			err = nil
 		}
 		if err != nil || len(seasons) == 0 {
@@ -359,9 +359,8 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// answers no_results there, because it has no list to print, while
 			// `play` goes ahead on a number the user supplied.
 			if season > 0 {
-				none := seasonAnswer{provider: chainPrimary, fromPrimary: true}
-				if alt, _, _, ok := seasonAcrossHits(chainPrimary, contentRequest(selected), none, season); !ok && alt.chainAnswered && !alt.partial {
-					return errSeasonNotFound{season: season, title: title}
+				if res := resolveSeason(chainPrimary, contentRequest(selected), look, season); res.verdict == seasonAbsent {
+					return seasonNotFound(res, season, title)
 				}
 			}
 			fbStream, fbErr := tryFallbackStream(chainPrimary, selected, season, episode)
@@ -424,26 +423,22 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				// episode-list recovery below follows, and for the same
 				// reason: the numbers offered are numbers it will honour. Only
 				// the provider-call key moves with it, never selected.ID.
-				alt, altSeasons, altSel, ok := seasonAcrossHits(
-					chainPrimary, contentRequest(selected),
-					seasonAnswer{provider: p, id: providerID, seasons: seasons, fromPrimary: true, partial: seasonsPartial, gapped: seasonsGapped},
-					season,
-				)
-				if !ok && alt.partial {
-					debugf("season %d is absent from a partial season list; trying the fallback chain by number", season)
+				res := resolveSeason(chainPrimary, contentRequest(selected), seasonLookup{
+					provider: p, id: providerID, kind: lookupListed, gap: look.gap, seasons: seasons,
+				}, season)
+				switch res.verdict {
+				case seasonFound:
+				case seasonAbsent:
+					return seasonNotFound(res, season, title)
+				default:
+					debugf("season %d is absent from a partial season list or a failed lookup; trying the fallback chain by number", season)
 					fbStream, fbErr := tryFallbackStream(chainPrimary, selected, season, episode)
 					if fbErr != nil {
 						return fbErr
 					}
 					return playStream(fbStream, title, selected, season, episode)
 				}
-				if !ok {
-					nf := errSeasonNotFound{season: season, title: title}
-					if alt.gapped {
-						nf.source = strings.ToUpper(searchProviderBase(p))
-					}
-					return nf
-				}
+				alt, altSeasons, altSel := res.answer, res.answer.seasons, res.season
 				debugf("season %d recovered from %T", altSel.Number, alt.provider)
 				p, providerID, seasons = alt.provider, alt.id, altSeasons
 				// The season came out of this very list, so the lookup cannot

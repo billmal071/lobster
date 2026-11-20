@@ -22,9 +22,9 @@ func (listlessProvider) GetEpisodes(string, string) ([]media.Episode, error) {
 func TestFetchEpisodesUsesTheFallbackWhenTheProviderCannotList(t *testing.T) {
 	prev := EpisodeListFallback
 	var askedSeason int
-	EpisodeListFallback = func(_ provider.Provider, _ media.SearchResult, seasonNumber int) ([]media.Episode, error) {
+	EpisodeListFallback = func(_ provider.Provider, _ media.SearchResult, seasonNumber int) ([]media.Episode, bool, error) {
 		askedSeason = seasonNumber
-		return []media.Episode{{ID: "f1e1", Number: 1}, {ID: "f1e2", Number: 2}}, nil
+		return []media.Episode{{ID: "f1e1", Number: 1}, {ID: "f1e2", Number: 2}}, false, nil
 	}
 	t.Cleanup(func() { EpisodeListFallback = prev })
 

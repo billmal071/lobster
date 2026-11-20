@@ -130,7 +130,7 @@ func yearsAgree(a, b string) bool {
 //
 // The YTS ID is looked up by title and year rather than assumed, because IDs
 // are not portable: YTS's are "yts/<numeric>" and it rejects anything else
-// (movieByID). The lookup borrows seasonSource's shape (cmd/episodes.go) —
+// (movieByID). The lookup borrows resolveSeason's shape (cmd/episodes.go) —
 // rank with resolver.Candidates, then admit only on resolver.Matches, under a
 // context deadline. Matches is the load-bearing half: Candidates applies no
 // score threshold, so without it the first film YTS returned for the query

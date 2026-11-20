@@ -283,10 +283,12 @@ func (d *downloadDialog) handleRangeInput(msg tea.KeyMsg) (bool, tea.Cmd) {
 // tui package must not reach the chain directly, because building it needs the
 // configured primary and the health store.
 //
+// The bool reports a list that is short because the source lacks episodes.
+//
 // It exists because a provider can enumerate seasons and not episodes —
 // MovieBox and VidNest both do — which left this dialog showing an error where
 // another provider had the list.
-var EpisodeListFallback func(prov provider.Provider, item media.SearchResult, seasonNumber int) ([]media.Episode, error)
+var EpisodeListFallback func(prov provider.Provider, item media.SearchResult, seasonNumber int) ([]media.Episode, bool, error)
 
 func (d *downloadDialog) fetchEpisodes(seasonIdx int) tea.Cmd {
 	prov := d.provider
@@ -299,8 +301,8 @@ func (d *downloadDialog) fetchEpisodes(seasonIdx int) tea.Cmd {
 			err, partial = nil, true
 		}
 		if (err != nil || len(episodes) == 0) && EpisodeListFallback != nil {
-			if eps, ferr := EpisodeListFallback(prov, item, season.Number); ferr == nil && len(eps) > 0 {
-				return dlEpisodesMsg{episodes: eps}
+			if eps, fpartial, ferr := EpisodeListFallback(prov, item, season.Number); ferr == nil && len(eps) > 0 {
+				return dlEpisodesMsg{episodes: eps, partial: fpartial}
 			}
 		}
 		if err != nil {
