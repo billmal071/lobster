@@ -116,3 +116,19 @@ func TestParseEpisodeRangeSelectsListedEpisodesByNumber(t *testing.T) {
 		t.Fatalf("5 = %v, %v; want episode 5 and not the first listed", got, err)
 	}
 }
+
+type gappedSeasonsProvider struct{ provider.Provider }
+
+func (gappedSeasonsProvider) GetSeasons(string) ([]media.Season, error) {
+	return []media.Season{{ID: "2", Number: 2}, {ID: "4", Number: 4}},
+		fmt.Errorf("%w: %w", provider.ErrIncompleteEpisodeList, provider.ErrNotCarried)
+}
+
+func TestStartKeepsSeasonsListedBesideACatalogueGap(t *testing.T) {
+	d := newDownloadDialog()
+	cmd := d.start(media.SearchResult{ID: "eztv/1", Type: media.TV}, gappedSeasonsProvider{}, nil, "")
+	d.Update(cmd())
+	if d.err != nil || len(d.seasons) != 2 {
+		t.Fatalf("err = %v, seasons = %d; want both listed seasons offered and no error", d.err, len(d.seasons))
+	}
+}
