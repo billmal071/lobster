@@ -617,3 +617,32 @@ func TestResolveRowRefusesTwoDistinctWorksWithTheExactYear(t *testing.T) {
 		t.Fatalf("ResolveRow = %+v, want Unresolved when two works share title and year", got)
 	}
 }
+
+type tmdbIDProvider struct {
+	*fakeInner
+	searches int
+}
+
+func (*tmdbIDProvider) MintsTMDBShapedIDs() bool { return true }
+
+func (p *tmdbIDProvider) Search(string) ([]media.SearchResult, error) {
+	p.searches++
+	return nil, errors.New("search down")
+}
+
+func TestResolveRowKeepsTheDirectTMDBIDForAProviderWithTMDBShapedIDs(t *testing.T) {
+	inner := &tmdbIDProvider{fakeInner: &fakeInner{}}
+	p := Wrap(inner, nil, General)
+	row := media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, FromCatalogue: true}
+
+	got := p.ResolveRow(row)
+	if got.Unresolved || got.ProviderID != "tv/37854" {
+		t.Fatalf("ResolveRow = %+v, want the direct TMDB ID and not Unresolved", got)
+	}
+	if inner.searches != 0 {
+		t.Fatalf("provider searched %d times; a provider with TMDB-shaped IDs needs no title match", inner.searches)
+	}
+	if !MintsTMDBShapedIDs(inner) || MintsTMDBShapedIDs(&showProvider{}) {
+		t.Fatal("MintsTMDBShapedIDs must be true only for a provider that declares it")
+	}
+}

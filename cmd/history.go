@@ -85,10 +85,7 @@ var (
 )
 
 func catalogueEntry(p provider.Provider, e media.HistoryEntry) bool {
-	if n, ok := p.(interface{ MintsTMDBShapedIDs() bool }); ok && n.MintsTMDBShapedIDs() {
-		return false
-	}
-	return catalog.IsID(e.ID)
+	return !catalog.MintsTMDBShapedIDs(p) && catalog.IsID(e.ID)
 }
 
 func resumeSaved(p provider.Provider, selected media.HistoryEntry, results []media.SearchResult) error {

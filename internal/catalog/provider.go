@@ -133,7 +133,15 @@ type resolveKey struct {
 	mt              media.MediaType
 }
 
+func MintsTMDBShapedIDs(p provider.Provider) bool {
+	m, ok := p.(interface{ MintsTMDBShapedIDs() bool })
+	return ok && m.MintsTMDBShapedIDs()
+}
+
 func (p *Provider) resolve(row media.SearchResult) (string, error) {
+	if MintsTMDBShapedIDs(p.Provider) {
+		return row.ID, nil
+	}
 	key := resolveKey{row.ID, titlekey.Normalize(row.Title), row.Year, row.Type}
 	p.mu.Lock()
 	if r, ok := p.resolved[key]; ok {

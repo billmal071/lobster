@@ -33,6 +33,9 @@ const (
 )
 
 var (
+	errTooManyRedirects = errors.New("too many redirects from the TMDB API")
+	errRedirectAway     = errors.New("redirect away from the TMDB API host refused")
+
 	ErrKeyRejected = errors.New("tmdb_api_key rejected")
 	ErrRateLimited = errors.New("TMDB rate limit reached")
 
@@ -71,10 +74,10 @@ func NewWithBase(key, base string, hc *http.Client) *Client {
 	cp.Timeout = requestTimeout
 	cp.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= maxRedirects {
-			return errors.New("too many redirects from the TMDB API")
+			return errTooManyRedirects
 		}
 		if req.URL.Host != via[0].URL.Host || req.URL.Scheme != via[0].URL.Scheme {
-			return errors.New("redirect away from the TMDB API host refused")
+			return errRedirectAway
 		}
 		return nil
 	}
@@ -110,7 +113,7 @@ func (c *Client) get(path string, q url.Values, check func([]byte) error) ([]byt
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("TMDB request failed: %w", httputil.CauseWithoutURL(err))
+		return nil, c.transportError("TMDB request failed", err)
 	}
 	defer resp.Body.Close()
 
@@ -124,7 +127,7 @@ func (c *Client) get(path string, q url.Values, check func([]byte) error) ([]byt
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
-		return nil, fmt.Errorf("reading TMDB response: %w", httputil.CauseWithoutURL(err))
+		return nil, c.transportError("reading TMDB response", err)
 	}
 	if len(body) > maxBody {
 		return nil, errors.New("TMDB response too large")
@@ -158,6 +161,19 @@ func (c *Client) get(path string, q url.Values, check func([]byte) error) ([]byt
 	c.cache[cacheKey] = cacheEntry{body: body, at: now}
 	c.mu.Unlock()
 	return body, nil
+}
+
+func (c *Client) transportError(what string, err error) error {
+	for _, known := range []error{errTooManyRedirects, errRedirectAway} {
+		if errors.Is(err, known) {
+			return fmt.Errorf("%s: %w", what, known)
+		}
+	}
+	cause := httputil.CauseWithoutURL(err).Error()
+	if strings.Contains(cause, c.key) || strings.Contains(cause, url.QueryEscape(c.key)) || strings.Contains(cause, "://") {
+		return errors.New(what + ": details withheld")
+	}
+	return errors.New(what + ": " + cause)
 }
 
 func (c *Client) images() string {

@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -121,3 +123,55 @@ func TestCacheKeyExcludesSecret(t *testing.T) {
 		}
 	}
 }
+
+type failingBody struct{ err error }
+
+func (b failingBody) Read([]byte) (int, error) { return 0, b.err }
+func (b failingBody) Close() error             { return nil }
+
+func TestNoClientErrorOrNoticeCarriesTheKey(t *testing.T) {
+	keyed := "https://api.themoviedb.org/3/trending/movie/week?api_key=" + testKey
+	cases := map[string]func(*http.Request) (*http.Response, error){
+		"malformed redirect": func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": {"https://api.themoviedb.org/%zz?api_key=" + testKey}},
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    r,
+			}, nil
+		},
+		"transport error quoting the url": func(r *http.Request) (*http.Response, error) {
+			return nil, errors.New("dial failed for " + keyed)
+		},
+		"body read error quoting the url": func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Header: http.Header{}, Request: r,
+				Body: failingBody{errors.New("read " + keyed + ": reset")}}, nil
+		},
+	}
+	for name, respond := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := New(testKey)
+			c.http.Transport = roundTripFunc(respond)
+			calls := map[string]func() error{
+				"list":    func() error { _, err := c.Trending(media.Movie); return err },
+				"details": func() error { _, err := c.Details("movie/1"); return err },
+				"season":  func() error { _, err := c.Season("tv/1", 1); return err },
+			}
+			for call, do := range calls {
+				err := do()
+				if err == nil {
+					t.Fatalf("%s: no error", call)
+				}
+				for _, text := range []string{err.Error(), fmt.Sprintf("%+v", err), fallbackNotice(err)} {
+					if strings.Contains(text, testKey) || strings.Contains(text, "api_key") {
+						t.Errorf("%s: %q carries the key or the keyed URL", call, text)
+					}
+				}
+			}
+		})
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
