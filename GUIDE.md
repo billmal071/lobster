@@ -219,12 +219,17 @@ plays to its end, the next one in the season starts, and after a season's last
 episode the next season's first. It stops at the end of the series, when an
 episode fails to resolve, and whenever you close the player before its last ten seconds.
 It also stops when the player cannot report a position (only mpv does), because
-an early quit would be indistinguishable from an ending. It does nothing for a
+an early quit would be indistinguishable from an ending. An episode only counts
+as finished when the player reports both a position and a duration; a position
+without a duration never does. It does nothing for a
 movie, and does not read `auto_next`, which only controls the attached countdown.
-It applies whenever the show's seasons or episodes can be listed, including by a
-fallback provider. Only a title that resolves as a single stream, with no episode
-list from any source, plays the one episode, and so does a detached play with
-`--autoplay=false` (nothing can answer the post-episode menu there).
+It needs the primary provider to list the show's seasons. When the primary lists
+seasons but not a season's episodes, a fallback provider's episode list is used
+instead, and autoplay carries on from it. When the primary cannot list seasons at
+all, the fallback chain resolves one stream and plays it with no playlist
+session, so there is no autoplay: that play is the one episode you asked for, and
+so is a detached play with `--autoplay=false` (nothing can answer the
+post-episode menu there).
 
 `--download` is not supported by `play` — batch downloading is a prompt-driven
 path. Use the interactive CLI for that.
