@@ -53,7 +53,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	primary := agentProvider()
 	src := seasonSource(primary, r)
 	if len(src.seasons) == 0 {
-		if src.err != nil || src.scanFailed {
+		if (src.err != nil && !lacksTheWork(src.err, 0)) || src.scanFailed {
 			// Name both halves of what happened. seasonSource only ever puts
 			// a non-nil err here on its `len(hits) == 0` return, so reaching
 			// this line means the primary failed AND the whole fallback chain

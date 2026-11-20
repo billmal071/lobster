@@ -225,6 +225,8 @@ func TestEpisodesSeasonLookupTruthTable(t *testing.T) {
 		{"primary lists nothing, every fallback answers ErrNoResults", &stubProvider{}, func() []provider.Provider { return []provider.Provider{empty()} }, "no_results"},
 		{"primary lists nothing, one fallback failed and one answers empty", &stubProvider{}, func() []provider.Provider { return []provider.Provider{empty(), down()} }, "providers_failed"},
 		{"primary errors, fallback lookup failed", &stubProvider{seasonsErr: errBoom}, func() []provider.Provider { return []provider.Provider{down()} }, "providers_failed"},
+		{"primary answers ErrNotCarried, every fallback answers ErrNoResults", &stubProvider{seasonsErr: provider.ErrNotCarried}, func() []provider.Provider { return []provider.Provider{empty()} }, "no_results"},
+		{"primary answers ErrNotCarried, a fallback lookup failed", &stubProvider{seasonsErr: provider.ErrNotCarried}, func() []provider.Provider { return []provider.Provider{down()} }, "providers_failed"},
 		{"complete non-empty primary omits the season, fallback down", &stubProvider{seasons: seasonsOf(1, 3)}, func() []provider.Provider { return []provider.Provider{down()} }, "no_results"},
 	}
 	for _, c := range cases {
