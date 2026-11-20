@@ -53,7 +53,6 @@ func TestDecodeListEdgeCases(t *testing.T) {
 		want []string
 	}{
 		{"empty results", `{"results":[]}`, nil},
-		{"null results", `{"results":null}`, nil},
 		{"missing poster and year", `{"results":[{"id":5,"title":"No Art"}]}`, []string{"movie/5"}},
 		{"malformed year kept empty", `{"results":[{"id":5,"title":"X","release_date":"soon"}]}`, []string{"movie/5"}},
 		{"person row dropped", `{"results":[{"id":1,"media_type":"person","name":"Someone"},{"id":2,"media_type":"movie","title":"Real"}]}`, []string{"movie/2"}},
@@ -88,7 +87,7 @@ func TestDecodeListEdgeCases(t *testing.T) {
 }
 
 func TestDecodeListMalformedJSON(t *testing.T) {
-	for _, body := range []string{``, `not json`, `{"results":`, `[1,2]`, `{}`, `null`, `{"results":{}}`, `{"results":"x"}`} {
+	for _, body := range []string{``, `not json`, `{"results":`, `[1,2]`, `{}`, `null`, `{"results":{}}`, `{"results":"x"}`, `{"results":null}`} {
 		if _, err := decodeList([]byte(body), media.Movie, nil); err == nil {
 			t.Errorf("decodeList(%q) = nil error, want error", body)
 		}
@@ -247,7 +246,7 @@ func TestDetailsUseExternalIDs(t *testing.T) {
 	queries := make(chan string, 1)
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		queries <- r.URL.Path + "?" + r.URL.RawQuery
-		io.WriteString(w, `{"overview":"A hacker.","vote_average":8.2,"runtime":136,"release_date":"1999-03-30",
+		io.WriteString(w, `{"id":603,"overview":"A hacker.","vote_average":8.2,"runtime":136,"release_date":"1999-03-30",
 			"genres":[{"name":"Action"},{"name":"Sci-Fi"}],"production_countries":[{"name":"United States of America"}],
 			"external_ids":{"imdb_id":"tt0133093"}}`)
 	})
@@ -426,7 +425,7 @@ func TestMalformedDetailAndSeasonBodiesAreNotCached(t *testing.T) {
 		good string
 		do   func(c *Client) error
 	}{
-		{"details", `{"overview":17}`, `{"overview":"ok"}`, func(c *Client) error { _, err := c.Details("movie/603"); return err }},
+		{"details", `{"overview":17}`, `{"id":603,"overview":"ok"}`, func(c *Client) error { _, err := c.Details("movie/603"); return err }},
 		{"season", `{"episodes":"unavailable"}`, `{"episodes":[{"episode_number":1,"name":"Pilot"}]}`, func(c *Client) error { _, err := c.Season("tv/1399", 1); return err }},
 	}
 	for _, tc := range cases {
@@ -460,5 +459,39 @@ func TestRedirectLoopStopsAtTenHops(t *testing.T) {
 	}
 	if n := hits.Load(); n > 10 {
 		t.Fatalf("server saw %d requests, want at most 10", n)
+	}
+}
+
+func TestTMDBErrorAndEmptyBodiesAreNotCached(t *testing.T) {
+	cases := []struct {
+		name string
+		bad  string
+		good string
+		do   func(c *Client) error
+	}{
+		{"list null", `{"results":null}`, `{"results":[{"id":603,"title":"M"}]}`, func(c *Client) error { _, err := c.Trending(media.Movie); return err }},
+		{"details empty", `{}`, `{"id":603,"overview":"ok"}`, func(c *Client) error { _, err := c.Details("movie/603"); return err }},
+		{"details error object", `{"status_code":34,"status_message":"The resource you requested could not be found.","success":false}`, `{"id":603,"overview":"ok"}`, func(c *Client) error { _, err := c.Details("movie/603"); return err }},
+		{"season empty", `{}`, `{"episodes":[{"episode_number":1,"name":"Pilot"}]}`, func(c *Client) error { _, err := c.Season("tv/1399", 1); return err }},
+		{"season error object", `{"status_code":34,"status_message":"not found"}`, `{"episodes":[{"episode_number":1,"name":"Pilot"}]}`, func(c *Client) error { _, err := c.Season("tv/1399", 1); return err }},
+		{"season null episodes", `{"episodes":null}`, `{"episodes":[{"episode_number":1,"name":"Pilot"}]}`, func(c *Client) error { _, err := c.Season("tv/1399", 1); return err }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == 1 {
+					io.WriteString(w, tc.bad)
+					return
+				}
+				io.WriteString(w, tc.good)
+			})
+			if err := tc.do(c); err == nil {
+				t.Fatal("body decoded without error")
+			}
+			if err := tc.do(c); err != nil {
+				t.Fatalf("retry = %v; want the corrected body, not a cached bad one", err)
+			}
+		})
 	}
 }

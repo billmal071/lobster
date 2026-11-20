@@ -72,13 +72,21 @@ func historyRun(cmd *cobra.Command, args []string) error {
 	// Re-resolve and play from the saved position
 	p := newProvider()
 
-	// Search for the title to get fresh results
 	results, err := historySearch(p, selected)
 	if err != nil {
 		return fmt.Errorf("searching for %q: %w", selected.Title, err)
 	}
+	return resumeSaved(p, selected, results)
+}
 
-	// Find matching result by ID
+func catalogueEntry(p provider.Provider, e media.HistoryEntry) bool {
+	if _, mintsOwnTMDBShapedIDs := p.(*provider.TBCPL); mintsOwnTMDBShapedIDs {
+		return false
+	}
+	return catalog.IsID(e.ID)
+}
+
+func resumeSaved(p provider.Provider, selected media.HistoryEntry, results []media.SearchResult) error {
 	for _, r := range results {
 		if r.ID == selected.ID {
 			// No flagContinue override here: resuming is the registered
@@ -90,11 +98,7 @@ func historyRun(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if row, ok := resumeRow(p, selected); ok {
-		return resolveAndPlay(p, row, selected.Season, selected.Episode)
-	}
-
-	if catalog.IsID(selected.ID) {
+	if catalogueEntry(p, selected) {
 		return resumeViaPicker(p, selected)
 	}
 
@@ -104,7 +108,7 @@ func historyRun(cmd *cobra.Command, args []string) error {
 
 func historySearch(p provider.Provider, e media.HistoryEntry) ([]media.SearchResult, error) {
 	results, err := p.Search(e.Title)
-	if err != nil && catalog.IsID(e.ID) && errors.Is(err, provider.ErrNoResults) {
+	if err != nil && catalogueEntry(p, e) && errors.Is(err, provider.ErrNoResults) {
 		return nil, nil
 	}
 	return results, err
@@ -132,12 +136,4 @@ func resumeViaPicker(p provider.Provider, e media.HistoryEntry) error {
 		row.ID, row.ProviderID, row.Title, row.FromCatalogue = e.ID, rows[idx].ID, e.Title, true
 	}
 	return resolveAndPlay(p, row, e.Season, e.Episode)
-}
-
-func resumeRow(p provider.Provider, e media.HistoryEntry) (media.SearchResult, bool) {
-	if !catalog.IsID(e.ID) {
-		return media.SearchResult{}, false
-	}
-	row := resolveCatalogueRow(p, media.SearchResult{ID: e.ID, Title: e.Title, Type: e.Type, FromCatalogue: true})
-	return row, !row.Unresolved
 }

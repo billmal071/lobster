@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"lobster/internal/catalog"
 	"testing"
 
 	"lobster/internal/history"
@@ -107,17 +108,6 @@ func TestCatalogueMovieAsksTheProviderForItsOwnID(t *testing.T) {
 	}
 }
 
-func TestResumeRowResolvesACatalogueHistoryEntryForTheProvider(t *testing.T) {
-	p := &tvSearchProvider{}
-	got, ok := resumeRow(p, media.HistoryEntry{ID: "tv/37854", Title: "One Piece", Type: media.TV})
-	if !ok || got.ID != "tv/37854" || got.ProviderID != "tv/one-piece-100" {
-		t.Fatalf("resumeRow = %+v, %v", got, ok)
-	}
-	if _, ok := resumeRow(p, media.HistoryEntry{ID: "tv/other-1", Title: "One Piece", Type: media.TV}); ok {
-		t.Fatal("a non-catalogue entry the search does not list must not resolve")
-	}
-}
-
 type twinSearchProvider struct {
 	listProvider
 }
@@ -127,12 +117,6 @@ func (twinSearchProvider) Search(string) ([]media.SearchResult, error) {
 		{ID: "tv/utopia-2013", Title: "Utopia", Type: media.TV, Year: "2013"},
 		{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"},
 	}, nil
-}
-
-func TestResumeRowLeavesTwoSameTitleWorksToTheUser(t *testing.T) {
-	if _, ok := resumeRow(&twinSearchProvider{}, media.HistoryEntry{ID: "tv/1", Title: "Utopia", Type: media.TV}); ok {
-		t.Fatal("resumeRow picked one of two same-title works the history entry cannot tell apart")
-	}
 }
 
 type twinPlayProvider struct {
@@ -243,3 +227,56 @@ func TestHistorySearchTreatsNoResultsAsEmptyForCatalogueEntriesOnly(t *testing.T
 		}
 	}
 }
+
+func TestEpisodeListFallbackExcludesTheUnwrappedPrimary(t *testing.T) {
+	hostileEnv(t)
+	rec := withRecordingFallbackChain(t)
+	primary := &stubProvider{}
+	wrapped := catalog.Wrap(primary, nil, catalog.General)
+
+	_, _ = tuiEpisodeListFallback(wrapped, media.SearchResult{ID: "tv/37854", Title: "Show", Type: media.TV}, 1)
+
+	seen := rec.seen()
+	if len(seen) == 0 || seen[0] != provider.Provider(primary) {
+		t.Fatalf("fallback chain built for %T, want the unwrapped primary", seen)
+	}
+}
+
+func TestCatalogueEntryIsDecidedByTheProviderNotTheIDShape(t *testing.T) {
+	tmdbShaped := media.HistoryEntry{ID: "movie/550", Title: "Fight Club", Type: media.Movie}
+	if !catalogueEntry(&stubProvider{}, tmdbShaped) {
+		t.Error("a TMDB-shaped ID under a provider with its own IDs is a catalogue entry")
+	}
+	if catalogueEntry(provider.NewTBCPL("tbcpl"), tmdbShaped) {
+		t.Error("TBCPL mints movie/<n> IDs itself; its history entries are native")
+	}
+	if catalogueEntry(&stubProvider{}, media.HistoryEntry{ID: "movie/the-matrix-7"}) {
+		t.Error("a slug ID is never a catalogue entry")
+	}
+}
+
+func TestResumeSavedCatalogueEntryAlwaysAsksWhichWork(t *testing.T) {
+	url := catalogueHarness(t)
+	withFallbackChain(t, newListingChainProvider(url))
+	offered := recordSelections(t, 0)
+	inner := &idRecordingProvider{stubProvider: &stubProvider{
+		seasons:          []media.Season{{ID: "s1", Number: 1}},
+		episodesBySeason: map[string][]media.Episode{"s1": twentyTwoEpisodes()},
+	}}
+	only := []media.SearchResult{{ID: "tv/utopia-2020", Title: "Some Show", Type: media.TV, Year: "2020"}}
+	saved := media.HistoryEntry{ID: "tv/1", Title: "Some Show", Type: media.TV, Season: 1, Episode: 22}
+
+	if err := resumeSaved(singleResultPlayProvider{inner, only}, saved, only); err != nil {
+		t.Fatalf("resumeSaved = %v", err)
+	}
+	if len(*offered) != 1 {
+		t.Fatalf("picker shown %d times; a lone same-title work must still be confirmed, the entry has no year", len(*offered))
+	}
+}
+
+type singleResultPlayProvider struct {
+	*idRecordingProvider
+	rows []media.SearchResult
+}
+
+func (p singleResultPlayProvider) Search(string) ([]media.SearchResult, error) { return p.rows, nil }

@@ -190,8 +190,8 @@ func openBatchStream(chainPrimary provider.Provider, selected media.SearchResult
 // built by excluding its primary, which would otherwise skip the one source
 // the user named and the one proven to carry the episode list.
 func resolveBatchStream(chainPrimary provider.Provider, selected media.SearchResult, ep media.Episode, seasonNum int) (*media.Stream, error) {
-	if sp, ok := chainPrimary.(provider.StreamProvider); ok && cfg != nil && cfg.APIURL == "" && config.IsTorrentBase(cfg.Base) {
-		stream, err := sp.Watch(selected.ID, ep.ID, "", cfgQuality())
+	if sp, ok := chainPrimary.(provider.StreamProvider); ok && cfg != nil && cfg.APIURL == "" && config.IsTorrentBase(cfg.Base) && !selected.Unresolved {
+		stream, err := sp.Watch(selected.CallID(), ep.ID, "", cfgQuality())
 		if err == nil && stream != nil && stream.URL != "" {
 			return stream, nil
 		}

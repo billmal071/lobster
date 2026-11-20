@@ -256,6 +256,8 @@ func IsID(id string) bool {
 }
 
 type detailBody struct {
+	ID             int     `json:"id"`
+	StatusCode     int     `json:"status_code"`
 	Overview       string  `json:"overview"`
 	VoteAverage    float64 `json:"vote_average"`
 	Runtime        int     `json:"runtime"`
@@ -274,7 +276,13 @@ type detailBody struct {
 	} `json:"external_ids"`
 }
 
-func checkDetail(body []byte) error { return json.Unmarshal(body, &detailBody{}) }
+func checkDetail(body []byte) error {
+	var d detailBody
+	if err := json.Unmarshal(body, &d); err != nil || d.StatusCode != 0 || d.ID <= 0 {
+		return errors.New("decoding TMDB details failed")
+	}
+	return nil
+}
 
 // Details fetches metadata for a movie/<n> or tv/<n> id.
 func (c *Client) Details(id string) (*Detail, error) {
@@ -320,13 +328,20 @@ func (c *Client) Details(id string) (*Detail, error) {
 }
 
 type seasonBody struct {
-	Episodes []struct {
+	StatusCode int `json:"status_code"`
+	Episodes   []struct {
 		Number int    `json:"episode_number"`
 		Name   string `json:"name"`
 	} `json:"episodes"`
 }
 
-func checkSeason(body []byte) error { return json.Unmarshal(body, &seasonBody{}) }
+func checkSeason(body []byte) error {
+	var sb seasonBody
+	if err := json.Unmarshal(body, &sb); err != nil || sb.StatusCode != 0 || sb.Episodes == nil {
+		return errors.New("decoding TMDB season failed")
+	}
+	return nil
+}
 
 // Season lists a TV season's episodes.
 func (c *Client) Season(id string, season int) ([]media.Episode, error) {
@@ -359,7 +374,7 @@ func listRows(body []byte) ([]json.RawMessage, error) {
 	var env struct {
 		Results json.RawMessage `json:"results"`
 	}
-	if err := json.Unmarshal(body, &env); err != nil || len(env.Results) == 0 {
+	if err := json.Unmarshal(body, &env); err != nil || len(env.Results) == 0 || string(env.Results) == "null" {
 		return nil, errors.New("decoding TMDB list failed")
 	}
 	var rows []json.RawMessage

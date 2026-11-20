@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"lobster/internal/catalog"
 	"os"
 	"strings"
 	"time"
@@ -237,6 +238,9 @@ func init() {
 // tuiEpisodeListFallback is tui.EpisodeListFallback: the chain's answer for a
 // season the TUI's own provider could not list.
 func tuiEpisodeListFallback(prov provider.Provider, item media.SearchResult, seasonNumber int) ([]media.Episode, error) {
+	if w, ok := prov.(*catalog.Provider); ok {
+		prov = w.Unwrap()
+	}
 	a := fallbackEpisodeList(prov, item, seasonNumber)
 	if a == nil {
 		return nil, fmt.Errorf("no fallback provider could list season %d of %q", seasonNumber, item.Title)

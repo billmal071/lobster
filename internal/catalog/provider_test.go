@@ -42,7 +42,7 @@ func okServer(t *testing.T) *Client {
 		case r.URL.Path == "/discover/tv":
 			io.WriteString(w, `{"results":[{"id":37854,"name":"One Piece","first_air_date":"1999-10-20"}]}`)
 		case strings.HasPrefix(r.URL.Path, "/movie/603"):
-			io.WriteString(w, `{"overview":"A hacker.","external_ids":{"imdb_id":"tt0133093"}}`)
+			io.WriteString(w, `{"id":603,"overview":"A hacker.","external_ids":{"imdb_id":"tt0133093"}}`)
 		default:
 			io.WriteString(w, `{"results":[{"id":603,"title":"The Matrix","release_date":"1999-03-30"}]}`)
 		}
