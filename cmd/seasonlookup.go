@@ -59,9 +59,9 @@ func classifySeasonLookup(seasons []media.Season, err error) seasonLookup {
 type seasonVerdict int
 
 const (
-	seasonFound seasonVerdict = iota
+	seasonUndetermined seasonVerdict = iota
+	seasonFound
 	seasonAbsent
-	seasonUndetermined
 	seasonLookupFailed
 	seasonNoList
 )

@@ -104,3 +104,15 @@ func TestFetchEpisodesCarriesAFallbackListsGapStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestParseEpisodeRangeSelectsListedEpisodesByNumber(t *testing.T) {
+	listed := []media.Episode{{ID: "2x2", Number: 2}, {ID: "2x5", Number: 5}}
+	got, err := parseEpisodeRange("2-5", listed)
+	if err != nil || len(got) != 2 || got[0].ID != "2x2" || got[1].ID != "2x5" {
+		t.Fatalf("2-5 over episodes 2 and 5 = %v, %v; want exactly those two", got, err)
+	}
+	got, err = parseEpisodeRange("5", listed)
+	if err != nil || len(got) != 1 || got[0].ID != "2x5" {
+		t.Fatalf("5 = %v, %v; want episode 5 and not the first listed", got, err)
+	}
+}
