@@ -450,7 +450,7 @@ func retryStartPos(current float64, res player.PlayResult) float64 {
 	if res.PositionUnknown {
 		return current
 	}
-	return resumePosition(media.HistoryEntry{Position: res.Position, Duration: res.Duration})
+	return max(res.Position, 0)
 }
 
 // subtitleDownload is a seam so tests can exercise the staging-directory

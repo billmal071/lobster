@@ -175,8 +175,12 @@ stops after that one episode, even with mpv. Pass it when the user asked for one
 omit it only when they asked to watch on from there ("start The Bear from season
 2", "binge it"). Autoplay continues only with mpv, which reports when an episode
 ends; vlc, iina and celluloid stop after the one episode either way. An episode
-counts as finished when mpv closes within its last ten seconds, so quitting near
-the end still starts the next episode; closing earlier stops the run. A season
+counts as finished only when mpv reports both a playback position and a known
+duration and closes within the last ten seconds (the last tenth of the runtime
+for an episode shorter than 100 seconds), so quitting near the end still starts
+the next episode; closing earlier stops the run. When mpv reports no position or
+no duration the episode never counts as finished and the run stops there, even
+if it played to the end, so autoplay is not guaranteed. A season
 whose episode list the provider marks as possibly short stops after its last
 measured episode instead of moving on to the next season.
 

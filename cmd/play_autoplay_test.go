@@ -177,6 +177,13 @@ func TestPlayFinished(t *testing.T) {
 		{"zero position, short duration", player.PlayResult{Position: 0, Duration: 5}, false},
 		{"negative position, short duration", player.PlayResult{Position: -3, Duration: 5}, false},
 		{"untracked player", player.PlayResult{PositionUnknown: true, PositionUntracked: true}, false},
+		{"ten seconds left of a long episode", player.PlayResult{Position: 1430, Duration: 1440}, true},
+		{"eleven seconds left of a long episode", player.PlayResult{Position: 1429, Duration: 1440}, false},
+		{"short episode quit after one second", player.PlayResult{Position: 1, Duration: 8}, false},
+		{"short episode ran to the end", player.PlayResult{Position: 8, Duration: 8}, true},
+		{"one-minute episode quit eight seconds early", player.PlayResult{Position: 52, Duration: 60}, false},
+		{"one-minute episode quit five seconds early", player.PlayResult{Position: 55, Duration: 60}, true},
+		{"position past the reported duration", player.PlayResult{Position: 9, Duration: 8}, true},
 	}
 	for _, c := range cases {
 		if got := playFinished(c.res); got != c.want {
@@ -455,7 +462,10 @@ func TestRetryStartPosDistinguishesMeasuredZeroFromNoMeasurement(t *testing.T) {
 		{"measured zero resets the offset", 600, player.PlayResult{Position: 0, Duration: 5400}, 0},
 		{"no measurement keeps the offset", 600, player.PlayResult{PositionUnknown: true}, 600},
 		{"untracked player keeps the offset", 600, player.PlayResult{PositionUnknown: true, PositionUntracked: true}, 600},
-		{"measured position at the end starts over", 600, player.PlayResult{Position: 5395, Duration: 5400}, 0},
+		{"measured position near the end is kept", 600, player.PlayResult{Position: 5395, Duration: 5400}, 5395},
+		{"measured position at the end is kept", 600, player.PlayResult{Position: 5400, Duration: 5400}, 5400},
+		{"measured position without a duration is kept", 600, player.PlayResult{Position: 900}, 900},
+		{"negative measured position clamps to zero", 600, player.PlayResult{Position: -3, Duration: 5400}, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

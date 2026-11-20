@@ -217,11 +217,11 @@ after the episode you asked for. This changed: scripts and agents that call
 `play --detach` on a series) makes `play` carry on by itself: when an episode
 plays to its end, the next one in the season starts, and after a season's last
 episode the next season's first. It stops at the end of the series (or of a season whose list may be incomplete), when an
-episode fails to resolve, and whenever you close the player before its last ten seconds.
+episode fails to resolve, and whenever you close the player before its last ten seconds (the last tenth of the runtime for an episode shorter than 100 seconds).
 It also stops when the player cannot report a position (only mpv does), because
 an early quit would be indistinguishable from an ending. An episode only counts
 as finished when the player reports both a position and a duration; a position
-without a duration never does. It does nothing for a
+without a duration never does, so the run stops there even if the episode played to its end. It does nothing for a
 movie, and does not read `auto_next`, which only controls the attached countdown.
 It needs a playlist session, which exists only when the play resolves a season and an episode list. When the primary lists
 seasons but not a season's episodes, a fallback provider's episode list is used

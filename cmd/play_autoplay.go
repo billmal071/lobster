@@ -16,7 +16,8 @@ func playFinished(res player.PlayResult) bool {
 	if res.PositionUnknown || res.Duration <= 0 || res.Position <= 0 {
 		return false
 	}
-	return res.Duration-res.Position <= autoplayEndSlackSeconds
+	slack := min(autoplayEndSlackSeconds, res.Duration*finishedTailFraction)
+	return res.Duration-res.Position <= slack
 }
 
 func sessionFinished(sess *playlist.Session) bool {
