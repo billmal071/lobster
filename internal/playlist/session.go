@@ -45,8 +45,6 @@ type Session struct {
 	// reading this directly.
 	ChainPrimary provider.Provider
 
-	// OnPartialSeason is called when Next crosses into a season whose episode
-	// list is a measured prefix that may be short.
 	OnPartialSeason func(season media.Season, err error)
 
 	Seasons      []media.Season
