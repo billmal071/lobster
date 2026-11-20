@@ -45,3 +45,19 @@ func TestMPVPlayKeepsMeasuredZeroAfterProgressWithinStartupWindow(t *testing.T) 
 		t.Errorf("got position %v unknown=%v, want a measured 0", res.Position, res.PositionUnknown)
 	}
 }
+
+func TestMPVPlayFailedStartReportsNoMeasurement(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "mpv"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	res, err := New("mpv", "").Play(&media.Stream{URL: "http://127.0.0.1:1/x.m3u8"}, "t", 0, nil)
+	if err == nil {
+		t.Fatal("an mpv that exits at once with no playback was not reported as a failed start")
+	}
+	if !res.PositionUnknown {
+		t.Errorf("failed start returned %+v, want PositionUnknown so a retry keeps its resume offset", res)
+	}
+}

@@ -208,7 +208,7 @@ reports playback position — only mpv does.
 
 Attached, playing an episode starts the same continuous-playback session
 described above: the countdown runs when it ends and the next episode follows.
-Detached there is no terminal for that menu, so a detached series play carries on
+Detached there is no terminal for that menu, so a detached series play that has an episode list carries on
 by itself (`--autoplay` is on by default there). Pass `--autoplay=false` to stop
 after the episode you asked for. This changed: scripts and agents that call
 `play --detach` on a series used to get one episode and now get the whole run.

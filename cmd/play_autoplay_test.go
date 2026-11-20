@@ -443,3 +443,25 @@ func wantPlayed(t *testing.T, got, want []playedEp) {
 		}
 	}
 }
+
+func TestRetryStartPosDistinguishesMeasuredZeroFromNoMeasurement(t *testing.T) {
+	cases := []struct {
+		name    string
+		current float64
+		res     player.PlayResult
+		want    float64
+	}{
+		{"measured position moves the offset", 600, player.PlayResult{Position: 900, Duration: 5400}, 900},
+		{"measured zero resets the offset", 600, player.PlayResult{Position: 0, Duration: 5400}, 0},
+		{"no measurement keeps the offset", 600, player.PlayResult{PositionUnknown: true}, 600},
+		{"untracked player keeps the offset", 600, player.PlayResult{PositionUnknown: true, PositionUntracked: true}, 600},
+		{"measured position at the end starts over", 600, player.PlayResult{Position: 5395, Duration: 5400}, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := retryStartPos(c.current, c.res); got != c.want {
+				t.Fatalf("retryStartPos(%v, %+v) = %v, want %v", c.current, c.res, got, c.want)
+			}
+		})
+	}
+}

@@ -423,8 +423,8 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		}
 
 		// Playback failed — if user watched some of it, resume from there
-		if result.Position > 0 {
-			startPos = resumePosition(media.HistoryEntry{Position: result.Position, Duration: result.Duration})
+		if !result.PositionUnknown {
+			startPos = retryStartPos(startPos, result)
 			debugf("playback stopped at %.0fs, will resume from %.0fs", result.Position, startPos)
 		}
 
@@ -444,6 +444,13 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		fmt.Fprintf(os.Stderr, "Playback stopped, trying another source...\n")
 		debugf("playback error: %v (server %s excluded)", playErr, serverName)
 	}
+}
+
+func retryStartPos(current float64, res player.PlayResult) float64 {
+	if res.PositionUnknown {
+		return current
+	}
+	return resumePosition(media.HistoryEntry{Position: res.Position, Duration: res.Duration})
 }
 
 // subtitleDownload is a seam so tests can exercise the staging-directory

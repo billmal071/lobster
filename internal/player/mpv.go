@@ -57,14 +57,14 @@ func (m *MPV) Available() bool {
 func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFiles []string) (PlayResult, error) {
 	stream, cleanup, err := wrapDeobfuscated(stream)
 	if err != nil {
-		return PlayResult{}, err
+		return PlayResult{PositionUnknown: true}, err
 	}
 	defer cleanup()
 
 	// Create randomized IPC path (Unix socket on Unix, named pipe on Windows)
 	ipc, err := newIPCSocket()
 	if err != nil {
-		return PlayResult{}, err
+		return PlayResult{PositionUnknown: true}, err
 	}
 	defer ipc.cleanup()
 
@@ -107,7 +107,7 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 	cmd.Stdin = os.Stdin
 
 	if err := cmd.Start(); err != nil {
-		return PlayResult{}, fmt.Errorf("starting mpv: %w", err)
+		return PlayResult{PositionUnknown: true}, fmt.Errorf("starting mpv: %w", err)
 	}
 
 	// Track position and duration from IPC in a goroutine, using atomics to avoid data race.
@@ -154,7 +154,7 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 	// If mpv exited almost instantly with no playback progress,
 	// the stream likely failed to load (e.g., CDN unreachable).
 	if !everProgressed.Load() && elapsed < 5*time.Second {
-		return PlayResult{}, fmt.Errorf("stream failed to load (mpv exited in %s with no playback)", elapsed.Round(time.Millisecond))
+		return PlayResult{PositionUnknown: true}, fmt.Errorf("stream failed to load (mpv exited in %s with no playback)", elapsed.Round(time.Millisecond))
 	}
 
 	return result, nil

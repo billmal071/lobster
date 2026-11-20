@@ -167,11 +167,18 @@ Then:
 lobster play --ref "eyJpZCI6..." --season 2 --episode 3 --detach --autoplay=false
 ```
 
-A detached series play carries on to the following episodes by itself unless
-you pass `--autoplay=false`. Pass it when the user asked for one named episode;
+A detached series play carries on to the following episodes by itself when a
+playlist session is created (the play resolved a season and an episode list),
+unless you pass `--autoplay=false`. When the primary provider cannot list
+seasons and the play falls back to a single stream, there is no session and it
+stops after that one episode, even with mpv. Pass it when the user asked for one named episode;
 omit it only when they asked to watch on from there ("start The Bear from season
 2", "binge it"). Autoplay continues only with mpv, which reports when an episode
-ends; vlc, iina and celluloid stop after the one episode either way.
+ends; vlc, iina and celluloid stop after the one episode either way. An episode
+counts as finished when mpv closes within its last ten seconds, so quitting near
+the end still starts the next episode; closing earlier stops the run. A season
+whose episode list the provider marks as possibly short stops after its last
+measured episode instead of moving on to the next season.
 
 ## Rules
 

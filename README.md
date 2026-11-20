@@ -24,7 +24,7 @@ Lobster is a security-hardened Go rewrite of [lobster.sh](https://github.com/jus
 - 🔍 Search movies and TV shows by name
 - 🔥 Browse trending and recently added content
 - 🎬 Stream in mpv, vlc, iina, or celluloid
-- 🔄 Continuous playback — auto-plays next episode with 10s countdown
+- 🔄 Continuous playback — auto-plays next episode with 10s countdown (detached series plays carry on by themselves with mpv)
 - 🧭 Episode navigation — next, previous, replay, episode list, cross-season
 - ⬇ Download with ffmpeg for offline viewing
 - 🌍 Subtitles with automatic language matching
@@ -280,7 +280,7 @@ lobster find "the matrix" --limit 5      # JSON candidates, each with a ref
 lobster find "the bear" --type tv        # filter to movie | tv (case-insensitive)
 lobster episodes --ref <REF> --season 2  # JSON season/episode listing
 lobster play --ref <REF> --detach        # start playback, return immediately
-lobster play --ref <REF> --season 1 --episode 1 --detach   # series: keeps going to the next episode (mpv only; vlc, iina and celluloid stop after one)
+lobster play --ref <REF> --season 1 --episode 1 --detach   # series with an episode list: keeps going to the next episode (mpv only; vlc, iina and celluloid stop after one)
 lobster play --ref <REF> --season 1 --episode 1 --detach --autoplay=false  # stop after this episode
 lobster channels                         # JSON categories + channel counts
 lobster channels --category news         # JSON channels in a category, each with a ref
