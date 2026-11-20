@@ -184,11 +184,29 @@ func TestFailuresFallBackToProviderWithANotice(t *testing.T) {
 }
 
 func TestFallbackErrorIsNotAnEmptyList(t *testing.T) {
-	inner := &fakeInner{err: errors.New("provider down")}
+	down := errors.New("provider down")
+	inner := &fakeInner{err: down}
 	p := Wrap(inner, failingClient(t, 429), General)
 	got, err := p.Trending(media.Movie)
-	if err == nil || len(got) != 0 {
+	if !errors.Is(err, down) || len(got) != 0 {
 		t.Fatalf("Trending = %v, %v; want the provider's error", got, err)
+	}
+	if inner.trendingCalls != 1 {
+		t.Fatalf("provider asked %d times, want 1", inner.trendingCalls)
+	}
+}
+
+func TestNoFallbackNoticeWhenTheProviderListFailsToo(t *testing.T) {
+	inner := &fakeInner{err: errors.New("provider down")}
+	p := Wrap(inner, failingClient(t, 429), General)
+	if _, notice, err := p.TrendingWithNotice(media.Movie); err == nil || notice != "" {
+		t.Fatalf("TrendingWithNotice notice = %q, err = %v; want no list-fallback claim", notice, err)
+	}
+	if _, err := p.Recent(media.Movie); err == nil {
+		t.Fatal("Recent returned no error")
+	}
+	if n := p.TakeNotice(); n != "" {
+		t.Fatalf("Recent queued %q although no provider list was shown", n)
 	}
 }
 

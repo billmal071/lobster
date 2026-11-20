@@ -226,7 +226,10 @@ func (p *Provider) TrendingWithNotice(mt media.MediaType) ([]media.SearchResult,
 	}
 	if err != nil {
 		fb, ferr := p.Provider.Trending(mt)
-		return fb, fallbackNotice(err), ferr
+		if ferr != nil {
+			return fb, "", ferr
+		}
+		return fb, fallbackNotice(err), nil
 	}
 	p.remember(res)
 	return res, "", nil
@@ -246,8 +249,11 @@ func (p *Provider) Recent(mt media.MediaType) ([]media.SearchResult, error) {
 	}
 	res, err := p.client.Recent(mt)
 	if err != nil {
-		p.setNotice(fallbackNotice(err))
-		return p.Provider.Recent(mt)
+		fb, ferr := p.Provider.Recent(mt)
+		if ferr == nil {
+			p.setNotice(fallbackNotice(err))
+		}
+		return fb, ferr
 	}
 	p.remember(res)
 	return res, nil

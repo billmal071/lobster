@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -105,9 +106,12 @@ func TestOversizedBodyIsAnError(t *testing.T) {
 }
 
 func TestEndpoints(t *testing.T) {
+	var mu sync.Mutex
 	var paths []string
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		paths = append(paths, r.URL.Path+"?"+r.URL.Query().Encode())
+		mu.Unlock()
 		io.WriteString(w, `{"results":[{"id":1,"title":"T","name":"T"}]}`)
 	})
 	calls := []struct {
@@ -125,19 +129,24 @@ func TestEndpoints(t *testing.T) {
 		{"anime", func() ([]media.SearchResult, error) { return c.Anime() }, "/discover/tv"},
 	}
 	for _, tc := range calls {
+		mu.Lock()
 		paths = nil
+		mu.Unlock()
 		got, err := tc.do()
 		if err != nil || len(got) != 1 {
 			t.Fatalf("%s: got %v, %v", tc.name, got, err)
 		}
+		mu.Lock()
+		seen := append([]string(nil), paths...)
+		mu.Unlock()
 		var hit string
-		for _, p := range paths {
+		for _, p := range seen {
 			if strings.HasPrefix(p, tc.want+"?") {
 				hit = p
 			}
 		}
 		if hit == "" {
-			t.Errorf("%s: no request to %s, saw %v", tc.name, tc.want, paths)
+			t.Errorf("%s: no request to %s, saw %v", tc.name, tc.want, seen)
 		}
 		if tc.name == "anime" && (!strings.Contains(hit, "with_genres=16") || !strings.Contains(hit, "with_original_language=ja")) {
 			t.Errorf("anime query = %s", hit)
@@ -177,6 +186,7 @@ func TestStatusErrors(t *testing.T) {
 func TestTimeoutIsAnError(t *testing.T) {
 	c, srv := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(300 * time.Millisecond)
+		io.WriteString(w, `{"results":[{"id":1,"title":"T"}]}`)
 	})
 	hc := *srv.Client()
 	hc.Timeout = 50 * time.Millisecond
@@ -234,9 +244,9 @@ func TestFailuresAreNotCached(t *testing.T) {
 }
 
 func TestDetailsUseExternalIDs(t *testing.T) {
-	var query string
+	queries := make(chan string, 1)
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		query = r.URL.Path + "?" + r.URL.RawQuery
+		queries <- r.URL.Path + "?" + r.URL.RawQuery
 		io.WriteString(w, `{"overview":"A hacker.","vote_average":8.2,"runtime":136,"release_date":"1999-03-30",
 			"genres":[{"name":"Action"},{"name":"Sci-Fi"}],"production_countries":[{"name":"United States of America"}],
 			"external_ids":{"imdb_id":"tt0133093"}}`)
@@ -245,6 +255,7 @@ func TestDetailsUseExternalIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	query := <-queries
 	if !strings.HasPrefix(query, "/movie/603?") || !strings.Contains(query, "append_to_response=external_ids") {
 		t.Errorf("request = %s", query)
 	}
@@ -266,16 +277,16 @@ func TestDetailsRejectBadIDs(t *testing.T) {
 }
 
 func TestSeasonEpisodes(t *testing.T) {
-	var path string
+	paths := make(chan string, 1)
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path
+		paths <- r.URL.Path
 		io.WriteString(w, `{"episodes":[{"episode_number":1,"name":"Pilot"},{"episode_number":0,"name":"bad"},{"episode_number":2,"name":""}]}`)
 	})
 	eps, err := c.Season("tv/1399", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path != "/tv/1399/season/2" {
+	if path := <-paths; path != "/tv/1399/season/2" {
 		t.Errorf("path = %s", path)
 	}
 	if len(eps) != 2 || eps[0].Number != 1 || eps[0].Title != "Pilot" || eps[1].Number != 2 {
@@ -326,10 +337,9 @@ func TestImageBaseFallsBackWhenConfigurationFails(t *testing.T) {
 }
 
 func TestTruncatedResponseIsNotCachedAndTheNextCallRecovers(t *testing.T) {
-	calls := 0
+	var calls atomic.Int32
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if calls == 1 {
+		if calls.Add(1) == 1 {
 			io.WriteString(w, `{"results":[{"id":603,"tit`)
 			return
 		}
@@ -390,10 +400,9 @@ func TestResponseWithoutAListEnvelopeIsNotCached(t *testing.T) {
 		"results object":  `{"results":{"id":1}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			calls := 0
+			var calls atomic.Int32
 			c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-				calls++
-				if calls == 1 {
+				if calls.Add(1) == 1 {
 					io.WriteString(w, bad)
 					return
 				}
@@ -407,5 +416,49 @@ func TestResponseWithoutAListEnvelopeIsNotCached(t *testing.T) {
 				t.Fatalf("retry = %v, %v; want the valid body, not the cached bad one", got, err)
 			}
 		})
+	}
+}
+
+func TestMalformedDetailAndSeasonBodiesAreNotCached(t *testing.T) {
+	cases := []struct {
+		name string
+		bad  string
+		good string
+		do   func(c *Client) error
+	}{
+		{"details", `{"overview":17}`, `{"overview":"ok"}`, func(c *Client) error { _, err := c.Details("movie/603"); return err }},
+		{"season", `{"episodes":"unavailable"}`, `{"episodes":[{"episode_number":1,"name":"Pilot"}]}`, func(c *Client) error { _, err := c.Season("tv/1399", 1); return err }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == 1 {
+					io.WriteString(w, tc.bad)
+					return
+				}
+				io.WriteString(w, tc.good)
+			})
+			if err := tc.do(c); err == nil {
+				t.Fatal("malformed body decoded without error")
+			}
+			if err := tc.do(c); err != nil {
+				t.Fatalf("retry = %v; want the corrected body, not the cached bad one", err)
+			}
+		})
+	}
+}
+
+func TestRedirectLoopStopsAtTenHops(t *testing.T) {
+	var hits atomic.Int32
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.Redirect(w, r, r.URL.Path+"x", http.StatusFound)
+	})
+	if _, err := c.Trending(media.Movie); err == nil {
+		t.Fatal("redirect loop returned no error")
+	}
+	if n := hits.Load(); n > 10 {
+		t.Fatalf("server saw %d requests, want at most 10", n)
 	}
 }

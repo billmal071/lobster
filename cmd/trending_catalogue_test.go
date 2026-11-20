@@ -65,13 +65,14 @@ func TestTrendingUsesCatalogueWhenKeySet(t *testing.T) {
 }
 
 func TestRecentUsesCatalogueWhenKeySet(t *testing.T) {
-	var path string
+	paths := make(chan string, 1)
 	catalogueFixture(t, "abc", func(rw http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path
+		paths <- r.URL.Path
 		io.WriteString(rw, `{"results":[{"id":5,"name":"Show"}]}`)
 	})
 	p := &listProvider{}
 	got, err := listResults(p, media.TV, true)
+	path := <-paths
 	if err != nil || len(got) != 1 || got[0].ID != "tv/5" || path != "/tv/on_the_air" {
 		t.Fatalf("got %v, %v, path %s", got, err, path)
 	}

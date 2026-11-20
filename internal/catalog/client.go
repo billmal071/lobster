@@ -26,6 +26,7 @@ const (
 	defaultImageBase = "https://image.tmdb.org/t/p/"
 	posterSize       = "w342"
 	maxBody          = 4 << 20
+	maxRedirects     = 10
 	cacheTTL         = 10 * time.Minute
 	maxCacheEntries  = 128
 	requestTimeout   = 10 * time.Second
@@ -69,6 +70,9 @@ func NewWithBase(key, base string, hc *http.Client) *Client {
 	cp := *hc
 	cp.Timeout = requestTimeout
 	cp.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= maxRedirects {
+			return errors.New("too many redirects from the TMDB API")
+		}
 		if req.URL.Host != via[0].URL.Host || req.URL.Scheme != via[0].URL.Scheme {
 			return errors.New("redirect away from the TMDB API host refused")
 		}
@@ -251,6 +255,27 @@ func IsID(id string) bool {
 	return err == nil
 }
 
+type detailBody struct {
+	Overview       string  `json:"overview"`
+	VoteAverage    float64 `json:"vote_average"`
+	Runtime        int     `json:"runtime"`
+	EpisodeRuntime []int   `json:"episode_run_time"`
+	ReleaseDate    string  `json:"release_date"`
+	FirstAirDate   string  `json:"first_air_date"`
+	Genres         []struct {
+		Name string `json:"name"`
+	} `json:"genres"`
+	ProductionCountries []struct {
+		Name string `json:"name"`
+	} `json:"production_countries"`
+	OriginCountry []string `json:"origin_country"`
+	ExternalIDs   struct {
+		IMDbID string `json:"imdb_id"`
+	} `json:"external_ids"`
+}
+
+func checkDetail(body []byte) error { return json.Unmarshal(body, &detailBody{}) }
+
 // Details fetches metadata for a movie/<n> or tv/<n> id.
 func (c *Client) Details(id string) (*Detail, error) {
 	k, n, err := parseID(id)
@@ -259,28 +284,11 @@ func (c *Client) Details(id string) (*Detail, error) {
 	}
 	q := url.Values{}
 	q.Set("append_to_response", "external_ids")
-	body, err := c.get("/"+k+"/"+n, q, nil)
+	body, err := c.get("/"+k+"/"+n, q, checkDetail)
 	if err != nil {
 		return nil, err
 	}
-	var raw struct {
-		Overview       string  `json:"overview"`
-		VoteAverage    float64 `json:"vote_average"`
-		Runtime        int     `json:"runtime"`
-		EpisodeRuntime []int   `json:"episode_run_time"`
-		ReleaseDate    string  `json:"release_date"`
-		FirstAirDate   string  `json:"first_air_date"`
-		Genres         []struct {
-			Name string `json:"name"`
-		} `json:"genres"`
-		ProductionCountries []struct {
-			Name string `json:"name"`
-		} `json:"production_countries"`
-		OriginCountry []string `json:"origin_country"`
-		ExternalIDs   struct {
-			IMDbID string `json:"imdb_id"`
-		} `json:"external_ids"`
-	}
+	var raw detailBody
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, errors.New("decoding TMDB details failed")
 	}
@@ -311,6 +319,15 @@ func (c *Client) Details(id string) (*Detail, error) {
 	return d, nil
 }
 
+type seasonBody struct {
+	Episodes []struct {
+		Number int    `json:"episode_number"`
+		Name   string `json:"name"`
+	} `json:"episodes"`
+}
+
+func checkSeason(body []byte) error { return json.Unmarshal(body, &seasonBody{}) }
+
 // Season lists a TV season's episodes.
 func (c *Client) Season(id string, season int) ([]media.Episode, error) {
 	k, n, err := parseID(id)
@@ -320,16 +337,11 @@ func (c *Client) Season(id string, season int) ([]media.Episode, error) {
 	if season < 1 {
 		return nil, fmt.Errorf("invalid season %d", season)
 	}
-	body, err := c.get("/tv/"+n+"/season/"+strconv.Itoa(season), nil, nil)
+	body, err := c.get("/tv/"+n+"/season/"+strconv.Itoa(season), nil, checkSeason)
 	if err != nil {
 		return nil, err
 	}
-	var raw struct {
-		Episodes []struct {
-			Number int    `json:"episode_number"`
-			Name   string `json:"name"`
-		} `json:"episodes"`
-	}
+	var raw seasonBody
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, errors.New("decoding TMDB season failed")
 	}
