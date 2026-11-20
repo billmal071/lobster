@@ -47,7 +47,7 @@ func TestFetchTabWithoutNoticeIsUnchanged(t *testing.T) {
 	rows := []media.SearchResult{{ID: "movie/1", Title: "A"}}
 	msg := fetchTabCmd(stubProvider{rows: rows}, tabMovies, 0)()
 	got, ok := msg.(resultsFetchedMsg)
-	if !ok || len(got) != 1 {
+	if !ok || len(got.results) != 1 {
 		t.Fatalf("msg = %#v, want a plain resultsFetchedMsg", msg)
 	}
 }
@@ -76,8 +76,8 @@ func TestFetchTabForwardsProviderNotice(t *testing.T) {
 func TestFetchTabErrorStaysAnError(t *testing.T) {
 	p := &noticingProvider{stubProvider: stubProvider{err: assertErr("boom")}, notice: "x"}
 	msg := fetchTabCmd(p, tabMovies, 3)()
-	if _, ok := msg.(errMsg); !ok {
-		t.Fatalf("msg = %#v, want errMsg", msg)
+	if _, ok := msg.(fetchErrMsg); !ok {
+		t.Fatalf("msg = %#v, want fetchErrMsg", msg)
 	}
 }
 
@@ -98,6 +98,9 @@ func TestFetchTabUsesTheNoticeReturnedWithItsOwnFetch(t *testing.T) {
 	for _, m := range flatten(fetchTabCmd(p, tabMovies, 3)()) {
 		if v, ok := m.(noticeMsg); ok {
 			text = v.text
+			if v.tab != tabMovies || v.gen != 3 {
+				t.Errorf("notice origin = tab %v gen %d, want the request's", v.tab, v.gen)
+			}
 		}
 	}
 	if text != "this fetch's notice" {

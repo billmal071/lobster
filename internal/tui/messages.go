@@ -11,7 +11,17 @@ type errMsg struct{ err error }
 func (e errMsg) Error() string { return e.err.Error() }
 
 // resultsFetchedMsg is sent when a list of search/trending results is fetched.
-type resultsFetchedMsg []media.SearchResult
+type resultsFetchedMsg struct {
+	results []media.SearchResult
+	tab     tab
+	gen     int
+}
+
+type fetchErrMsg struct {
+	err error
+	tab tab
+	gen int
+}
 
 // noticeMsg carries a one-line catalogue notice to show in the footer.
 type noticeMsg struct {

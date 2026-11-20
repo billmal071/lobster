@@ -85,7 +85,7 @@ type AppModel struct {
 	liveCategory   string    // current category at level 1
 	liveMaster     []liveRow // unfiltered rows for the current level
 	liveReqGen     int       // bumped per Live TV fetch; stale responses are ignored
-	tabReqGen      int       // bumped per tab switch; notices from an earlier request are ignored
+	tabReqGen      int       // bumped per tab switch and per search; listings, failures and notices from an earlier request are ignored
 
 	// Download dialog for TV show batch downloads
 	dlDialog downloadDialog
@@ -261,6 +261,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.list.Title = "Search: " + m.searchInput.Value()
 				m.results = nil // Clear current results to show loader
 				m.currentItem = nil
+				m.tabReqGen++
 				cmds = append(cmds, m.list.StartSpinner())
 				// Only the Movies/Series tabs fan out to the movies fallback
 				// providers. Anime has its own dedicated provider, so searching
@@ -271,7 +272,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.activeTab == tabAnime {
 					fallbacks = nil
 				}
-				return m, tea.Batch(searchCmd(m.providerForActiveTab(), m.searchInput.Value(), fallbacks...), m.list.StartSpinner())
+				return m, tea.Batch(searchCmd(m.providerForActiveTab(), m.searchInput.Value(), m.activeTab, m.tabReqGen, fallbacks...), m.list.StartSpinner())
 			case tea.KeyEsc:
 				m.isSearching = false
 				m.searchInput.Blur()
@@ -395,13 +396,23 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.StopSpinner()
 
 	case noticeMsg:
-		if msg.tab == m.activeTab && msg.gen == m.tabReqGen {
+		if !m.supersededRequest(msg.tab, msg.gen) {
 			m.notice = msg.text
 		}
 
+	case fetchErrMsg:
+		if m.supersededRequest(msg.tab, msg.gen) {
+			return m, nil
+		}
+		m.err = msg.err
+		m.list.StopSpinner()
+
 	case resultsFetchedMsg:
+		if m.supersededRequest(msg.tab, msg.gen) {
+			return m, nil
+		}
 		m.err = nil
-		m.results = msg
+		m.results = msg.results
 		// Clear all selection-derived state so the previous title's metadata and
 		// poster don't show under the new result until the fresh fetches land.
 		m.currentDetail = nil
@@ -411,17 +422,17 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.posterImgW = 0
 		m.posterImgH = 0
 		m.drawnPosterKey = ""
-		items := make([]list.Item, len(msg))
-		for i, v := range msg {
+		items := make([]list.Item, len(msg.results))
+		for i, v := range msg.results {
 			items[i] = listItem{result: v}
 		}
 		m.list.SetItems(items)
 		m.list.StopSpinner()
-		if len(msg) > 0 {
-			m.currentItem = &msg[0]
-			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), msg[0].ID))
+		if len(msg.results) > 0 {
+			m.currentItem = &msg.results[0]
+			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), msg.results[0].ID))
 			pw, ph := poster.BoxDims(m.width, 0, 0)
-			cmds = append(cmds, fetchPosterForItemCmd(msg[0], pw, ph, m.posterLookup()))
+			cmds = append(cmds, fetchPosterForItemCmd(msg.results[0], pw, ph, m.posterLookup()))
 		} else {
 			m.currentItem = nil
 			m.currentDetail = nil
@@ -701,6 +712,10 @@ func (m AppModel) renderTabBar() string {
 	}
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
+}
+
+func (m AppModel) supersededRequest(requested tab, gen int) bool {
+	return requested != m.activeTab || gen != m.tabReqGen
 }
 
 func (m AppModel) providerForActiveTab() provider.Provider {
