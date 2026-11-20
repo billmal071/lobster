@@ -69,10 +69,11 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	case seasonNoList:
 		return emitErr("no_results", exitNoResults, "no seasons found for %q", r.Title)
 	case seasonLookupFailed:
-		return emitErr("providers_failed", exitProvidersFailed,
-			"no provider could list the seasons of %q: %s reported %v, and no fallback provider answered within %s",
-			r.Title, providerLabel(primary), look.err, episodesFallbackTimeout)
+		return primaryFailedErr(primary, r.Title, look)
 	case seasonUndetermined:
+		if !res.anyListed && look.kind == lookupFailed {
+			return primaryFailedErr(primary, r.Title, look)
+		}
 		if !res.anyListed {
 			return emitErr("providers_failed", exitProvidersFailed,
 				"%s listed no seasons of %q, and a fallback provider's lookup failed within %s, so the show may still exist",
@@ -98,9 +99,8 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	// substitution is itself the finding. See episodeSourceWarnings.
 	//
 	// It must be captured from primary rather than from p, because by this
-	// line p is no longer necessarily the primary: resolveSeason replaces it
-	// with the first chain hit whenever the primary cannot enumerate seasons,
-	// and resolveSeason replaces it again when the primary's season list
+	// line p is no longer necessarily the primary: resolveSeason hands back a
+	// chain hit whenever the primary cannot enumerate seasons or its list
 	// lacks the requested season. Reading p here made the comparison below
 	// "did the chain member that answered differ from the chain member that
 	// answered", which is never true — so the warning stayed silent in exactly
@@ -386,7 +386,7 @@ func shortfallFor(err error) episodeShortfall {
 // exactly once, and no fan-out is waiting on it.
 //
 // What the command as a whole promises is a bound per chain phase, not one
-// across them. It can serialise three — resolveSeason' scan, this call, and
+// across them. It can serialise three — resolveSeason's scan, this call, and
 // firstEpisodeList's every-hit scan — each at episodesFallbackTimeout, so the
 // worst case is around three times that, plus the primary's own unbounded
 // GetSeasons and GetEpisodes.
@@ -406,6 +406,12 @@ func listSeasonEpisodes(p provider.Provider, src seasonAnswer, sel media.Season)
 	ctx, cancel := context.WithTimeout(context.Background(), episodesFallbackTimeout)
 	defer cancel()
 	return episodesWithContext(ctx, p, src.id, sel.ID)
+}
+
+func primaryFailedErr(primary provider.Provider, title string, look seasonLookup) error {
+	return emitErr("providers_failed", exitProvidersFailed,
+		"no provider could list the seasons of %q: %s reported %v, and no fallback provider answered within %s",
+		title, providerLabel(primary), look.err, episodesFallbackTimeout)
 }
 
 // providerLabel names a provider for the JSON envelope. provider.Provider has
@@ -469,7 +475,7 @@ var episodesFallbackTimeout = multiSearchTimeout
 // played without complaint. The two commands must agree on what one ref means.
 //
 // They still do not agree completely, and this is the remaining gap: the
-// admission gate below is resolver.Matches, while play's tryFallbackStream
+// admission gate (resolver.Matches, in probeSeasons) is applied by the season scan, while play's tryFallbackStream
 // goes through resolver.Resolve, which has no such gate. So a ref whose title
 // the fallback spells differently — "Marvel's Agents of S.H.I.E.L.D." against
 // "Agents of S.H.I.E.L.D." — still plays and still lists nothing. Relaxing
@@ -520,8 +526,7 @@ func lookupPrimarySeasons(primary provider.Provider, id string) seasonLookup {
 // enumerate seasons but not episodes, without paying for the chain scan twice.
 type seasonAnswer struct {
 	seasonLookup
-	primary seasonLookup
-	alts    []*seasonHit
+	alts []*seasonHit
 	// fromPrimary reports that the chain scan has not run, so alts is empty
 	// because nothing looked rather than because nothing answered.
 	fromPrimary bool

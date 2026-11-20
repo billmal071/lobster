@@ -297,7 +297,7 @@ func (d *downloadDialog) fetchEpisodes(seasonIdx int) tea.Cmd {
 	return func() tea.Msg {
 		episodes, err := prov.GetEpisodes(item.ID, season.ID)
 		partial := false
-		if err != nil && len(episodes) > 0 && provider.IsCatalogueGap(err) {
+		if err != nil && provider.ListedWithCatalogueGap(len(episodes), err) {
 			err, partial = nil, true
 		}
 		if (err != nil || len(episodes) == 0) && EpisodeListFallback != nil {

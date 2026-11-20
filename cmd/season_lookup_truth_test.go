@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"lobster/internal/media"
@@ -188,7 +189,13 @@ type seasonsFailingStream struct {
 
 func (seasonsFailingStream) GetSeasons(string) ([]media.Season, error) { return nil, errBoom }
 
-func episodesErrCode(t *testing.T, primary *stubProvider, chain ...provider.Provider) string {
+func episodesErrCode(t *testing.T, primary provider.Provider, chain ...provider.Provider) string {
+	t.Helper()
+	code, _ := episodesErrEnvelope(t, primary, chain...)
+	return code
+}
+
+func episodesErrEnvelope(t *testing.T, primary provider.Provider, chain ...provider.Provider) (code, message string) {
 	t.Helper()
 	hostileEnv(t)
 	buf := captureAgentOut(t)
@@ -200,13 +207,14 @@ func episodesErrCode(t *testing.T, primary *stubProvider, chain ...provider.Prov
 	}
 	var env struct {
 		Error struct {
-			Code string `json:"code"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
 		t.Fatalf("output is not JSON: %v (%q)", err, buf.String())
 	}
-	return env.Error.Code
+	return env.Error.Code, env.Error.Message
 }
 
 func TestEpisodesSeasonLookupTruthTable(t *testing.T) {
@@ -216,10 +224,13 @@ func TestEpisodesSeasonLookupTruthTable(t *testing.T) {
 	}
 	cases := []struct {
 		name    string
-		primary *stubProvider
+		primary provider.Provider
 		chain   func() []provider.Provider
 		want    string
 	}{
+		{"primary answers ErrNoResults, every fallback answers ErrNoResults", &stubProvider{seasonsErr: provider.ErrNoResults}, func() []provider.Provider { return []provider.Provider{empty()} }, "no_results"},
+		{"complete catalogue primary omits the season, fallback lookup failed", catalogueStub{&stubProvider{seasons: seasonsOf(1, 3)}}, func() []provider.Provider { return []provider.Provider{down()} }, "providers_failed"},
+		{"complete catalogue primary omits the season, every fallback answered", catalogueStub{&stubProvider{seasons: seasonsOf(1, 3)}}, func() []provider.Provider { return []provider.Provider{empty()} }, "no_results"},
 		{"primary lists nothing, fallback lookup failed", &stubProvider{}, func() []provider.Provider { return []provider.Provider{down()} }, "providers_failed"},
 		{"primary lists nothing, every fallback answers ErrNoResults", &stubProvider{}, func() []provider.Provider { return []provider.Provider{empty()} }, "no_results"},
 		{"primary lists nothing, one fallback failed and one answers empty", &stubProvider{}, func() []provider.Provider { return []provider.Provider{empty(), down()} }, "providers_failed"},
@@ -270,5 +281,25 @@ func TestResolveAndPlaySeasonLookupTruthTable(t *testing.T) {
 				t.Fatalf("resolver asked for %q, want 1403:2:1", rec.episodeAsked())
 			}
 		})
+	}
+}
+
+func TestEpisodesNamesThePrimaryErrorWhenNothingElseListedSeasons(t *testing.T) {
+	down := &scriptedLookup{stubProvider: &stubProvider{}, searchErr: errBoom}
+	code, message := episodesErrEnvelope(t, &stubProvider{seasonsErr: errors.New("primary exploded")}, down)
+	if code != "providers_failed" {
+		t.Fatalf("code = %q, want providers_failed", code)
+	}
+	if !strings.Contains(message, "primary exploded") || !strings.Contains(message, "reported") {
+		t.Fatalf("message %q drops the primary's own error", message)
+	}
+}
+
+func TestValidateSeasonEpisodeDefersForACatalogueListWhenAFallbackLookupFailed(t *testing.T) {
+	hostileEnv(t)
+	chainOf(t, &scriptedLookup{stubProvider: &stubProvider{}, searchErr: errBoom})
+	primary := catalogueStub{&stubProvider{seasons: seasonsOf(1, 3)}}
+	if err := validateSeasonEpisode(primary, playRef{ID: "p", Title: "Show", Type: "tv"}, 5, 1); err != nil {
+		t.Fatalf("validateSeasonEpisode = %v, want nil: a failed fallback lookup cannot turn a catalogue's partial list into a refusal", err)
 	}
 }

@@ -428,7 +428,7 @@ func newSeasonLister(p provider.Provider, selected media.SearchResult) *seasonLi
 
 func (l *seasonLister) episodes(season media.Season) ([]media.Episode, error) {
 	episodes, err := l.primary.GetEpisodes(l.selected.ID, season.ID)
-	if len(episodes) > 0 && (err == nil || provider.IsCatalogueGap(err)) {
+	if len(episodes) > 0 && (err == nil || provider.ListedWithCatalogueGap(len(episodes), err)) {
 		return episodes, nil
 	}
 	if season.Number < 0 {

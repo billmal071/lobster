@@ -184,7 +184,7 @@ func (s *Session) Next() (media.Episode, error) {
 }
 
 func isShortList(episodes []media.Episode, err error) bool {
-	return len(episodes) > 0 && provider.IsCatalogueGap(err)
+	return provider.ListedWithCatalogueGap(len(episodes), err)
 }
 
 // Previous moves to the previous episode. If at the start of a season, loads

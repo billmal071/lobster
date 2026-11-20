@@ -114,6 +114,19 @@ func IsCatalogueGap(err error) bool {
 	return errors.Is(err, ErrIncompleteEpisodeList) && errors.Is(err, ErrNotCarried)
 }
 
+// ListedWithCatalogueGap reports a non-empty list that came with a catalogue-gap error: usable, and complete for what the source carries.
+func ListedWithCatalogueGap(listed int, err error) bool {
+	return listed > 0 && IsCatalogueGap(err)
+}
+
+// IsCatalogueSource reports a provider that holds only part of what exists, so its list never settles that something is absent.
+func IsCatalogueSource(p Provider) bool {
+	c, ok := p.(interface{ CatalogueSource() bool })
+	return ok && c.CatalogueSource()
+}
+
+func (e *EZTV) CatalogueSource() bool { return true }
+
 // AsPrimary marks e as the configured base, so Search offers only shows EZTV holds torrents for.
 func (e *EZTV) AsPrimary() *EZTV {
 	e.primary = true

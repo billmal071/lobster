@@ -7,6 +7,51 @@ import (
 	"lobster/internal/provider"
 )
 
+type catalogueStub struct{ *stubProvider }
+
+func (catalogueStub) CatalogueSource() bool { return true }
+
+func TestCombineSeasonsKeepsLaterHitsAsAlternatives(t *testing.T) {
+	mk := func(nums ...int) *seasonHit {
+		return &seasonHit{seasonLookup: seasonLookup{provider: &stubProvider{}, kind: lookupListed, seasons: seasonsOf(nums...)}}
+	}
+	first, second, third := mk(1), mk(1, 2), mk(2)
+	got := combineSeasons(seasonLookup{kind: lookupAbsent}, []*seasonHit{first, second, third}, false, 2)
+	if got.verdict != seasonFound || got.answer.provider != second.provider {
+		t.Fatalf("verdict = %v, provider is the second hit: %v; want the first hit that has season 2", got.verdict, got.answer.provider == second.provider)
+	}
+	if len(got.answer.alts) != 1 || got.answer.alts[0] != third {
+		t.Fatalf("alts = %v, want only the hits after the one used", got.answer.alts)
+	}
+}
+
+func TestCombineSeasonsWithNoSeasonRequestedUsesTheFirstListedSeason(t *testing.T) {
+	cases := []struct {
+		name    string
+		primary seasonLookup
+		hits    []*seasonHit
+		from    string
+	}{
+		{"primary lists", seasonLookup{kind: lookupListed, seasons: seasonsOf(3, 4)}, nil, "primary"},
+		{"fallback lists", seasonLookup{kind: lookupFailed}, []*seasonHit{{seasonLookup: seasonLookup{kind: lookupListed, seasons: seasonsOf(5, 6)}}}, "hit"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := combineSeasons(c.primary, c.hits, false, seasonUnspecified)
+			want := c.primary.seasons
+			if c.from == "hit" {
+				want = c.hits[0].seasons
+			}
+			if got.verdict != seasonFound || got.season.Number != want[0].Number {
+				t.Fatalf("verdict = %v, season = %d; want found, season %d", got.verdict, got.season.Number, want[0].Number)
+			}
+		})
+	}
+	if got := combineSeasons(seasonLookup{kind: lookupAbsent}, nil, false, seasonUnspecified); got.verdict != seasonNoList {
+		t.Fatalf("nothing listed: verdict = %v, want no list", got.verdict)
+	}
+}
+
 func TestCombineSeasonsTruthTable(t *testing.T) {
 	prim := &stubProvider{}
 	other := &stubProvider{}
@@ -15,6 +60,11 @@ func TestCombineSeasonsTruthTable(t *testing.T) {
 	}
 	hit := func(gap listGap, nums ...int) *seasonHit {
 		return &seasonHit{seasonLookup: seasonLookup{provider: other, id: "h", kind: lookupListed, gap: gap, seasons: seasonsOf(nums...)}}
+	}
+	catalogue := func(gap listGap, nums ...int) seasonLookup {
+		l := list(gap, nums...)
+		l.provider = catalogueStub{prim}
+		return l
 	}
 	absent := seasonLookup{provider: prim, id: "p", kind: lookupAbsent}
 	failed := seasonLookup{provider: prim, id: "p", kind: lookupFailed, err: errBoom}
@@ -36,7 +86,16 @@ func TestCombineSeasonsTruthTable(t *testing.T) {
 		{"complete primary lacks it, fallback lookup failed: the primary stands", list(gapNone, 1, 3), nil, true, seasonAbsent, nil, false, 0, false},
 		{"complete primary lacks it, a fallback list is partial", list(gapNone, 1, 3), []*seasonHit{hit(gapShort, 1)}, false, seasonUndetermined, nil, false, 0, false},
 		{"gapped primary lacks it, chain empty", list(gapCatalogue, 1, 3), nil, false, seasonAbsent, prim, false, 0, false},
-		{"gapped primary lacks it, fallback lists complete without it", list(gapCatalogue, 1, 3), []*seasonHit{hit(gapNone, 1, 3)}, false, seasonAbsent, prim, false, 0, false},
+		{"gapped primary lacks it, fallback lists complete without it: generic, no source named", list(gapCatalogue, 1, 3), []*seasonHit{hit(gapNone, 1, 3)}, false, seasonAbsent, nil, false, 0, false},
+		{"gapped primary lacks it, fallback gapped too: the first is named", list(gapCatalogue, 1, 3), []*seasonHit{hit(gapCatalogue, 1, 3)}, false, seasonAbsent, prim, false, 0, false},
+		{"complete primary lacks it, fallback has it", list(gapNone, 1, 3), []*seasonHit{hit(gapNone, 2)}, false, seasonFound, nil, true, gapNone, true},
+		{"complete primary lacks it, fallback gapped without it: no source named", list(gapNone, 1, 3), []*seasonHit{hit(gapCatalogue, 1, 3)}, false, seasonAbsent, nil, false, 0, false},
+		{"absent primary, fallback complete without it", absent, []*seasonHit{hit(gapNone, 1, 3)}, false, seasonAbsent, nil, false, 0, false},
+		{"absent primary, fallback partial without it", absent, []*seasonHit{hit(gapShort, 1, 3)}, false, seasonUndetermined, nil, false, 0, false},
+		{"failed primary, fallback partial without it", failed, []*seasonHit{hit(gapShort, 1, 3)}, false, seasonUndetermined, nil, false, 0, false},
+		{"catalogue primary complete lacks it, fallback lookup failed", catalogue(gapNone, 1, 3), nil, true, seasonUndetermined, nil, false, 0, false},
+		{"catalogue primary complete lacks it, nothing failed", catalogue(gapNone, 1, 3), nil, false, seasonAbsent, nil, false, 0, false},
+		{"catalogue primary complete lacks it, fallback has it", catalogue(gapNone, 1, 3), []*seasonHit{hit(gapNone, 2)}, true, seasonFound, nil, true, gapNone, true},
 		{"gapped primary lacks it, fallback lookup failed", list(gapCatalogue, 1, 3), nil, true, seasonUndetermined, nil, false, 0, false},
 		{"gapped primary lacks it, a fallback list is partial: partial wins over the gap", list(gapCatalogue, 1, 3), []*seasonHit{hit(gapShort, 1, 3)}, false, seasonUndetermined, nil, false, 0, false},
 		{"short primary lacks it", list(gapShort, 1, 3), nil, false, seasonUndetermined, nil, false, 0, false},

@@ -43,7 +43,7 @@ func classifyList(n int, err error) (lookupKind, listGap) {
 		return lookupListed, gapNone
 	case err == nil, errors.Is(err, provider.ErrNoResults), errors.Is(err, provider.ErrNotCarried) && n == 0:
 		return lookupAbsent, gapNone
-	case n > 0 && provider.IsCatalogueGap(err):
+	case provider.ListedWithCatalogueGap(n, err):
 		return lookupListed, gapCatalogue
 	case n > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList):
 		return lookupListed, gapShort
@@ -77,9 +77,13 @@ type seasonResolution struct {
 }
 
 // combineSeasons is the one place a primary's season answer and the fallback
-// chain's are weighed for want. A failed lookup never yields a refusal; a
-// complete primary list is authoritative; every other absence needs a lookup
-// that listed seasons and no failed or partial one beside it.
+// chain's are weighed for want. A fallback lookup that failed, or a partial list
+// anywhere, never yields a refusal. Only a complete list from a non-catalogue
+// primary is final on its own; any other absence needs a list from some source
+// and no failed fallback lookup beside it. The primary's own failure does not
+// block that: lists that did answer refuse, which keeps the resolver from
+// streaming a season no source lists. gapSource is set only when every list
+// consulted is a catalogue gap.
 func combineSeasons(primary seasonLookup, hits []*seasonHit, scanFailed bool, want int) seasonResolution {
 	res := combineLists(primary, hits, scanFailed, want)
 	res.anyListed = primary.kind == lookupListed || len(hits) > 0
@@ -90,7 +94,7 @@ func combineLists(primary seasonLookup, hits []*seasonHit, scanFailed bool, want
 	if primary.kind == lookupListed {
 		if sel, ok := pickSeason(primary.seasons, want); ok {
 			return seasonResolution{verdict: seasonFound, season: sel, answer: seasonAnswer{
-				seasonLookup: primary, fromPrimary: true, primary: primary, alts: hits, scanFailed: scanFailed,
+				seasonLookup: primary, fromPrimary: true, alts: hits, scanFailed: scanFailed,
 			}}
 		}
 	}
@@ -98,7 +102,7 @@ func combineLists(primary seasonLookup, hits []*seasonHit, scanFailed bool, want
 		if sel, ok := pickSeason(h.seasons, want); ok {
 			lacks := primary.kind == lookupAbsent || (primary.kind == lookupListed && primary.gap != gapShort)
 			return seasonResolution{verdict: seasonFound, season: sel, answer: seasonAnswer{
-				seasonLookup: h.seasonLookup, primary: primary, alts: hits[i+1:], scanFailed: scanFailed, primaryLacks: lacks,
+				seasonLookup: h.seasonLookup, alts: hits[i+1:], scanFailed: scanFailed, primaryLacks: lacks,
 			}}
 		}
 	}
@@ -115,22 +119,22 @@ func combineLists(primary seasonLookup, hits []*seasonHit, scanFailed bool, want
 			return seasonResolution{verdict: seasonUndetermined}
 		}
 	}
-	if primary.kind == lookupListed && primary.gap == gapNone {
+	if primary.kind == lookupListed && primary.gap == gapNone && !provider.IsCatalogueSource(primary.provider) {
 		return seasonResolution{verdict: seasonAbsent}
 	}
 	if scanFailed {
 		return seasonResolution{verdict: seasonUndetermined}
 	}
+	if len(lists) == 0 {
+		if primary.kind == lookupFailed {
+			return seasonResolution{verdict: seasonLookupFailed}
+		}
+		return seasonResolution{verdict: seasonNoList}
+	}
 	for _, l := range lists {
-		if l.gap == gapCatalogue {
-			return seasonResolution{verdict: seasonAbsent, gapSource: l.provider}
+		if l.gap != gapCatalogue {
+			return seasonResolution{verdict: seasonAbsent}
 		}
 	}
-	switch {
-	case len(lists) > 0:
-		return seasonResolution{verdict: seasonAbsent}
-	case primary.kind == lookupFailed:
-		return seasonResolution{verdict: seasonLookupFailed}
-	}
-	return seasonResolution{verdict: seasonNoList}
+	return seasonResolution{verdict: seasonAbsent, gapSource: lists[0].provider}
 }
