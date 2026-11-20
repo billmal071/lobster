@@ -299,10 +299,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	p, routed := routeByType(p, selected)
 
 	routedAway := routed.ID != selected.ID
-	callID := selected.ID
-	if selected.ProviderID != "" {
-		callID = selected.ProviderID
-	}
+	callID := selected.CallID()
 	if routed.ID == selected.ID {
 		routed.ID = callID
 	}

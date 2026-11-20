@@ -56,6 +56,15 @@ type SearchResult struct {
 	FromCatalogue bool
 }
 
+// CallID is the ID to hand the playback provider: its own ID for the row when
+// the catalogue layer resolved one, otherwise ID.
+func (r SearchResult) CallID() string {
+	if r.ProviderID != "" {
+		return r.ProviderID
+	}
+	return r.ID
+}
+
 // ContentDetail contains detailed metadata fetched from a content's detail page.
 type ContentDetail struct {
 	Description string   // Synopsis/overview

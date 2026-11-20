@@ -371,15 +371,41 @@ func TestCacheIsBoundedAndKeepsFreshHits(t *testing.T) {
 		io.WriteString(w, `{"results":[]}`)
 	})
 	for i := 0; i < maxCacheEntries+20; i++ {
-		c.get("/search/tv", url.Values{"query": {strconv.Itoa(i)}})
+		c.get("/search/tv", url.Values{"query": {strconv.Itoa(i)}}, nil)
 	}
 	if len(c.cache) > maxCacheEntries {
 		t.Fatalf("cache holds %d entries, limit %d", len(c.cache), maxCacheEntries)
 	}
 	before := n.Load()
 	last := maxCacheEntries + 19
-	c.get("/search/tv", url.Values{"query": {strconv.Itoa(last)}})
+	c.get("/search/tv", url.Values{"query": {strconv.Itoa(last)}}, nil)
 	if n.Load() != before {
 		t.Error("most recent entry was evicted; fresh hit should be served from cache")
+	}
+}
+
+func TestResponseWithoutAListEnvelopeIsNotCached(t *testing.T) {
+	for name, bad := range map[string]string{
+		"missing results": `{"status_message":"maintenance"}`,
+		"results object":  `{"results":{"id":1}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if calls == 1 {
+					io.WriteString(w, bad)
+					return
+				}
+				io.WriteString(w, `{"results":[{"id":603,"title":"The Matrix","release_date":"1999-03-30"}]}`)
+			})
+			if _, err := c.Trending(media.Movie); err == nil {
+				t.Fatal("response without a list envelope decoded without error")
+			}
+			got, err := c.Trending(media.Movie)
+			if err != nil || len(got) != 1 {
+				t.Fatalf("retry = %v, %v; want the valid body, not the cached bad one", got, err)
+			}
+		})
 	}
 }

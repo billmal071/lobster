@@ -79,7 +79,7 @@ func NewWithBase(key, base string, hc *http.Client) *Client {
 
 func (c *Client) isV4Token() bool { return strings.HasPrefix(c.key, "eyJ") }
 
-func (c *Client) get(path string, q url.Values) ([]byte, error) {
+func (c *Client) get(path string, q url.Values, check func([]byte) error) ([]byte, error) {
 	cacheKey := path + "?" + q.Encode()
 	c.mu.Lock()
 	if e, ok := c.cache[cacheKey]; ok && c.now().Sub(e.at) < cacheTTL {
@@ -128,6 +128,11 @@ func (c *Client) get(path string, q url.Values) ([]byte, error) {
 	if !json.Valid(body) {
 		return nil, errors.New("TMDB returned malformed JSON")
 	}
+	if check != nil {
+		if err := check(body); err != nil {
+			return nil, err
+		}
+	}
 
 	c.mu.Lock()
 	now := c.now()
@@ -154,7 +159,7 @@ func (c *Client) get(path string, q url.Values) ([]byte, error) {
 func (c *Client) images() string {
 	c.imgOnce.Do(func() {
 		c.imgBase = defaultImageBase
-		body, err := c.get("/configuration", nil)
+		body, err := c.get("/configuration", nil, nil)
 		if err != nil {
 			return
 		}
@@ -177,7 +182,7 @@ func (c *Client) images() string {
 }
 
 func (c *Client) list(path string, q url.Values, def media.MediaType) ([]media.SearchResult, error) {
-	body, err := c.get(path, q)
+	body, err := c.get(path, q, checkList)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +259,7 @@ func (c *Client) Details(id string) (*Detail, error) {
 	}
 	q := url.Values{}
 	q.Set("append_to_response", "external_ids")
-	body, err := c.get("/"+k+"/"+n, q)
+	body, err := c.get("/"+k+"/"+n, q, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +320,7 @@ func (c *Client) Season(id string, season int) ([]media.Episode, error) {
 	if season < 1 {
 		return nil, fmt.Errorf("invalid season %d", season)
 	}
-	body, err := c.get("/tv/"+n+"/season/"+strconv.Itoa(season), nil)
+	body, err := c.get("/tv/"+n+"/season/"+strconv.Itoa(season), nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +343,7 @@ func (c *Client) Season(id string, season int) ([]media.Episode, error) {
 	return eps, nil
 }
 
-func decodeList(body []byte, def media.MediaType, imageBase func() string) ([]media.SearchResult, error) {
+func listRows(body []byte) ([]json.RawMessage, error) {
 	var env struct {
 		Results json.RawMessage `json:"results"`
 	}
@@ -348,6 +353,19 @@ func decodeList(body []byte, def media.MediaType, imageBase func() string) ([]me
 	var rows []json.RawMessage
 	if err := json.Unmarshal(env.Results, &rows); err != nil {
 		return nil, errors.New("decoding TMDB list failed")
+	}
+	return rows, nil
+}
+
+func checkList(body []byte) error {
+	_, err := listRows(body)
+	return err
+}
+
+func decodeList(body []byte, def media.MediaType, imageBase func() string) ([]media.SearchResult, error) {
+	rows, err := listRows(body)
+	if err != nil {
+		return nil, err
 	}
 	var out []media.SearchResult
 	seen := map[string]bool{}

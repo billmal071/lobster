@@ -427,7 +427,7 @@ func newSeasonLister(p provider.Provider, selected media.SearchResult) *seasonLi
 }
 
 func (l *seasonLister) episodes(season media.Season) ([]media.Episode, error) {
-	episodes, err := l.primary.GetEpisodes(l.selected.ID, season.ID)
+	episodes, err := l.primary.GetEpisodes(l.selected.CallID(), season.ID)
 	if err == nil && len(episodes) > 0 {
 		return episodes, nil
 	}

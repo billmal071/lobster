@@ -1515,3 +1515,16 @@ func TestEpisodesRefusesAnEmptyListRatherThanCallingItASeasonWithNoEpisodes(t *t
 		t.Fatalf("emitted an episodes envelope alongside the refusal: %s", strings.TrimSpace(buf.String()))
 	}
 }
+
+func TestSeasonListerAsksThePrimaryForTheProviderID(t *testing.T) {
+	hostileEnv(t)
+	primary := &stubProvider{episodes: twentyTwoEpisodes()}
+	sel := media.SearchResult{ID: "tv/37854", ProviderID: "tv/one-piece-100", Title: "One Piece", Type: media.TV, FromCatalogue: true}
+
+	if _, err := newSeasonLister(primary, sel).episodes(media.Season{ID: "s1", Number: 1}); err != nil {
+		t.Fatalf("episodes = %v", err)
+	}
+	if primary.lastEpisodesID != "tv/one-piece-100" {
+		t.Fatalf("GetEpisodes was asked for %q, want the provider ID %q", primary.lastEpisodesID, "tv/one-piece-100")
+	}
+}

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -72,7 +73,7 @@ func historyRun(cmd *cobra.Command, args []string) error {
 	p := newProvider()
 
 	// Search for the title to get fresh results
-	results, err := p.Search(selected.Title)
+	results, err := historySearch(p, selected)
 	if err != nil {
 		return fmt.Errorf("searching for %q: %w", selected.Title, err)
 	}
@@ -99,6 +100,14 @@ func historyRun(cmd *cobra.Command, args []string) error {
 
 	// If exact ID not found, let user pick from search results
 	return playFlow(p, selected.Title)
+}
+
+func historySearch(p provider.Provider, e media.HistoryEntry) ([]media.SearchResult, error) {
+	results, err := p.Search(e.Title)
+	if err != nil && catalog.IsID(e.ID) && errors.Is(err, provider.ErrNoResults) {
+		return nil, nil
+	}
+	return results, err
 }
 
 func resumeViaPicker(p provider.Provider, e media.HistoryEntry) error {

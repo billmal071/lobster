@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"testing"
 
 	"lobster/internal/history"
@@ -219,5 +220,26 @@ func TestResumeViaPickerNeverHandsAFallbackIDToThePrimary(t *testing.T) {
 	}
 	if len(*offered) != 0 {
 		t.Fatalf("picker offered %v, want none: only the primary's own rows are offered", *offered)
+	}
+}
+
+func TestHistorySearchTreatsNoResultsAsEmptyForCatalogueEntriesOnly(t *testing.T) {
+	boom := errors.New("network down")
+	cases := []struct {
+		name    string
+		id      string
+		err     error
+		wantErr error
+	}{
+		{"catalogue entry, no results", "tv/37854", provider.ErrNoResults, nil},
+		{"catalogue entry, other error", "tv/37854", boom, boom},
+		{"provider entry, no results", "tv/some-show-1", provider.ErrNoResults, provider.ErrNoResults},
+	}
+	for _, c := range cases {
+		p := &stubProvider{searchErr: c.err}
+		_, err := historySearch(p, media.HistoryEntry{ID: c.id, Title: "Some Show"})
+		if !errors.Is(err, c.wantErr) || (c.wantErr == nil && err != nil) {
+			t.Errorf("%s: err = %v, want %v", c.name, err, c.wantErr)
+		}
 	}
 }
