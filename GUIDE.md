@@ -216,7 +216,7 @@ after the episode you asked for. This changed: scripts and agents that call
 `--autoplay` (off by default for attached play and for movies; on by default for
 `play --detach` on a series) makes `play` carry on by itself: when an episode
 plays to its end, the next one in the season starts, and after a season's last
-episode the next season's first. It stops at the end of the series, when an
+episode the next season's first. It stops at the end of the series (or of a season whose list may be incomplete), when an
 episode fails to resolve, and whenever you close the player before its last ten seconds.
 It also stops when the player cannot report a position (only mpv does), because
 an early quit would be indistinguishable from an ending. An episode only counts
@@ -228,7 +228,7 @@ seasons but not a season's episodes, a fallback provider's episode list is used
 instead, and the session moves to that fallback provider and its season list, so autoplay carries on through its episodes and into its following
 seasons. Moving into the next season asks only the provider the session
 holds, with no fallback: if it cannot list that season, autoplay stops with an error, and a list it marks as possibly short is
-played as measured with a warning that it may be short, and playback stops after the last measured episode with a message that the season's list may be incomplete, rather than moving on to the next season. The post-episode menu's Next episode stops the same way. When the primary cannot list seasons at
+played as measured with a warning that it may be short, and playback ends cleanly after its last measured episode with a warning that the season's list may be incomplete, rather than moving on to the next season (even when later seasons exist). At that point the post-episode menu is not shown and no Next episode is offered. When the primary cannot list seasons at
 all, when it lists a season you ask for only partially and the chain resolves a stream by number, or when no episode list
 can be found but a stream still resolves, lobster plays that single stream with no playlist
 session, so there is no autoplay: that play is the one episode you asked for, and

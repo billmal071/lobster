@@ -531,7 +531,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		partialList := false
 		if provider.PartialEpisodeList(episodes, err) &&
 			(episode == 0 || episodeIndex(episodes, episode) >= 0) {
-			warnPartialSeason(p, selectedSeason, title, err)
+			warnPartialSeason(p, selectedSeason, title, shortfallFor(err).reason)
 			partialList = true
 			err = nil
 		}
@@ -576,7 +576,9 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				}
 				selectedSeason = answer.season
 				episodes = answer.episodes
-				partialList = false
+				if partialList = answer.shortfall.code != ""; partialList {
+					warnPartialSeason(p, selectedSeason, title, answer.shortfall.reason)
+				}
 				err = nil
 			} else if episode > 0 {
 				// A caller who already knows which episode it wants does not
@@ -1298,9 +1300,9 @@ func initDownloadManager(c *config.Config) (*dlmanager.Manager, func(), error) {
 	return mgr, cleanup, nil
 }
 
-func warnPartialSeason(p provider.Provider, season media.Season, title string, err error) {
+func warnPartialSeason(p provider.Provider, season media.Season, title, reason string) {
 	warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",
-		providerLabel(p), season.Number, title, shortfallFor(err).reason)
+		providerLabel(p), season.Number, title, reason)
 }
 
 func newPlaybackSession(p provider.Provider, selected media.SearchResult, providerID string, chainPrimary provider.Provider,
@@ -1308,7 +1310,7 @@ func newPlaybackSession(p provider.Provider, selected media.SearchResult, provid
 	sess := playlist.NewWithProviderID(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx)
 	sess.EpisodesPartial = partial
 	sess.OnPartialSeason = func(season media.Season, err error) {
-		warnPartialSeason(sess.Provider, season, selected.Title, err)
+		warnPartialSeason(sess.Provider, season, selected.Title, shortfallFor(err).reason)
 	}
 	return sess
 }

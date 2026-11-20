@@ -388,3 +388,47 @@ func TestSessionBuiltOnAMeasuredPrefixStopsAtItsEnd(t *testing.T) {
 		t.Fatal("Next advanced past the end of a list the session was built on as a measured prefix")
 	}
 }
+
+func TestHasNextIsFalseAtEndOfMeasuredPrefix(t *testing.T) {
+	mp := &mockProvider{}
+	seasons := []media.Season{{Number: 1, ID: "s1"}, {Number: 2, ID: "s2"}, {Number: 3, ID: "s3"}}
+	eps := []media.Episode{{Number: 1, ID: "n1"}, {Number: 2, ID: "n2"}}
+	s := New(mp, media.SearchResult{ID: "x", Title: "X", Type: media.TV}, seasons, eps, 1, 0)
+	s.EpisodesPartial = true
+	if !s.HasNext() {
+		t.Fatal("HasNext false inside the measured prefix")
+	}
+	s.EpisodeIdx = 1
+	if s.HasNext() {
+		t.Fatal("HasNext true at the end of a measured prefix with a later season, so the menu would offer a Next that cannot be taken")
+	}
+	s.EpisodesPartial = false
+	if !s.HasNext() {
+		t.Fatal("HasNext false at the end of a complete season with a later season")
+	}
+}
+
+func TestPreviousIntoACompleteSeasonDropsThePrefixFlag(t *testing.T) {
+	mp := &mockProvider{episodes: map[string][]media.Episode{
+		"s1": {{Number: 1, ID: "a1"}, {Number: 2, ID: "a2"}},
+		"s2": {{Number: 1, ID: "b1"}, {Number: 2, ID: "b2"}},
+	}}
+	seasons := []media.Season{{Number: 1, ID: "s1"}, {Number: 2, ID: "s2"}}
+	s := New(mp, media.SearchResult{ID: "x", Title: "X", Type: media.TV}, seasons,
+		[]media.Episode{{Number: 1, ID: "b1"}}, 1, 0)
+	s.EpisodesPartial = true
+
+	if _, err := s.Previous(); err != nil {
+		t.Fatalf("Previous: %v", err)
+	}
+	if s.EpisodesPartial {
+		t.Fatal("the prefix flag of season 2 stayed set after moving into season 1")
+	}
+	ep, err := s.Next()
+	if err == nil && ep.ID != "" && s.SeasonIdx != 1 {
+		t.Fatalf("Next stayed in season idx %d", s.SeasonIdx)
+	}
+	if err != nil {
+		t.Fatalf("Next at the end of season 1: %v", err)
+	}
+}

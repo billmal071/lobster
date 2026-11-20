@@ -144,7 +144,7 @@ func (s *Session) HasNext() bool {
 	if s.EpisodeIdx < len(s.Episodes)-1 {
 		return true
 	}
-	return s.SeasonIdx < len(s.Seasons)-1
+	return !s.EpisodesPartial && s.SeasonIdx < len(s.Seasons)-1
 }
 
 // HasPrevious returns true if there is a previous episode in this season or a previous season.

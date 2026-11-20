@@ -362,6 +362,11 @@ func partialSeasonSession(trailingSeason bool) *playlist.Session {
 
 func playUntilStopped(t *testing.T, sess *playlist.Session, autoplay bool) ([]playedEp, error) {
 	t.Helper()
+	return playUntilStoppedWithMenu(t, sess, autoplay, func() {})
+}
+
+func playUntilStoppedWithMenu(t *testing.T, sess *playlist.Session, autoplay bool, onMenu func()) ([]playedEp, error) {
+	t.Helper()
 	var played []playedEp
 	prevPlay := playEpisode
 	playEpisode = func(s *playlist.Session) error {
@@ -371,7 +376,7 @@ func playUntilStopped(t *testing.T, sess *playlist.Session, autoplay bool) ([]pl
 	}
 	prevAuto, prevCfg, prevMenu, prevSup := flagAutoplay, cfg, postPlayMenu, flagSupervised
 	flagAutoplay, cfg, flagSupervised = autoplay, &config.Config{History: false}, false
-	postPlayMenu = func(*playlist.Session) (postPlayAction, error) { return actionNext, nil }
+	postPlayMenu = func(*playlist.Session) (postPlayAction, error) { onMenu(); return actionNext, nil }
 	t.Cleanup(func() {
 		playEpisode, flagAutoplay, cfg, postPlayMenu, flagSupervised = prevPlay, prevAuto, prevCfg, prevMenu, prevSup
 	})
@@ -379,30 +384,36 @@ func playUntilStopped(t *testing.T, sess *playlist.Session, autoplay bool) ([]pl
 	return played, err
 }
 
-func TestAutoplayStopsAtEndOfMeasuredPrefixWithMessage(t *testing.T) {
-	prev := warnf
-	warnf = func(string, ...any) {}
-	t.Cleanup(func() { warnf = prev })
+func TestAutoplayStopsCleanlyAtEndOfMeasuredPrefixBeforeALaterSeason(t *testing.T) {
+	warned := captureWarnings(t)
 	got, err := playUntilStopped(t, partialSeasonSession(true), true)
-	if err == nil || !strings.Contains(err.Error(), "incomplete") {
-		t.Fatalf("err = %v, want one saying the season list may be incomplete", err)
+	if err != nil {
+		t.Fatalf("err = %v, want a clean stop", err)
 	}
-	want := []playedEp{{1, 2}, {2, 1}}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("played %v, want %v", got, want)
+	if len(got) != 2 {
+		t.Fatalf("played %v, want season 1's last episode and the measured prefix only", got)
+	}
+	if !containsSubstring(*warned, "season 2 episode list may be incomplete") {
+		t.Fatalf("warnings = %q, want one saying season 2's list may be incomplete", *warned)
 	}
 }
 
-func TestMenuNextStopsAtEndOfMeasuredPrefixWithMessage(t *testing.T) {
-	prev := warnf
-	warnf = func(string, ...any) {}
-	t.Cleanup(func() { warnf = prev })
-	got, err := playUntilStopped(t, partialSeasonSession(true), false)
-	if err == nil || !strings.Contains(err.Error(), "incomplete") {
-		t.Fatalf("err = %v, want one saying the season list may be incomplete", err)
+func TestMenuIsNotShownAtEndOfMeasuredPrefixBeforeALaterSeason(t *testing.T) {
+	warned := captureWarnings(t)
+	sess := partialSeasonSession(true)
+	menuCalls := 0
+	got, err := playUntilStoppedWithMenu(t, sess, false, func() { menuCalls++ })
+	if err != nil {
+		t.Fatalf("err = %v, want a clean stop", err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("played %v, want the last episode of season 1 and the measured prefix only", got)
+		t.Fatalf("played %v, want season 1's last episode and the measured prefix only", got)
+	}
+	if menuCalls != 1 {
+		t.Fatalf("menu shown %d times, want once (after season 1) and not again at the end of the prefix", menuCalls)
+	}
+	if !containsSubstring(*warned, "season 2 episode list may be incomplete") {
+		t.Fatalf("warnings = %q, want one saying season 2's list may be incomplete", *warned)
 	}
 }
 
