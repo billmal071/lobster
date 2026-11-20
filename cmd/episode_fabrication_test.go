@@ -1527,3 +1527,18 @@ func TestSeasonListerAsksThePrimaryForTheProviderID(t *testing.T) {
 		t.Fatalf("GetEpisodes was asked for %q, want the provider ID %q", primary.lastEpisodesID, "tv/one-piece-100")
 	}
 }
+
+func TestSeasonListerNeverAsksThePrimaryWithAnUnresolvedCatalogueID(t *testing.T) {
+	withFallbackChain(t)
+	primary := &stubProvider{episodes: twentyTwoEpisodes()}
+	sel := media.SearchResult{ID: "tv/37854", Unresolved: true, Title: "One Piece", Type: media.TV, FromCatalogue: true}
+
+	episodes, err := newSeasonLister(primary, sel).episodes(media.Season{ID: "s1", Number: 1})
+
+	if primary.lastEpisodesID != "" {
+		t.Fatalf("GetEpisodes was asked for %q, an ID the provider never issued", primary.lastEpisodesID)
+	}
+	if err == nil || len(episodes) != 0 {
+		t.Fatalf("episodes = %d, err = %v; with no chain member listing the season the lister must report the failure", len(episodes), err)
+	}
+}
