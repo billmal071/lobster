@@ -227,7 +227,7 @@ It needs a playlist session, which exists only when the play resolves a season a
 seasons but not a season's episodes, a fallback provider's episode list is used
 instead, and autoplay carries on from it within that season. Moving into the next season asks only the provider the session
 holds, with no fallback: if it cannot list that season, autoplay stops with an error, and a list it marks as possibly short is
-played as measured. When the primary cannot list seasons at
+played as measured, so autoplay moves on to the following season at the end of the measured episodes and skips any beyond them. When the primary cannot list seasons at
 all, when it lists a season you ask for only partially and the chain resolves a stream by number, or when no episode list
 can be found but a stream still resolves, lobster plays that single stream with no playlist
 session, so there is no autoplay: that play is the one episode you asked for, and
