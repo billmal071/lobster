@@ -275,14 +275,10 @@ func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, floa
 			continue
 		}
 		if event.Name == "time-pos" && event.Data != nil {
-			// mpv told us where playback is, so the position this call returns
-			// is a measurement — including when that measurement is 0, which
-			// is why this is set before the > 0 filter below rather than from
-			// lastPos.
 			observed = true
+			lastPos = *event.Data
 		}
 		if event.Name == "time-pos" && event.Data != nil && *event.Data > 0 {
-			lastPos = *event.Data
 			// Hand the position to the checkpoint writer, at most once per
 			// interval. The send never blocks: if the writer is still busy
 			// with the previous write, this position is simply skipped and a

@@ -239,3 +239,28 @@ func TestTrackPlaybackCheckpointNeverOutlivesTracking(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTrackPlaybackReturnsMeasuredZeroAfterSeekBackToStart(t *testing.T) {
+	shortCheckpointInterval(t, time.Hour)
+
+	ipc, err := newIPCSocket()
+	if err != nil {
+		t.Fatalf("newIPCSocket: %v", err)
+	}
+	t.Cleanup(ipc.cleanup)
+
+	serverDone := serveMPVIPCEvents(ipc.path, []string{
+		durationEvent(1440),
+		timePosEvent(1435),
+		timePosEvent(0),
+	})
+
+	m := &MPV{}
+	pos, dur, observed := m.trackPlayback(ipc, make(chan struct{}))
+	if pos != 0 || dur != 1440 || !observed {
+		t.Fatalf("trackPlayback = %g, %g, %v; want 0, 1440, true (a seek back to the start must not leave the near-end position)", pos, dur, observed)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+}
