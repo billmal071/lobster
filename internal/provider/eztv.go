@@ -350,12 +350,16 @@ func (e *EZTV) probeCatalogues(ids []string) []bool {
 	return held
 }
 
-// hasTorrents reads page 1 of a show's list, reusing a cached catalogue or an earlier probe. An error answers true and is not cached.
+// hasTorrents reads page 1 of a show's list, reusing a cached catalogue, the prefix a walk that ended short fetched, or an earlier probe. An error answers true and is not cached.
 func (e *EZTV) hasTorrents(imdb string) bool {
 	e.mu.Lock()
 	if c, ok := e.shows[imdb]; ok && e.now().Sub(c.fetched) < eztvCacheTTL {
 		e.mu.Unlock()
 		return len(c.torrents) > 0
+	}
+	if p, ok := e.partial[imdb]; ok && e.now().Sub(p.at) < eztvCacheTTL {
+		e.mu.Unlock()
+		return true
 	}
 	if p, ok := e.probes[imdb]; ok && e.now().Sub(p.at) < eztvCacheTTL {
 		e.mu.Unlock()
@@ -473,23 +477,33 @@ func (e *EZTV) imdbFor(tmdbID int) string {
 // GetSeasons lists the seasons that have at least one single-episode release,
 // in ascending order. When the release list could not be fetched in full, the
 // seasons found so far come back with an error wrapping ErrIncompleteEpisodeList:
-// a missing season may sit on a page that was never read.
+// a missing season may sit on a page that was never read. A season held only as
+// a season pack is not listed, and is not reported as missing either.
 func (e *EZTV) GetSeasons(id string) ([]media.Season, error) {
 	torrents, complete, err := e.catalogue(id)
 	if err != nil {
 		return nil, err
 	}
 	seen := map[int]bool{}
-	var nums []int
+	held := map[int]bool{}
+	var nums, carried []int
 	for _, t := range torrents {
 		s := int(t.Season)
-		if s <= 0 || t.Episode <= 0 || seen[s] {
+		if s <= 0 {
+			continue
+		}
+		if !held[s] {
+			held[s] = true
+			carried = append(carried, s)
+		}
+		if t.Episode <= 0 || seen[s] {
 			continue
 		}
 		seen[s] = true
 		nums = append(nums, s)
 	}
 	sort.Ints(nums)
+	sort.Ints(carried)
 	seasons := make([]media.Season, 0, len(nums))
 	for _, n := range nums {
 		seasons = append(seasons, media.Season{Number: n, ID: strconv.Itoa(n)})
@@ -497,8 +511,11 @@ func (e *EZTV) GetSeasons(id string) ([]media.Season, error) {
 	if !complete {
 		return seasons, fmt.Errorf("%w: eztv could not fetch every page of the release list for %s", ErrIncompleteEpisodeList, id)
 	}
-	if missing := eztvMissing(nums); missing != "" {
-		return seasons, eztvGapError{fmt.Sprintf("eztv carries only some seasons of %s; %s", id, eztvMissingPhrase("season", missing))}
+	if len(nums) == 0 {
+		return seasons, nil
+	}
+	if missing := eztvMissing(carried); missing != "" {
+		return seasons, eztvGapError{fmt.Sprintf("eztv carries only some seasons of %s; %s", id, eztvMissingPhrase("season", missing, false))}
 	}
 	return seasons, nil
 }
@@ -516,8 +533,13 @@ func (e *EZTV) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
 	titles := map[int]string{}
 	seen := map[int]bool{}
 	var nums []int
+	packed := false
 	for _, t := range torrents {
-		if int(t.Season) != season || t.Episode <= 0 {
+		if int(t.Season) != season {
+			continue
+		}
+		if t.Episode <= 0 {
+			packed = true
 			continue
 		}
 		n := int(t.Episode)
@@ -544,7 +566,7 @@ func (e *EZTV) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
 		return eps, fmt.Errorf("%w: eztv could not fetch every page of the release list for %s", ErrIncompleteEpisodeList, id)
 	}
 	if missing := eztvMissing(nums); missing != "" && season <= eztvMaxGapCheck {
-		return eps, eztvGapError{fmt.Sprintf("eztv carries only some episodes of season %d of %s; %s", season, id, eztvMissingPhrase("episode", missing))}
+		return eps, eztvGapError{fmt.Sprintf("eztv carries only some episodes of season %d of %s; %s", season, id, eztvMissingPhrase("episode", missing, packed))}
 	}
 	return eps, nil
 }
@@ -584,11 +606,15 @@ func eztvMissing(nums []int) string {
 }
 
 // eztvMissingPhrase words the output of eztvMissing for the error message.
-func eztvMissingPhrase(noun, missing string) string {
+func eztvMissingPhrase(noun, missing string, packed bool) string {
+	subject, is, has := noun+" "+missing, "is", "has"
 	if strings.ContainsAny(missing, "-,") {
-		return fmt.Sprintf("%ss %s are not on EZTV", noun, missing)
+		subject, is, has = noun+"s "+missing, "are", "have"
 	}
-	return fmt.Sprintf("%s %s is not on EZTV", noun, missing)
+	if packed {
+		return fmt.Sprintf("%s %s no standalone release on EZTV (the season pack is not searched)", subject, has)
+	}
+	return fmt.Sprintf("%s %s not on EZTV", subject, is)
 }
 
 // eztvEpisodeMarker finds the SxxEyy token and what follows it.
