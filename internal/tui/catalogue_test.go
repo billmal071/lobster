@@ -205,3 +205,13 @@ func TestSelectionKeepsANativeProviderRowUnresolved(t *testing.T) {
 		t.Fatalf("native row = %+v, want it unchanged", *got)
 	}
 }
+
+func TestNoticeDoesNotReplaceTheShortcutFooter(t *testing.T) {
+	m := AppModel{list: list.New(nil, list.NewDefaultDelegate(), 10, 10), activeTab: tabMovies, width: 120, height: 40, notice: "tip: set tmdb_api_key"}
+	view := m.View()
+	for _, want := range []string{"tip: set tmdb_api_key", "[ENTER] Play", "[S] Search"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view lacks %q", want)
+		}
+	}
+}

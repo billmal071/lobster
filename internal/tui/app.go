@@ -632,8 +632,6 @@ func (m AppModel) View() string {
 		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Render(m.toast)
 	} else if m.err != nil {
 		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555")).Render(fmt.Sprintf("Error: %v", m.err))
-	} else if m.notice != "" && m.activeTab != tabDownloads {
-		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("#F1FA8C")).Render(m.notice)
 	} else if m.activeTab == tabDownloads {
 		footer = footerStyle.Render("[P] Pause/Resume  [X] Cancel  [R] Retry  [BS] Remove  [C] Clear  [Shift+R] Refresh  [TAB] Browse")
 	} else {
@@ -642,7 +640,11 @@ func (m AppModel) View() string {
 		if m.dlManager != nil && m.activeTab != tabLiveTV {
 			dlHint = "  [D] Download  "
 		}
-		footer = footerStyle.Render("[ENTER] Play" + dlHint + "[S] Search  " + tabRange + " Categories  [TAB] Next Tab  [Q] Quit")
+		if m.notice != "" {
+			footerStyle = footerStyle.MarginTop(0)
+			footer = lipgloss.NewStyle().Foreground(lipgloss.Color("#F1FA8C")).Render(m.notice) + "\n"
+		}
+		footer += footerStyle.Render("[ENTER] Play" + dlHint + "[S] Search  " + tabRange + " Categories  [TAB] Next Tab  [Q] Quit")
 	}
 
 	base := docStyle.Render(lipgloss.JoinVertical(lipgloss.Left,

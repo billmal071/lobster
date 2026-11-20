@@ -487,8 +487,8 @@ key or a v4 read access token works.
 - Without a key nothing changes, except one line saying the key enables richer
   lists. If TMDB rejects the key, rate-limits you or cannot be reached, lobster
   says so in one line and shows the source's own list instead.
-- Anime tab: Japanese-language animation, most popular first. Its "recent"
-  list still comes from the anime source.
+- Anime tab: Japanese-language animation, most popular first. It has no
+  "recent" list: the anime source returns none, with or without a key.
 - Responses are cached in memory for ten minutes.
 
 This product uses TMDB and the TMDB APIs but is not endorsed, certified, or

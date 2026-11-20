@@ -4,6 +4,7 @@
 package catalog
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -94,7 +95,7 @@ func (c *Client) get(path string, q url.Values) ([]byte, error) {
 	if !c.isV4Token() {
 		full.Set("api_key", c.key)
 	}
-	req, err := http.NewRequest(http.MethodGet, c.base+path+"?"+full.Encode(), nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, c.base+path+"?"+full.Encode(), nil)
 	if err != nil {
 		return nil, errors.New("building TMDB request failed")
 	}

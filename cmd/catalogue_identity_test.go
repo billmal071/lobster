@@ -6,6 +6,7 @@ import (
 	"lobster/internal/history"
 	"lobster/internal/media"
 	"lobster/internal/player"
+	"lobster/internal/provider"
 )
 
 type idRecordingProvider struct {
@@ -159,5 +160,64 @@ func TestHistoryResumeThroughThePickerKeepsTheSavedIdentity(t *testing.T) {
 	entries, err := history.Load()
 	if err != nil || len(entries) != 1 || entries[0].ID != "tv/1" || entries[0].Season != 1 || entries[0].Episode != 22 {
 		t.Fatalf("history = %+v, %v; want one row tv/1 S1E22", entries, err)
+	}
+}
+
+type mixedTypePlayProvider struct {
+	*idRecordingProvider
+}
+
+func (mixedTypePlayProvider) Search(string) ([]media.SearchResult, error) {
+	return []media.SearchResult{
+		{ID: "movie/utopia-film", Title: "Some Show", Type: media.Movie, Year: "2013"},
+		{ID: "tv/utopia-2013", Title: "Some Show", Type: media.TV, Year: "2013"},
+		{ID: "tv/utopia-2020", Title: "Some Show", Type: media.TV, Year: "2020"},
+	}, nil
+}
+
+func TestResumeViaPickerOffersOnlyTheSavedMediaType(t *testing.T) {
+	url := catalogueHarness(t)
+	withFallbackChain(t, newListingChainProvider(url))
+	offered := recordSelections(t, 0)
+	inner := &idRecordingProvider{stubProvider: &stubProvider{
+		seasons:          []media.Season{{ID: "s1", Number: 1}},
+		episodesBySeason: map[string][]media.Episode{"s1": twentyTwoEpisodes()},
+	}}
+	saved := media.HistoryEntry{ID: "tv/1", Title: "Some Show", Type: media.TV, Season: 1, Episode: 22}
+
+	if err := resumeViaPicker(mixedTypePlayProvider{inner}, saved); err != nil {
+		t.Fatalf("resumeViaPicker = %v", err)
+	}
+	if len(*offered) == 0 || len((*offered)[0]) != 2 {
+		t.Fatalf("picker offered %v, want only the two TV works", *offered)
+	}
+	if len(inner.seasonIDs) == 0 || inner.seasonIDs[0] != "tv/utopia-2013" {
+		t.Fatalf("provider asked for %v, want tv/utopia-2013", inner.seasonIDs)
+	}
+}
+
+type emptySearchPlayProvider struct {
+	*idRecordingProvider
+}
+
+func (emptySearchPlayProvider) Search(string) ([]media.SearchResult, error) {
+	return nil, provider.ErrNoResults
+}
+
+func TestResumeViaPickerNeverHandsAFallbackIDToThePrimary(t *testing.T) {
+	url := catalogueHarness(t)
+	withFallbackChain(t, newListingChainProvider(url))
+	offered := recordSelections(t, 0)
+	inner := &idRecordingProvider{stubProvider: &stubProvider{}}
+	saved := media.HistoryEntry{ID: "tv/1", Title: "Some Show", Type: media.TV, Season: 1, Episode: 22}
+
+	if err := resumeViaPicker(emptySearchPlayProvider{inner}, saved); err != nil {
+		t.Fatalf("resumeViaPicker = %v", err)
+	}
+	if len(inner.seasonIDs) != 0 {
+		t.Fatalf("primary was asked for seasons of %v, an ID it never issued", inner.seasonIDs)
+	}
+	if len(*offered) != 0 {
+		t.Fatalf("picker offered %v, want none: only the primary's own rows are offered", *offered)
 	}
 }

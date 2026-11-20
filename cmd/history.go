@@ -102,21 +102,26 @@ func historyRun(cmd *cobra.Command, args []string) error {
 }
 
 func resumeViaPicker(p provider.Provider, e media.HistoryEntry) error {
-	results, err := gatherSearchResults(p, fallbackSearchProviders(p), e.Title)
-	if err != nil {
-		return err
+	stop := ui.StartSpinner(fmt.Sprintf("Searching for %q...", e.Title))
+	results, _ := p.Search(e.Title)
+	stop()
+	var rows []media.SearchResult
+	var items []string
+	for _, r := range results {
+		if r.Type == e.Type {
+			rows = append(rows, r)
+			items = append(items, provider.FormatDisplayTitle(r))
+		}
 	}
-	items := make([]string, len(results))
-	for i, r := range results {
-		items[i] = provider.FormatDisplayTitle(r)
+	row := media.SearchResult{ID: e.ID, Title: e.Title, Type: e.Type, FromCatalogue: true, Unresolved: len(rows) == 0}
+	if len(rows) > 0 {
+		idx, err := selectItem("Select", items)
+		if err != nil {
+			return err
+		}
+		row = rows[idx]
+		row.ID, row.ProviderID, row.Title, row.FromCatalogue = e.ID, rows[idx].ID, e.Title, true
 	}
-	idx, err := selectItem("Select", items)
-	if err != nil {
-		return err
-	}
-	picked := results[idx]
-	row := picked
-	row.ID, row.ProviderID, row.Title, row.Type, row.FromCatalogue = e.ID, picked.ID, e.Title, e.Type, true
 	return resolveAndPlay(p, row, e.Season, e.Episode)
 }
 
