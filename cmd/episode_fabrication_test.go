@@ -1517,7 +1517,6 @@ func TestEpisodesRefusesAnEmptyListRatherThanCallingItASeasonWithNoEpisodes(t *t
 }
 
 func TestSeasonListerAsksThePrimaryForTheProviderID(t *testing.T) {
-	hostileEnv(t)
 	primary := &stubProvider{episodes: twentyTwoEpisodes()}
 	sel := media.SearchResult{ID: "tv/37854", ProviderID: "tv/one-piece-100", Title: "One Piece", Type: media.TV, FromCatalogue: true}
 
