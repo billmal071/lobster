@@ -77,7 +77,7 @@ type AppModel struct {
 	downloadsModel downloads.Model
 	dlManager      *dlmanager.Manager
 	toast          string // transient notification
-	notice         string // catalogue fallback or hint line; cleared on tab switch
+	notice         string // catalogue fallback or hint line; cleared on tab switch and on search
 
 	// Live TV state
 	liveTVProvider *provider.LiveTV
@@ -261,6 +261,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.list.Title = "Search: " + m.searchInput.Value()
 				m.results = nil // Clear current results to show loader
 				m.currentItem = nil
+				m.notice = ""
 				m.tabReqGen++
 				cmds = append(cmds, m.list.StartSpinner())
 				// Only the Movies/Series tabs fan out to the movies fallback

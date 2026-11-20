@@ -286,3 +286,14 @@ func TestRefusedDownloadsSwitchKeepsTheListingInFlight(t *testing.T) {
 		t.Fatalf("tab = %v, shown = %v; with no download manager the Series listing is still the current request", m.activeTab, got)
 	}
 }
+
+func TestSearchClearsTheNoticeOfTheListingItReplaces(t *testing.T) {
+	m := browseModel(tabSeries, searchStub{found: oneRow("Search hit")})
+	m.notice = "TMDB unavailable; showing the provider's list instead"
+
+	m, _ = submitSearch(t, m, "hit")
+
+	if m.notice != "" {
+		t.Fatalf("notice = %q, a notice about the replaced listing must not stay over the search results", m.notice)
+	}
+}
