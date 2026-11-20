@@ -528,9 +528,11 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		// that says it may be short is not evidence that an episode above it
 		// does not exist, so that case still falls through to the recovery
 		// below, which needs no list.
+		partialList := false
 		if provider.PartialEpisodeList(episodes, err) &&
 			(episode == 0 || episodeIndex(episodes, episode) >= 0) {
 			warnPartialSeason(p, selectedSeason, title, err)
+			partialList = true
 			err = nil
 		}
 
@@ -574,6 +576,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				}
 				selectedSeason = answer.season
 				episodes = answer.episodes
+				partialList = false
 				err = nil
 			} else if episode > 0 {
 				// A caller who already knows which episode it wants does not
@@ -710,7 +713,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		debugf("episode: %d (ID: %s)", selectedEpisode.Number, selectedEpisode.ID)
 
 		// Create a playlist session for continuous playback
-		sess := newPlaybackSession(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx)
+		sess := newPlaybackSession(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx, partialList)
 		cachedServerName = ""
 		return runPlaybackLoop(sess)
 	}
@@ -1301,8 +1304,9 @@ func warnPartialSeason(p provider.Provider, season media.Season, title string, e
 }
 
 func newPlaybackSession(p provider.Provider, selected media.SearchResult, providerID string, chainPrimary provider.Provider,
-	seasons []media.Season, episodes []media.Episode, seasonIdx, episodeIdx int) *playlist.Session {
+	seasons []media.Season, episodes []media.Episode, seasonIdx, episodeIdx int, partial bool) *playlist.Session {
 	sess := playlist.NewWithProviderID(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx)
+	sess.EpisodesPartial = partial
 	sess.OnPartialSeason = func(season media.Season, err error) {
 		warnPartialSeason(sess.Provider, season, selected.Title, err)
 	}

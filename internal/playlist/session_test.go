@@ -3,6 +3,7 @@ package playlist
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"lobster/internal/media"
@@ -332,5 +333,58 @@ func TestNextReportsMeasuredPrefixOnSeasonCrossing(t *testing.T) {
 	}
 	if len(*got) != 0 {
 		t.Fatalf("OnPartialSeason fired for a complete season: %v", *got)
+	}
+}
+
+func TestNextStopsAtEndOfMeasuredPrefix(t *testing.T) {
+	partial := fmt.Errorf("probe budget: %w", provider.ErrIncompleteEpisodeList)
+	build := func(err error) *Session {
+		mp := &mockProvider{
+			episodes: map[string][]media.Episode{
+				"s2": {{Number: 1, ID: "n1"}, {Number: 2, ID: "n2"}},
+				"s3": {{Number: 1, ID: "m1"}},
+			},
+			errs: map[string]error{},
+		}
+		if err != nil {
+			mp.errs["s2"] = err
+		}
+		seasons := []media.Season{{Number: 1, ID: "s1"}, {Number: 2, ID: "s2"}, {Number: 3, ID: "s3"}}
+		return New(mp, media.SearchResult{ID: "x", Title: "X", Type: media.TV}, seasons,
+			[]media.Episode{{Number: 1, ID: "e1"}}, 0, 0)
+	}
+
+	s := build(partial)
+	if _, err := s.Next(); err != nil {
+		t.Fatalf("crossing into the prefix: %v", err)
+	}
+	if _, err := s.Next(); err != nil {
+		t.Fatalf("inside the prefix: %v", err)
+	}
+	_, err := s.Next()
+	if err == nil || !strings.Contains(err.Error(), "season 2") || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("Next at the end of a measured prefix = %v, want an error naming season 2 as incomplete", err)
+	}
+	if s.SeasonIdx != 1 || s.EpisodeIdx != 1 {
+		t.Fatalf("position moved to season idx %d episode idx %d, want it left on the last measured episode", s.SeasonIdx, s.EpisodeIdx)
+	}
+
+	s = build(nil)
+	s.Next()
+	s.Next()
+	ep, err := s.Next()
+	if err != nil || ep.ID != "m1" || s.SeasonIdx != 2 {
+		t.Fatalf("Next at the end of a complete season = %v, %v (season idx %d), want m1 in season 3", ep, err, s.SeasonIdx)
+	}
+}
+
+func TestSessionBuiltOnAMeasuredPrefixStopsAtItsEnd(t *testing.T) {
+	mp := &mockProvider{episodes: map[string][]media.Episode{"s2": {{Number: 1, ID: "n1"}}}}
+	seasons := []media.Season{{Number: 1, ID: "s1"}, {Number: 2, ID: "s2"}}
+	s := New(mp, media.SearchResult{ID: "x", Title: "X", Type: media.TV}, seasons,
+		[]media.Episode{{Number: 1, ID: "e1"}}, 0, 0)
+	s.EpisodesPartial = true
+	if _, err := s.Next(); err == nil {
+		t.Fatal("Next advanced past the end of a list the session was built on as a measured prefix")
 	}
 }

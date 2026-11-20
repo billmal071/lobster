@@ -46,6 +46,7 @@ type Session struct {
 	ChainPrimary provider.Provider
 
 	OnPartialSeason func(season media.Season, err error)
+	EpisodesPartial bool
 
 	Seasons      []media.Season
 	Episodes     []media.Episode // episodes for current season
@@ -163,6 +164,10 @@ func (s *Session) Next() (media.Episode, error) {
 		return s.Current(), nil
 	}
 
+	if s.EpisodesPartial {
+		return media.Episode{}, s.IncompleteListError()
+	}
+
 	if s.SeasonIdx >= len(s.Seasons)-1 {
 		return media.Episode{}, fmt.Errorf("no next episode: end of series")
 	}
@@ -186,7 +191,14 @@ func (s *Session) Next() (media.Episode, error) {
 
 	s.Episodes = episodes
 	s.EpisodeIdx = 0
+	s.EpisodesPartial = err != nil
 	return s.Current(), nil
+}
+
+// IncompleteListError is why playback stops at the end of a season whose
+// episode list was only a measured prefix.
+func (s *Session) IncompleteListError() error {
+	return fmt.Errorf("season %d episode list may be incomplete: stopping after its last measured episode", s.CurrentSeason().Number)
 }
 
 // Previous moves to the previous episode. If at the start of a season, loads
@@ -215,6 +227,7 @@ func (s *Session) Previous() (media.Episode, error) {
 	}
 
 	s.Episodes = episodes
+	s.EpisodesPartial = false
 	s.EpisodeIdx = len(s.Episodes) - 1
 	return s.Current(), nil
 }

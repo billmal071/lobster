@@ -332,7 +332,7 @@ func TestPlaybackSessionWarnsWhenSeasonCrossingIsPartial(t *testing.T) {
 	stub.episodesErr = fmt.Errorf("probe budget: %w", provider.ErrIncompleteEpisodeList)
 	stub.episodesWithErr = []media.Episode{{ID: "e21", Number: 1}}
 	sel := media.SearchResult{ID: "tv/show", Title: "Some Show", Type: media.TV}
-	sess := newPlaybackSession(stub, sel, "x", stub, seasons, eps, 0, len(eps)-1)
+	sess := newPlaybackSession(stub, sel, "x", stub, seasons, eps, 0, len(eps)-1, false)
 
 	var warned []string
 	prev := warnf
@@ -344,5 +344,85 @@ func TestPlaybackSessionWarnsWhenSeasonCrossingIsPartial(t *testing.T) {
 	}
 	if len(warned) != 1 || !strings.Contains(warned[0], "season 2") || !strings.Contains(warned[0], "may be short") {
 		t.Fatalf("warnings = %q, want one saying season 2 may be short", warned)
+	}
+}
+
+func partialSeasonSession(trailingSeason bool) *playlist.Session {
+	stub := autoplayStub()
+	if trailingSeason {
+		stub.seasons = append(stub.seasons, media.Season{ID: "s3", Number: 3})
+	}
+	seasons, _ := stub.GetSeasons("x")
+	eps, _ := stub.GetEpisodes("x", "s1")
+	stub.episodesErr = fmt.Errorf("probe budget: %w", provider.ErrIncompleteEpisodeList)
+	stub.episodesWithErr = []media.Episode{{ID: "e21", Number: 1}}
+	sel := media.SearchResult{ID: "tv/show", Title: "Some Show", Type: media.TV}
+	return newPlaybackSession(stub, sel, "x", stub, seasons, eps, 0, len(eps)-1, false)
+}
+
+func playUntilStopped(t *testing.T, sess *playlist.Session, autoplay bool) ([]playedEp, error) {
+	t.Helper()
+	var played []playedEp
+	prevPlay := playEpisode
+	playEpisode = func(s *playlist.Session) error {
+		played = append(played, playedEp{s.CurrentSeason().Number, s.Current().Number})
+		s.LastPosition, s.LastDuration = endedNaturally.Position, endedNaturally.Duration
+		return nil
+	}
+	prevAuto, prevCfg, prevMenu, prevSup := flagAutoplay, cfg, postPlayMenu, flagSupervised
+	flagAutoplay, cfg, flagSupervised = autoplay, &config.Config{History: false}, false
+	postPlayMenu = func(*playlist.Session) (postPlayAction, error) { return actionNext, nil }
+	t.Cleanup(func() {
+		playEpisode, flagAutoplay, cfg, postPlayMenu, flagSupervised = prevPlay, prevAuto, prevCfg, prevMenu, prevSup
+	})
+	err := runPlaybackLoop(sess)
+	return played, err
+}
+
+func TestAutoplayStopsAtEndOfMeasuredPrefixWithMessage(t *testing.T) {
+	prev := warnf
+	warnf = func(string, ...any) {}
+	t.Cleanup(func() { warnf = prev })
+	got, err := playUntilStopped(t, partialSeasonSession(true), true)
+	if err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("err = %v, want one saying the season list may be incomplete", err)
+	}
+	want := []playedEp{{1, 2}, {2, 1}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("played %v, want %v", got, want)
+	}
+}
+
+func TestMenuNextStopsAtEndOfMeasuredPrefixWithMessage(t *testing.T) {
+	prev := warnf
+	warnf = func(string, ...any) {}
+	t.Cleanup(func() { warnf = prev })
+	got, err := playUntilStopped(t, partialSeasonSession(true), false)
+	if err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("err = %v, want one saying the season list may be incomplete", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("played %v, want the last episode of season 1 and the measured prefix only", got)
+	}
+}
+
+func TestAutoplayWarnsInsteadOfEndOfSeriesWhenLastSeasonIsAMeasuredPrefix(t *testing.T) {
+	var warned []string
+	prev := warnf
+	warnf = func(format string, args ...any) { warned = append(warned, fmt.Sprintf(format, args...)) }
+	t.Cleanup(func() { warnf = prev })
+	got, err := playUntilStopped(t, partialSeasonSession(false), true)
+	if err != nil {
+		t.Fatalf("err = %v, want a clean stop with a warning", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("played %v, want season 1's last episode and the measured prefix", got)
+	}
+	found := false
+	for _, w := range warned {
+		found = found || strings.Contains(w, "season 2 episode list may be incomplete")
+	}
+	if !found {
+		t.Fatalf("warnings = %q, want one saying season 2's list may be incomplete", warned)
 	}
 }
