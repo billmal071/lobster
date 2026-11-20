@@ -528,7 +528,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		// that says it may be short is not evidence that an episode above it
 		// does not exist, so that case still falls through to the recovery
 		// below, which needs no list.
-		if sf := shortfallFor(err); sf.code != "" && len(episodes) > 0 &&
+		if sf := shortfallFor(err); provider.PartialEpisodeList(episodes, err) &&
 			(episode == 0 || episodeIndex(episodes, episode) >= 0) {
 			err = nil
 			warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",

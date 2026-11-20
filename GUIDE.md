@@ -223,10 +223,13 @@ an early quit would be indistinguishable from an ending. An episode only counts
 as finished when the player reports both a position and a duration; a position
 without a duration never does. It does nothing for a
 movie, and does not read `auto_next`, which only controls the attached countdown.
-It needs the primary provider to list the show's seasons. When the primary lists
+It needs a playlist session, which exists only when the play resolves a season and an episode list. When the primary lists
 seasons but not a season's episodes, a fallback provider's episode list is used
-instead, and autoplay carries on from it. When the primary cannot list seasons at
-all, the fallback chain resolves one stream and plays it with no playlist
+instead, and autoplay carries on from it within that season. Moving into the next season asks only the provider the session
+holds, with no fallback: if it cannot list that season, autoplay stops with an error, and a list it marks as possibly short is
+played as measured. When the primary cannot list seasons at
+all, when it lists a season you ask for only partially and the chain resolves a stream by number, or when no episode list
+can be found but a stream still resolves, lobster plays that single stream with no playlist
 session, so there is no autoplay: that play is the one episode you asked for, and
 so is a detached play with `--autoplay=false` (nothing can answer the
 post-episode menu there).

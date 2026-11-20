@@ -1,15 +1,18 @@
 package playlist
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
 	"lobster/internal/media"
+	"lobster/internal/provider"
 )
 
 // mockProvider implements provider.Provider for testing.
 type mockProvider struct {
 	episodes map[string][]media.Episode // keyed by seasonID
+	errs     map[string]error
 }
 
 func (m *mockProvider) Search(query string) ([]media.SearchResult, error) {
@@ -20,6 +23,9 @@ func (m *mockProvider) GetDetails(id string) (*media.ContentDetail, error) {
 }
 func (m *mockProvider) GetSeasons(id string) ([]media.Season, error) { return nil, nil }
 func (m *mockProvider) GetEpisodes(id string, seasonID string) ([]media.Episode, error) {
+	if err, bad := m.errs[seasonID]; bad {
+		return m.episodes[seasonID], err
+	}
 	eps, ok := m.episodes[seasonID]
 	if !ok {
 		return nil, fmt.Errorf("season %s not found", seasonID)
@@ -244,5 +250,47 @@ func TestTitle(t *testing.T) {
 	want := "Test Show S01E01"
 	if got := s.Title(); got != want {
 		t.Errorf("Title() = %q, want %q", got, want)
+	}
+}
+
+func TestNextAcrossSeasonEpisodeListErrors(t *testing.T) {
+	partial := fmt.Errorf("probe budget: %w", provider.ErrIncompleteEpisodeList)
+	cases := []struct {
+		name    string
+		eps     []media.Episode
+		err     error
+		wantErr bool
+	}{
+		{"measured prefix with incomplete is usable", []media.Episode{{Number: 1, ID: "n1"}}, partial, false},
+		{"incomplete with no episodes fails", nil, partial, true},
+		{"unrelated error with episodes fails", []media.Episode{{Number: 1, ID: "n1"}}, errors.New("boom"), true},
+		{"empty next season fails", nil, nil, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			mp := &mockProvider{
+				episodes: map[string][]media.Episode{"s2": c.eps},
+				errs:     map[string]error{},
+			}
+			if c.err != nil {
+				mp.errs["s2"] = c.err
+			}
+			seasons := []media.Season{{Number: 1, ID: "s1"}, {Number: 2, ID: "s2"}}
+			s := New(mp, media.SearchResult{ID: "x", Title: "X", Type: media.TV}, seasons,
+				[]media.Episode{{Number: 1, ID: "e1"}}, 0, 0)
+			ep, err := s.Next()
+			if c.wantErr {
+				if err == nil {
+					t.Fatal("Next returned nil error")
+				}
+				if s.SeasonIdx != 0 || s.EpisodeIdx != 0 {
+					t.Fatalf("no rollback: season %d episode %d", s.SeasonIdx, s.EpisodeIdx)
+				}
+				return
+			}
+			if err != nil || ep.ID != "n1" || s.SeasonIdx != 1 {
+				t.Fatalf("Next = %v, %v (season %d), want n1 in season 2", ep, err, s.SeasonIdx)
+			}
+		})
 	}
 }

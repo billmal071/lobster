@@ -280,7 +280,7 @@ lobster find "the matrix" --limit 5      # JSON candidates, each with a ref
 lobster find "the bear" --type tv        # filter to movie | tv (case-insensitive)
 lobster episodes --ref <REF> --season 2  # JSON season/episode listing
 lobster play --ref <REF> --detach        # start playback, return immediately
-lobster play --ref <REF> --season 1 --episode 1 --detach   # series: keeps going to the next episode
+lobster play --ref <REF> --season 1 --episode 1 --detach   # series: keeps going to the next episode (mpv only; vlc/iina stop after one)
 lobster play --ref <REF> --season 1 --episode 1 --detach --autoplay=false  # stop after this episode
 lobster channels                         # JSON categories + channel counts
 lobster channels --category news         # JSON channels in a category, each with a ref

@@ -164,8 +164,14 @@ episode count is a provider problem, not a ref problem.
 Then:
 
 ```sh
-lobster play --ref "eyJpZCI6..." --season 2 --episode 3 --detach
+lobster play --ref "eyJpZCI6..." --season 2 --episode 3 --detach --autoplay=false
 ```
+
+A detached series play carries on to the following episodes by itself unless
+you pass `--autoplay=false`. Pass it when the user asked for one named episode;
+omit it only when they asked to watch on from there ("start The Bear from season
+2", "binge it"). Autoplay continues only with mpv, which reports when an episode
+ends; vlc and iina stop after the one episode either way.
 
 ## Rules
 

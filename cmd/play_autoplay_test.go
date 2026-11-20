@@ -2,14 +2,17 @@ package cmd
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"lobster/internal/config"
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/playlist"
-	"lobster/internal/provider"
 )
 
 type playedEp struct{ season, episode int }
@@ -116,33 +119,57 @@ func TestAutoplayStopsAndReportsWhenNextEpisodeFails(t *testing.T) {
 	}
 }
 
-func TestAutoplayIsNoOpForMovies(t *testing.T) {
-	hostileEnv(t)
-	captureAgentOut(t)
+func TestAutoplayPlaysAMovieOnce(t *testing.T) {
+	stub := autoplayStub()
+	sel := media.SearchResult{ID: "movie/x", Title: "A Film", Type: media.Movie}
+	sess := playlist.New(stub, sel, nil, nil, 0, 0)
+
 	plays := 0
-	prevCheck := agentPlayerCheck
-	agentPlayerCheck = func() (bool, string) { return true, "stub" }
-	t.Cleanup(func() { agentPlayerCheck = prevCheck })
-	prevPlay := agentResolveAndPlay
-	agentResolveAndPlay = func(provider.Provider, media.SearchResult, int, int) error { plays++; return nil }
-	t.Cleanup(func() { agentResolveAndPlay = prevPlay })
-	prevProv := agentProvider
-	agentProvider = func() provider.Provider { return autoplayStub() }
-	t.Cleanup(func() { agentProvider = prevProv })
-
-	ref, err := encodeRef(playRef{ID: "movie/x", Title: "A Film", Type: "movie"})
-	if err != nil {
-		t.Fatalf("encodeRef: %v", err)
+	prevPlay := playEpisode
+	playEpisode = func(s *playlist.Session) error {
+		plays++
+		s.LastPosition, s.LastDuration = endedNaturally.Position, endedNaturally.Duration
+		return nil
 	}
-	prevRef, prevA := flagRef, flagAutoplay
-	flagRef, flagAutoplay = ref, true
-	t.Cleanup(func() { flagRef, flagAutoplay = prevRef, prevA })
+	t.Cleanup(func() { playEpisode = prevPlay })
+	prevAuto, prevCfg := flagAutoplay, cfg
+	flagAutoplay, cfg = true, &config.Config{History: false}
+	t.Cleanup(func() { flagAutoplay, cfg = prevAuto, prevCfg })
 
-	if err := playRun(playCmd, nil); err != nil {
-		t.Fatalf("playRun: %v", err)
+	if err := runPlaybackLoop(sess); err != nil {
+		t.Fatalf("runPlaybackLoop: %v", err)
 	}
 	if plays != 1 {
 		t.Fatalf("a movie played %d times with --autoplay, want 1", plays)
+	}
+}
+
+func TestAutoplayReportsWhenNextSeasonCannotBeLoaded(t *testing.T) {
+	stub := autoplayStub()
+	seasons, _ := stub.GetSeasons("x")
+	eps, _ := stub.GetEpisodes("x", "s1")
+	sel := media.SearchResult{ID: "tv/show", Title: "Some Show", Type: media.TV}
+	sess := playlist.NewWithProviderID(stub, sel, "x", stub, seasons, eps, 0, len(eps)-1)
+	stub.episodesErr = errors.New("season listing down")
+
+	plays := 0
+	prevPlay := playEpisode
+	playEpisode = func(s *playlist.Session) error {
+		plays++
+		s.LastPosition, s.LastDuration = endedNaturally.Position, endedNaturally.Duration
+		return nil
+	}
+	t.Cleanup(func() { playEpisode = prevPlay })
+	prevAuto, prevCfg := flagAutoplay, cfg
+	flagAutoplay, cfg = true, &config.Config{History: false}
+	t.Cleanup(func() { flagAutoplay, cfg = prevAuto, prevCfg })
+
+	err := runPlaybackLoop(sess)
+	if err == nil || !strings.Contains(err.Error(), "advancing to next episode") {
+		t.Fatalf("err = %v, want an advancing-to-next-episode error", err)
+	}
+	if plays != 1 {
+		t.Fatalf("played %d episodes, want 1", plays)
 	}
 }
 
@@ -168,6 +195,9 @@ func TestPlayFinished(t *testing.T) {
 		{"quit mid-episode", player.PlayResult{Position: 600, Duration: 1440}, false},
 		{"unknown duration", player.PlayResult{Position: 600}, false},
 		{"never started", player.PlayResult{}, false},
+		{"position unknown but at the end", player.PlayResult{Position: 1440, Duration: 1440, PositionUnknown: true}, false},
+		{"zero position, short duration", player.PlayResult{Position: 0, Duration: 5}, false},
+		{"negative position, short duration", player.PlayResult{Position: -3, Duration: 5}, false},
 		{"untracked player", player.PlayResult{PositionUnknown: true, PositionUntracked: true}, false},
 	}
 	for _, c := range cases {
@@ -229,12 +259,6 @@ func TestDetachedSeriesExplicitAutoplayFalseWins(t *testing.T) {
 	}
 }
 
-func TestAttachedPlayDoesNotAutoplayByDefault(t *testing.T) {
-	if f := playCmd.Flags().Lookup("autoplay"); f.DefValue != "false" {
-		t.Fatalf("--autoplay default = %q, attached play must stay off", f.DefValue)
-	}
-}
-
 func TestSupervisedWithoutAutoplayEndsAfterOneEpisodeWithoutMenu(t *testing.T) {
 	menuCalls := 0
 	prevMenu, prevSup := postPlayMenu, flagSupervised
@@ -269,5 +293,44 @@ func TestAttachedWithoutAutoplayStillShowsMenu(t *testing.T) {
 	}
 	if menuCalls != 1 {
 		t.Fatalf("menu shown %d times, want 1", menuCalls)
+	}
+}
+
+func TestPlayDetachedSpawnsChildWithAutoplayForSeries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake supervisor is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	out := filepath.Join(dir, "argv")
+	exe := filepath.Join(dir, "lobster-fake")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + out + "'\n/bin/sleep 3\n"
+	if err := os.WriteFile(exe, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing fake supervisor: %v", err)
+	}
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	captureAgentOut(t)
+	prevExe := detachExecutable
+	detachExecutable = func() (string, error) { return exe, nil }
+	t.Cleanup(func() { detachExecutable = prevExe })
+
+	withInheritedFlags(t, playCmd, "autoplay")
+	f := playCmd.Flags().Lookup("autoplay")
+	f.Changed = false
+	_ = f.Value.Set("false")
+	prevRef, prevS, prevE := flagRef, flagSeason, flagEpisode
+	flagRef, flagSeason, flagEpisode = "REF", 1, 2
+	t.Cleanup(func() { flagRef, flagSeason, flagEpisode = prevRef, prevS, prevE })
+
+	if err := playDetached(playCmd, playRef{ID: "x", Title: "X", Type: "tv"}); err != nil {
+		t.Fatalf("playDetached: %v", err)
+	}
+	var data []byte
+	for i := 0; i < 50 && len(data) == 0; i++ {
+		data, _ = os.ReadFile(out)
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(string(data), "--autoplay=true") {
+		t.Fatalf("child argv = %q, playDetached must spawn a series child with --autoplay=true", data)
 	}
 }

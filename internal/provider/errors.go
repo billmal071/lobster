@@ -1,6 +1,10 @@
 package provider
 
-import "errors"
+import (
+	"errors"
+
+	"lobster/internal/media"
+)
 
 // ErrNoResults reports that a provider was reached and answered, but its
 // catalog has nothing for the query.
@@ -91,3 +95,9 @@ var ErrIncompleteEpisodeList = errors.New("episode list may be incomplete")
 // episodes, which are the ones a caller is most likely to want. So it is
 // reported, under its own code, with words that say the list is probably whole.
 var ErrUnconfirmedEpisodeList = errors.New("the end of the episode list was not confirmed")
+
+// PartialEpisodeList reports whether a GetEpisodes result is a usable measured
+// prefix: a non-empty list returned alongside ErrIncompleteEpisodeList.
+func PartialEpisodeList(episodes []media.Episode, err error) bool {
+	return len(episodes) > 0 && errors.Is(err, ErrIncompleteEpisodeList)
+}

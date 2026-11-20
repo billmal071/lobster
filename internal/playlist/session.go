@@ -169,7 +169,7 @@ func (s *Session) Next() (media.Episode, error) {
 	s.SeasonIdx++
 	nextSeason := s.Seasons[s.SeasonIdx]
 	episodes, err := s.Provider.GetEpisodes(s.ProviderKey(), nextSeason.ID)
-	if err != nil {
+	if err != nil && !provider.PartialEpisodeList(episodes, err) {
 		s.SeasonIdx-- // rollback
 		return media.Episode{}, fmt.Errorf("loading season %d episodes: %w", nextSeason.Number, err)
 	}

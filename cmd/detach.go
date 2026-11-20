@@ -266,12 +266,14 @@ func readDetachPlaybackMode(path string) string {
 	}
 }
 
+var detachExecutable = os.Executable
+
 // playDetached re-executes lobster as a background supervisor and returns as
 // soon as it looks alive. The child performs an ordinary attached play, so the
 // HLS proxy, torrent server, subtitle temp dir and mpv IPC all behave exactly
 // as they do interactively.
 func playDetached(cmd *cobra.Command, r playRef) error {
-	exe, err := os.Executable()
+	exe, err := detachExecutable()
 	if err != nil {
 		return emitErr("internal", 1, "locating lobster binary: %v", err)
 	}
