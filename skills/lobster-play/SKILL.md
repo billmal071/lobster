@@ -182,7 +182,9 @@ the next episode; closing earlier stops the run. When mpv reports no position or
 no duration the episode never counts as finished and the run stops there, even
 if it played to the end, so autoplay is not guaranteed. A season
 whose episode list the provider marks as possibly short stops after its last
-measured episode instead of moving on to the next season.
+measured episode instead of moving on to the next season. A next season whose
+possibly short list does not start at episode 1 is not entered: the run stops
+with an error instead of skipping the missing episodes.
 
 ## Rules
 

@@ -185,6 +185,11 @@ func (s *Session) Next() (media.Episode, error) {
 		return media.Episode{}, fmt.Errorf("season %d has no episodes", nextSeason.Number)
 	}
 
+	if err != nil && episodes[0].Number != 1 {
+		s.SeasonIdx--
+		return media.Episode{}, fmt.Errorf("season %d episode list starts at episode %d, not 1: %w", nextSeason.Number, episodes[0].Number, err)
+	}
+
 	if err != nil && s.OnPartialSeason != nil {
 		s.OnPartialSeason(nextSeason, err)
 	}

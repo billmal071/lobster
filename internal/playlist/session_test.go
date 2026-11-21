@@ -264,6 +264,8 @@ func TestNextAcrossSeasonEpisodeListErrors(t *testing.T) {
 	}{
 		{"measured prefix with incomplete is usable", []media.Episode{{Number: 1, ID: "n1"}}, partial, false},
 		{"incomplete with no episodes fails", nil, partial, true},
+		{"incomplete list starting after episode 1 fails", []media.Episode{{Number: 2, ID: "n2"}, {Number: 3, ID: "n3"}}, partial, true},
+		{"incomplete list numbered from zero fails", []media.Episode{{Number: 0, ID: "n0"}, {Number: 1, ID: "n1"}}, partial, true},
 		{"unrelated error with episodes fails", []media.Episode{{Number: 1, ID: "n1"}}, errors.New("boom"), true},
 		{"empty next season fails", nil, nil, true},
 	}
@@ -333,6 +335,53 @@ func TestNextReportsMeasuredPrefixOnSeasonCrossing(t *testing.T) {
 	}
 	if len(*got) != 0 {
 		t.Fatalf("OnPartialSeason fired for a complete season: %v", *got)
+	}
+}
+
+func TestNextRejectsAPartialSeasonThatDoesNotStartAtEpisodeOne(t *testing.T) {
+	partial := fmt.Errorf("eztv page failed: %w", provider.ErrIncompleteEpisodeList)
+	mp := &mockProvider{
+		episodes: map[string][]media.Episode{"s2": {{Number: 2, ID: "n2"}, {Number: 3, ID: "n3"}}},
+		errs:     map[string]error{"s2": partial},
+	}
+	seasons := []media.Season{{Number: 1, ID: "s1"}, {Number: 2, ID: "s2"}}
+	current := []media.Episode{{Number: 1, ID: "e1"}}
+	s := New(mp, media.SearchResult{ID: "x", Title: "X", Type: media.TV}, seasons, current, 0, 0)
+	reported := 0
+	s.OnPartialSeason = func(media.Season, error) { reported++ }
+
+	ep, err := s.Next()
+	if err == nil {
+		t.Fatalf("Next = %v, want an error: season 2 would start at episode 2 and skip episode 1", ep)
+	}
+	if !errors.Is(err, provider.ErrIncompleteEpisodeList) {
+		t.Errorf("err = %v, want it to wrap ErrIncompleteEpisodeList", err)
+	}
+	if !strings.Contains(err.Error(), "season 2") || !strings.Contains(err.Error(), "episode 2") {
+		t.Errorf("err = %v, want it to name season 2 and the episode 2 the list starts at", err)
+	}
+	if s.SeasonIdx != 0 || s.EpisodeIdx != 0 || s.Current().ID != "e1" {
+		t.Errorf("position = season idx %d episode idx %d (%s), want it left on e1", s.SeasonIdx, s.EpisodeIdx, s.Current().ID)
+	}
+	if s.EpisodesPartial {
+		t.Error("EpisodesPartial set by a season the session did not enter")
+	}
+	if reported != 0 {
+		t.Errorf("OnPartialSeason fired %d times for a season the session did not enter", reported)
+	}
+	if !s.HasNext() {
+		t.Error("HasNext false after the rejection, want the complete season 1 still followed by season 2")
+	}
+}
+
+func TestNextKeepsACompleteSeasonThatDoesNotStartAtEpisodeOne(t *testing.T) {
+	mp := &mockProvider{episodes: map[string][]media.Episode{"s2": {{Number: 2, ID: "n2"}, {Number: 3, ID: "n3"}}}}
+	seasons := []media.Season{{Number: 1, ID: "s1"}, {Number: 2, ID: "s2"}}
+	s := New(mp, media.SearchResult{ID: "x", Title: "X", Type: media.TV}, seasons,
+		[]media.Episode{{Number: 1, ID: "e1"}}, 0, 0)
+	ep, err := s.Next()
+	if err != nil || ep.ID != "n2" || s.SeasonIdx != 1 || s.EpisodesPartial {
+		t.Fatalf("Next = %v, %v (season idx %d, partial %v), want n2 in a complete season 2", ep, err, s.SeasonIdx, s.EpisodesPartial)
 	}
 }
 

@@ -403,6 +403,20 @@ func TestAutoplayStopsCleanlyAtEndOfMeasuredPrefixBeforeALaterSeason(t *testing.
 	}
 }
 
+func TestAutoplayStopsWithAnErrorWhenNextSeasonsPartialListSkipsEpisodeOne(t *testing.T) {
+	warned := captureWarnings(t)
+	sess := partialSeasonSession(false)
+	sess.Provider.(*stubProvider).episodesWithErr = []media.Episode{{ID: "e22", Number: 2}, {ID: "e23", Number: 3}}
+	got, err := playUntilStopped(t, sess, true)
+	if err == nil || !errors.Is(err, provider.ErrIncompleteEpisodeList) {
+		t.Fatalf("err = %v, want the incomplete-list error: season 2 would start at episode 2", err)
+	}
+	wantPlayed(t, got, []playedEp{{1, 2}})
+	if containsSubstring(*warned, "may be short") {
+		t.Fatalf("warnings = %q, want none about a season that was not entered", *warned)
+	}
+}
+
 func TestMenuIsNotShownAtEndOfMeasuredPrefixBeforeALaterSeason(t *testing.T) {
 	warned := captureWarnings(t)
 	sess := partialSeasonSession(true)
