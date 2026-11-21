@@ -236,12 +236,20 @@ func init() {
 
 // tuiEpisodeListFallback is tui.EpisodeListFallback: the chain's answer for a
 // season the TUI's own provider could not list.
-func tuiEpisodeListFallback(prov provider.Provider, item media.SearchResult, seasonNumber int) ([]media.Episode, error) {
-	a := fallbackEpisodeList(prov, item, seasonNumber)
-	if a == nil {
-		return nil, fmt.Errorf("no fallback provider could list season %d of %q", seasonNumber, item.Title)
+func tuiEpisodeListFallback(prov provider.Provider, item media.SearchResult, seasonNumber int) ([]media.Episode, bool, error) {
+	var a *episodeAnswer
+	if seasonNumber >= 0 {
+		hits, scanFailed := fallbackSeasonScan(prov, contentRequest(item), []int{seasonNumber})
+		var err error
+		a, err = confirmedEpisodeList(hits, scanFailed, seasonNumber, item.Title)
+		if err != nil {
+			return nil, false, err
+		}
 	}
-	return a.episodes, nil
+	if a == nil {
+		return nil, false, fmt.Errorf("no fallback provider could list season %d of %q", seasonNumber, item.Title)
+	}
+	return a.episodes, a.shortfall.gap, nil
 }
 
 // episodeIndex is the position of the episode numbered n, or -1. It is the
@@ -318,12 +326,16 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	if selected.Type == media.TV {
 		// Get seasons
 		stopSeasons := ui.StartSpinner("Fetching seasons...")
-		seasons, err := p.GetSeasons(selected.ID)
+		look := lookupPrimarySeasons(p, selected.ID)
 		stopSeasons()
-		seasonsPartial := false
-		if err != nil && len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
-			seasonsPartial = true
-			warnf("%s could not list every season of %q, so the season list may be short: %v", providerLabel(p), title, err)
+		seasons, err := look.seasons, look.err
+		if look.kind == lookupListed {
+			switch look.gap {
+			case gapShort:
+				warnf("%s could not list every season of %q, so the season list may be short: %v", providerLabel(p), title, err)
+			case gapCatalogue:
+				warnf("%s has no release for some seasons of %q: %v", providerLabel(p), title, err)
+			}
 			err = nil
 		}
 		if err != nil || len(seasons) == 0 {
@@ -349,7 +361,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// over, and it is also `episodes --season 5` answering no_results
 			// about the very ref `play --season 5` just played.
 			//
-			// Only positive evidence refuses. If some chain member enumerated
+			// Only positive evidence refuses, and a fallback lookup that failed is not evidence. If some chain member enumerated
 			// seasons and none carries this one, the number is wrong. If
 			// nothing in the chain can enumerate at all, there is no evidence
 			// either way, and refusing would break the case this branch is
@@ -358,18 +370,8 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// answers no_results there, because it has no list to print, while
 			// `play` goes ahead on a number the user supplied.
 			if season > 0 {
-				if hits := fallbackSeasonHits(chainPrimary, contentRequest(selected)); len(hits) > 0 {
-					enumerated, anyPartial := false, false
-					for _, h := range hits {
-						if _, ok := pickSeason(h.seasons, season); ok {
-							enumerated = true
-							break
-						}
-						anyPartial = anyPartial || h.partial
-					}
-					if !enumerated && !anyPartial {
-						return errSeasonNotFound{season: season, title: title}
-					}
+				if res := resolveSeason(chainPrimary, contentRequest(selected), look, season); res.verdict == seasonAbsent {
+					return seasonNotFound(res, season, title)
 				}
 			}
 			fbStream, fbErr := tryFallbackStream(chainPrimary, selected, season, episode)
@@ -432,22 +434,22 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				// episode-list recovery below follows, and for the same
 				// reason: the numbers offered are numbers it will honour. Only
 				// the provider-call key moves with it, never selected.ID.
-				alt, altSeasons, altSel, ok := seasonAcrossHits(
-					chainPrimary, contentRequest(selected),
-					seasonAnswer{provider: p, id: providerID, seasons: seasons, fromPrimary: true, partial: seasonsPartial},
-					season,
-				)
-				if !ok && alt.partial {
-					debugf("season %d is absent from a partial season list; trying the fallback chain by number", season)
+				res := resolveSeason(chainPrimary, contentRequest(selected), seasonLookup{
+					provider: p, id: providerID, kind: lookupListed, gap: look.gap, seasons: seasons,
+				}, season)
+				switch res.verdict {
+				case seasonFound:
+				case seasonAbsent:
+					return seasonNotFound(res, season, title)
+				default:
+					debugf("season %d is absent from a partial season list or a failed lookup; trying the fallback chain by number", season)
 					fbStream, fbErr := tryFallbackStream(chainPrimary, selected, season, episode)
 					if fbErr != nil {
 						return fbErr
 					}
 					return playStream(fbStream, title, selected, season, episode)
 				}
-				if !ok {
-					return errSeasonNotFound{season: season, title: title}
-				}
+				alt, altSeasons, altSel := res.answer, res.answer.seasons, res.season
 				debugf("season %d recovered from %T", altSel.Number, alt.provider)
 				p, providerID, seasons = alt.provider, alt.id, altSeasons
 				// The season came out of this very list, so the lookup cannot
@@ -531,8 +533,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		if sf := shortfallFor(err); sf.code != "" && len(episodes) > 0 &&
 			(episode == 0 || episodeIndex(episodes, episode) >= 0) {
 			err = nil
-			warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",
-				providerLabel(p), selectedSeason.Number, title, sf.reason)
+			warnShortList(sf, p, selectedSeason.Number, title)
 		}
 
 		if err != nil || len(episodes) == 0 {
@@ -576,6 +577,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				selectedSeason = answer.season
 				episodes = answer.episodes
 				err = nil
+				warnShortList(answer.shortfall, p, selectedSeason.Number, title)
 			} else if episode > 0 {
 				// A caller who already knows which episode it wants does not
 				// need a list: the fallback resolver reaches a StreamProvider
@@ -1294,4 +1296,16 @@ func initDownloadManager(c *config.Config) (*dlmanager.Manager, func(), error) {
 	}
 
 	return mgr, cleanup, nil
+}
+
+func warnShortList(sf episodeShortfall, p provider.Provider, season int, title string) {
+	switch {
+	case sf.code == "":
+	case sf.gap:
+		warnf("%s has no release for some episodes of season %d of %q: %s",
+			providerLabel(p), season, title, sf.reason)
+	default:
+		warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",
+			providerLabel(p), season, title, sf.reason)
+	}
 }

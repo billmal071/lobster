@@ -169,7 +169,7 @@ func (s *Session) Next() (media.Episode, error) {
 	s.SeasonIdx++
 	nextSeason := s.Seasons[s.SeasonIdx]
 	episodes, err := s.Provider.GetEpisodes(s.ProviderKey(), nextSeason.ID)
-	if err != nil {
+	if err != nil && !isShortList(episodes, err) {
 		s.SeasonIdx-- // rollback
 		return media.Episode{}, fmt.Errorf("loading season %d episodes: %w", nextSeason.Number, err)
 	}
@@ -181,6 +181,10 @@ func (s *Session) Next() (media.Episode, error) {
 	s.Episodes = episodes
 	s.EpisodeIdx = 0
 	return s.Current(), nil
+}
+
+func isShortList(episodes []media.Episode, err error) bool {
+	return provider.ListedWithCatalogueGap(len(episodes), err)
 }
 
 // Previous moves to the previous episode. If at the start of a season, loads
@@ -199,7 +203,7 @@ func (s *Session) Previous() (media.Episode, error) {
 	s.SeasonIdx--
 	prevSeason := s.Seasons[s.SeasonIdx]
 	episodes, err := s.Provider.GetEpisodes(s.ProviderKey(), prevSeason.ID)
-	if err != nil {
+	if err != nil && !isShortList(episodes, err) {
 		s.SeasonIdx++ // rollback
 		return media.Episode{}, fmt.Errorf("loading season %d episodes: %w", prevSeason.Number, err)
 	}

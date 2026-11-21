@@ -75,7 +75,7 @@ func newProvider() provider.Provider {
 		return provider.NewNyaa()
 	}
 	if strings.Contains(base, "eztv") {
-		return provider.NewEZTV()
+		return provider.NewEZTV().AsPrimary()
 	}
 	if strings.Contains(base, "1337x") {
 		return provider.NewX1337()

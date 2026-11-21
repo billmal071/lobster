@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,6 +36,18 @@ var eztvBudget = 20 * time.Second
 // eztvSearchLimit caps the TMDB hits resolved to IMDb per search; each costs a page fetch.
 const eztvSearchLimit = 5
 
+// eztvProbeConcurrency caps the page-1 probes a primary search runs at once.
+const eztvProbeConcurrency = 3
+
+// eztvProbeTimeout bounds one search probe.
+var eztvProbeTimeout = 8 * time.Second
+
+// eztvMaxGapCheck is the highest season or episode number still read as a count: above it the numbering is a year or a date, where "missing 1-2023" would be noise.
+const eztvMaxGapCheck = 1000
+
+// ErrNotCarried reports that EZTV has no release for what was asked, which says nothing about whether another source has it.
+var ErrNotCarried = errors.New("not on EZTV")
+
 // eztvCacheTTL is how long a show's torrent list is reused across seasons → episodes → servers → watch.
 const eztvCacheTTL = 5 * time.Minute
 
@@ -45,9 +58,25 @@ type EZTV struct {
 	client      *http.Client
 	tmdbBaseURL string
 
-	mu    sync.Mutex
-	shows map[string]eztvCachedShow // imdb digits -> torrents
-	imdb  map[int]string            // tmdb tv id -> imdb digits ("" = none)
+	primary bool
+	apiBase string
+	now     func() time.Time
+
+	mu      sync.Mutex
+	shows   map[string]eztvCachedShow // imdb digits -> torrents
+	imdb    map[int]string            // tmdb tv id -> imdb digits ("" = none)
+	probes  map[string]eztvProbe      // imdb digits -> whether page 1 had torrents
+	partial map[string]eztvPartial    // imdb digits -> the prefix a walk that ended short fetched
+}
+
+type eztvPartial struct {
+	torrents []eztvTorrent
+	at       time.Time
+}
+
+type eztvProbe struct {
+	has bool
+	at  time.Time
 }
 
 type eztvCachedShow struct {
@@ -62,7 +91,46 @@ func NewEZTV() *EZTV {
 		tmdbBaseURL: tmdbSearchBase,
 		shows:       map[string]eztvCachedShow{},
 		imdb:        map[int]string{},
+		probes:      map[string]eztvProbe{},
+		partial:     map[string]eztvPartial{},
+		now:         time.Now,
 	}
+}
+
+func (e *EZTV) apiURL() string {
+	if e.apiBase != "" {
+		return e.apiBase
+	}
+	return eztvBase
+}
+
+// SetBaseURLs points this instance at a TMDB site and an EZTV API, for tests of code that builds the provider itself.
+func (e *EZTV) SetBaseURLs(tmdb, api string) {
+	e.tmdbBaseURL, e.apiBase = tmdb, api
+}
+
+// IsCatalogueGap reports a list that is short because EZTV lacks releases, as opposed to one cut short by a failed fetch or probe.
+func IsCatalogueGap(err error) bool {
+	return errors.Is(err, ErrIncompleteEpisodeList) && errors.Is(err, ErrNotCarried)
+}
+
+// ListedWithCatalogueGap reports a non-empty list that came with a catalogue-gap error: usable, and complete for what the source carries.
+func ListedWithCatalogueGap(listed int, err error) bool {
+	return listed > 0 && IsCatalogueGap(err)
+}
+
+// IsCatalogueSource reports a provider that holds only part of what exists, so its list never settles that something is absent.
+func IsCatalogueSource(p Provider) bool {
+	c, ok := p.(interface{ CatalogueSource() bool })
+	return ok && c.CatalogueSource()
+}
+
+func (e *EZTV) CatalogueSource() bool { return true }
+
+// AsPrimary marks e as the configured base, so Search offers only shows EZTV holds torrents for.
+func (e *EZTV) AsPrimary() *EZTV {
+	e.primary = true
+	return e
 }
 
 // eztvInt decodes a field EZTV serves as either a number or a numeric string.
@@ -113,7 +181,7 @@ type eztvResponse struct {
 // fetchPage reads one page of a show's torrent list, abandoning the request when ctx ends.
 func (e *EZTV) fetchPage(ctx context.Context, imdb string, page int) (*eztvResponse, error) {
 	apiURL := fmt.Sprintf("%s/api/get-torrents?imdb_id=%s&limit=%d&page=%d",
-		strings.TrimRight(eztvBase, "/"), imdb, eztvPageSize, page)
+		strings.TrimRight(e.apiURL(), "/"), imdb, eztvPageSize, page)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, err
@@ -161,7 +229,7 @@ func (e *EZTV) catalogue(id string) ([]eztvTorrent, bool, error) {
 	e.mu.Lock()
 	cached, ok := e.shows[imdb]
 	e.mu.Unlock()
-	if ok && time.Since(cached.fetched) < eztvCacheTTL {
+	if ok && e.now().Sub(cached.fetched) < eztvCacheTTL {
 		return cached.torrents, !cached.truncated, nil
 	}
 
@@ -190,13 +258,21 @@ func (e *EZTV) catalogue(id string) ([]eztvTorrent, bool, error) {
 		}
 	}
 	if len(all) == 0 {
-		return nil, false, fmt.Errorf("eztv: no torrents for %s", id)
+		return nil, false, fmt.Errorf("eztv: no torrents for %s (%w)", id, ErrNotCarried)
 	}
 	truncated := !reachedEnd
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if partial || truncated {
+		if c, ok := e.shows[imdb]; ok && !c.truncated && e.now().Sub(c.fetched) < eztvCacheTTL {
+			return c.torrents, true, nil
+		}
+		e.partial[imdb] = eztvPartial{torrents: all, at: e.now()}
+	} else {
+		delete(e.partial, imdb)
+	}
 	if !partial {
-		e.mu.Lock()
-		e.shows[imdb] = eztvCachedShow{torrents: all, fetched: time.Now(), truncated: truncated}
-		e.mu.Unlock()
+		e.shows[imdb] = eztvCachedShow{torrents: all, fetched: e.now(), truncated: truncated}
 	}
 	return all, !partial && !truncated, nil
 }
@@ -224,10 +300,11 @@ func (e *EZTV) Search(query string) ([]media.SearchResult, error) {
 		}(i)
 	}
 	wg.Wait()
+	held := e.probeCatalogues(ids)
 
 	var results []media.SearchResult
 	for i, h := range hits {
-		if ids[i] == "" {
+		if ids[i] == "" || !held[i] {
 			continue
 		}
 		results = append(results, media.SearchResult{
@@ -242,6 +319,87 @@ func (e *EZTV) Search(query string) ([]media.SearchResult, error) {
 		return nil, fmt.Errorf("%w for %q", ErrNoResults, query)
 	}
 	return results, nil
+}
+
+// probeCatalogues reports per id whether EZTV holds any torrent for it. Only a
+// primary probes; every other case, and any probe that errors, answers true so
+// a flaky API never hides a real show.
+func (e *EZTV) probeCatalogues(ids []string) []bool {
+	held := make([]bool, len(ids))
+	for i := range held {
+		held[i] = true
+	}
+	if !e.primary {
+		return held
+	}
+	sem := make(chan struct{}, eztvProbeConcurrency)
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		if id == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, id string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			held[i] = e.hasTorrents(id)
+		}(i, id)
+	}
+	wg.Wait()
+	return held
+}
+
+// hasTorrents reads page 1 of a show's list, reusing a cached catalogue, the prefix a walk that ended short fetched, or an earlier probe. An error answers true and is not cached.
+func (e *EZTV) hasTorrents(imdb string) bool {
+	e.mu.Lock()
+	if c, ok := e.shows[imdb]; ok && e.now().Sub(c.fetched) < eztvCacheTTL {
+		e.mu.Unlock()
+		return len(c.torrents) > 0
+	}
+	if p, ok := e.partial[imdb]; ok && e.now().Sub(p.at) < eztvCacheTTL {
+		e.mu.Unlock()
+		return true
+	}
+	if p, ok := e.probes[imdb]; ok && e.now().Sub(p.at) < eztvCacheTTL {
+		e.mu.Unlock()
+		return p.has
+	}
+	e.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), eztvProbeTimeout)
+	defer cancel()
+	resp, err := e.fetchPage(ctx, imdb, 1)
+	if err != nil {
+		return true
+	}
+	has := len(resp.Torrents) > 0
+	e.mu.Lock()
+	e.probes[imdb] = eztvProbe{has: has, at: e.now()}
+	e.mu.Unlock()
+	return has
+}
+
+// CarriesEpisode returns nil when EZTV has a release for the episode and an
+// error wrapping ErrNotCarried when its fully fetched catalogue has none. Any
+// other error, including a catalogue that was only partly fetched, is a failed
+// lookup and says nothing about whether EZTV has the episode.
+func (e *EZTV) CarriesEpisode(id string, season, episode int) error {
+	if imdb, err := eztvIMDB(id); err == nil {
+		e.mu.Lock()
+		p, short := e.partial[imdb]
+		e.mu.Unlock()
+		if short && e.now().Sub(p.at) < eztvCacheTTL {
+			for _, t := range p.torrents {
+				if int(t.Season) == season && int(t.Episode) == episode && t.MagnetURL != "" {
+					return nil
+				}
+			}
+			return fmt.Errorf("eztv: release list for %s was not fully fetched", id)
+		}
+	}
+	_, err := e.episodeTorrents(id, fmt.Sprintf("%dx%d", season, episode))
+	return err
 }
 
 // tmdbGet fetches a TMDB URL with browser-like headers and returns the body, capped at 2 MiB.
@@ -319,29 +477,45 @@ func (e *EZTV) imdbFor(tmdbID int) string {
 // GetSeasons lists the seasons that have at least one single-episode release,
 // in ascending order. When the release list could not be fetched in full, the
 // seasons found so far come back with an error wrapping ErrIncompleteEpisodeList:
-// a missing season may sit on a page that was never read.
+// a missing season may sit on a page that was never read. A season held only as
+// a season pack is not listed, and is not reported as missing either.
 func (e *EZTV) GetSeasons(id string) ([]media.Season, error) {
 	torrents, complete, err := e.catalogue(id)
 	if err != nil {
 		return nil, err
 	}
 	seen := map[int]bool{}
-	var nums []int
+	held := map[int]bool{}
+	var nums, carried []int
 	for _, t := range torrents {
 		s := int(t.Season)
-		if s <= 0 || t.Episode <= 0 || seen[s] {
+		if s <= 0 {
+			continue
+		}
+		if !held[s] {
+			held[s] = true
+			carried = append(carried, s)
+		}
+		if t.Episode <= 0 || seen[s] {
 			continue
 		}
 		seen[s] = true
 		nums = append(nums, s)
 	}
 	sort.Ints(nums)
+	sort.Ints(carried)
 	seasons := make([]media.Season, 0, len(nums))
 	for _, n := range nums {
 		seasons = append(seasons, media.Season{Number: n, ID: strconv.Itoa(n)})
 	}
 	if !complete {
 		return seasons, fmt.Errorf("%w: eztv could not fetch every page of the release list for %s", ErrIncompleteEpisodeList, id)
+	}
+	if len(nums) == 0 {
+		return seasons, nil
+	}
+	if missing := eztvMissing(carried); missing != "" {
+		return seasons, eztvGapError{fmt.Sprintf("eztv carries only some seasons of %s; %s", id, eztvMissingPhrase("season", missing, false))}
 	}
 	return seasons, nil
 }
@@ -359,8 +533,13 @@ func (e *EZTV) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
 	titles := map[int]string{}
 	seen := map[int]bool{}
 	var nums []int
+	packed := false
 	for _, t := range torrents {
-		if int(t.Season) != season || t.Episode <= 0 {
+		if int(t.Season) != season {
+			continue
+		}
+		if t.Episode <= 0 {
+			packed = true
 			continue
 		}
 		n := int(t.Episode)
@@ -386,7 +565,56 @@ func (e *EZTV) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
 	if !complete {
 		return eps, fmt.Errorf("%w: eztv could not fetch every page of the release list for %s", ErrIncompleteEpisodeList, id)
 	}
+	if missing := eztvMissing(nums); missing != "" && season <= eztvMaxGapCheck {
+		return eps, eztvGapError{fmt.Sprintf("eztv carries only some episodes of season %d of %s; %s", season, id, eztvMissingPhrase("episode", missing, packed))}
+	}
 	return eps, nil
+}
+
+// eztvGapError reports numbers absent from a fully fetched catalogue. It is both ErrIncompleteEpisodeList (the list is a floor) and ErrNotCarried (EZTV has no release for what is missing).
+type eztvGapError struct{ detail string }
+
+func (g eztvGapError) Error() string { return ErrIncompleteEpisodeList.Error() + ": " + g.detail }
+
+func (g eztvGapError) Is(target error) bool {
+	return target == ErrIncompleteEpisodeList || target == ErrNotCarried
+}
+
+// eztvMissing names the numbers from 1 up to the highest of the ascending nums
+// that are absent, as ranges ("1-4, 7-8, 10"). It is empty when none are, and
+// when the numbering is too large to be a count.
+func eztvMissing(nums []int) string {
+	if len(nums) == 0 || nums[len(nums)-1] > eztvMaxGapCheck {
+		return ""
+	}
+	var ranges []string
+	add := func(from, to int) {
+		switch {
+		case from > to:
+		case from == to:
+			ranges = append(ranges, strconv.Itoa(from))
+		default:
+			ranges = append(ranges, fmt.Sprintf("%d-%d", from, to))
+		}
+	}
+	next := 1
+	for _, n := range nums {
+		add(next, n-1)
+		next = n + 1
+	}
+	return strings.Join(ranges, ", ")
+}
+
+// eztvMissingPhrase words the output of eztvMissing for the error message.
+func eztvMissingPhrase(noun, missing string, packed bool) string {
+	subject, is, has := noun+" "+missing, "is", "has"
+	if strings.ContainsAny(missing, "-,") {
+		subject, is, has = noun+"s "+missing, "are", "have"
+	}
+	if packed {
+		return fmt.Sprintf("%s %s no standalone release on EZTV (the season pack is not searched)", subject, has)
+	}
+	return fmt.Sprintf("%s %s not on EZTV", subject, is)
 }
 
 // eztvEpisodeMarker finds the SxxEyy token and what follows it.
@@ -512,18 +740,29 @@ func (e *EZTV) episodeTorrents(id, episodeID string) ([]eztvTorrent, error) {
 	if err != nil {
 		return nil, err
 	}
-	all, err := e.torrents(id)
+	all, complete, err := e.catalogue(id)
 	if err != nil {
 		return nil, err
 	}
 	var out []eztvTorrent
+	listed := 0
 	for _, t := range all {
-		if int(t.Season) == season && int(t.Episode) == episode && t.MagnetURL != "" {
+		if int(t.Season) != season || int(t.Episode) != episode {
+			continue
+		}
+		listed++
+		if t.MagnetURL != "" {
 			out = append(out, t)
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("eztv: no torrents for %s S%02dE%02d", id, season, episode)
+		switch {
+		case listed > 0:
+			return nil, fmt.Errorf("eztv: no magnet link for %s S%02dE%02d", id, season, episode)
+		case !complete:
+			return nil, fmt.Errorf("eztv: no torrents for %s S%02dE%02d in the part of the release list that was fetched", id, season, episode)
+		}
+		return nil, fmt.Errorf("eztv: no standalone release for %s S%02dE%02d (%w)", id, season, episode, ErrNotCarried)
 	}
 	return sortedEZTVTorrents(out), nil
 }

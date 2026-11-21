@@ -113,7 +113,7 @@ func withEpisodesFlags(t *testing.T, ref string, season int) {
 }
 
 // withStubProvider installs p as the provider the agent commands build.
-func withStubProvider(t *testing.T, p *stubProvider) {
+func withStubProvider(t *testing.T, p provider.Provider) {
 	t.Helper()
 	prev := agentProvider
 	agentProvider = func() provider.Provider { return p }

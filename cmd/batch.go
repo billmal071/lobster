@@ -399,7 +399,7 @@ func parseSeasonRange(input string, seasons []media.Season) ([]media.Season, err
 
 // seasonLister lists a season's episodes, asking the fallback chain when the
 // provider cannot answer, and scanning that chain at most once however many
-// seasons it is asked about.
+// seasons it is asked about, until a retry round forgets the scan.
 //
 // A primary can enumerate seasons and not episodes — MovieBox and VidNest both
 // do — and a multi-season batch then recorded one synthetic failure per season
@@ -416,19 +416,31 @@ func parseSeasonRange(input string, seasons []media.Season) ([]media.Season, err
 // different providers, which is not something the download summary would ever
 // mention.
 type seasonLister struct {
-	primary  provider.Provider
-	selected media.SearchResult
-	hits     []*seasonHit
-	scanned  bool
+	primary    provider.Provider
+	selected   media.SearchResult
+	wants      []int
+	hits       []*seasonHit
+	scanFailed bool
+	scanned    bool
 }
 
-func newSeasonLister(p provider.Provider, selected media.SearchResult) *seasonLister {
-	return &seasonLister{primary: p, selected: selected}
+func newSeasonLister(p provider.Provider, selected media.SearchResult, batch ...media.Season) *seasonLister {
+	l := &seasonLister{primary: p, selected: selected}
+	for _, s := range batch {
+		if s.Number >= 0 {
+			l.wants = append(l.wants, s.Number)
+		}
+	}
+	return l
+}
+
+func (l *seasonLister) forgetScan() {
+	l.scanned, l.hits = false, nil
 }
 
 func (l *seasonLister) episodes(season media.Season) ([]media.Episode, error) {
 	episodes, err := l.primary.GetEpisodes(l.selected.ID, season.ID)
-	if err == nil && len(episodes) > 0 {
+	if len(episodes) > 0 && (err == nil || provider.ListedWithCatalogueGap(len(episodes), err)) {
 		return episodes, nil
 	}
 	if season.Number < 0 {
@@ -436,11 +448,15 @@ func (l *seasonLister) episodes(season media.Season) ([]media.Episode, error) {
 	}
 	if !l.scanned {
 		l.scanned = true
-		l.hits = fallbackSeasonHits(l.primary, contentRequest(l.selected))
+		l.hits, l.scanFailed = fallbackSeasonScan(l.primary, contentRequest(l.selected), l.wants)
 	}
-	if a := firstEpisodeList(l.hits, season.Number); a != nil {
+	a, refusal := confirmedEpisodeList(l.hits, l.scanFailed, season.Number, l.selected.Title)
+	if a != nil {
 		debugf("batch: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), season.Number)
 		return a.episodes, nil
+	}
+	if err == nil {
+		err = refusal
 	}
 	return episodes, err
 }
@@ -462,53 +478,18 @@ func batchDownloadMultiSeason(primary provider.Provider, selected media.SearchRe
 		return fmt.Errorf("resolving download dir: %w", err)
 	}
 
-	var totalEpisodes int
-	var downloaded int
-	var failed []failedEpisode
-
-	lister := newSeasonLister(primary, selected)
-
-	for _, season := range seasons {
-		fmt.Fprintf(os.Stderr, "\n=== Season %d ===\n", season.Number)
-
-		stopEps := ui.StartSpinner(fmt.Sprintf("Fetching Season %d episodes...", season.Number))
-		episodes, err := lister.episodes(season)
-		stopEps()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to fetch Season %d episodes: %v\n", season.Number, err)
-			// Count each expected episode as failed. Since we can't know the
-			// exact count, record one failure entry for the season.
-			failed = append(failed, failedEpisode{SeasonNum: season.Number, Episode: media.Episode{Number: 0}})
-			totalEpisodes++
-			continue
-		}
-		if len(episodes) == 0 {
-			fmt.Fprintf(os.Stderr, "Season %d has no episodes, skipping\n", season.Number)
-			continue
-		}
-
-		outputDir := buildTVSeasonDownloadDir(baseDir, selected.Title, season.Number)
-		totalEpisodes += len(episodes)
-
-		for i, ep := range episodes {
-			epLabel := formatSeasonEpisodeLabel(season.Number, ep)
-			fmt.Fprintf(os.Stderr, "Downloading Season %d, Episode %d of %d: %s\n",
-				season.Number, i+1, len(episodes), epLabel)
-
-			if err := downloadSingleEpisode(primary, selected, ep, season.Number, outputDir, epLabel); err != nil {
-				fmt.Fprintf(os.Stderr, "  Failed: %v\n", err)
-				failed = append(failed, failedEpisode{SeasonNum: season.Number, Episode: ep})
-			} else {
-				downloaded++
-			}
-		}
+	run := &multiSeasonRun{
+		primary:  primary,
+		selected: selected,
+		baseDir:  baseDir,
+		lister:   newSeasonLister(primary, selected, seasons...),
 	}
+	for _, season := range seasons {
+		run.downloadSeason(season)
+	}
+	fmt.Fprint(os.Stderr, run.summary())
 
-	// Print overall summary
-	printMultiSeasonSummary(totalEpisodes, downloaded, failed)
-
-	// Retry loop for failed episodes
-	for len(failed) > 0 {
+	for len(run.failed) > 0 || len(run.unlisted) > 0 {
 		ok, err := ui.Confirm("Retry failed downloads?")
 		if err != nil {
 			return fmt.Errorf("retry prompt failed: %w", err)
@@ -516,38 +497,94 @@ func batchDownloadMultiSeason(primary provider.Provider, selected media.SearchRe
 		if !ok {
 			break
 		}
-
-		retrying := failed
-		failed = nil
-		for i, fe := range retrying {
-			epLabel := formatSeasonEpisodeLabel(fe.SeasonNum, fe.Episode)
-			fmt.Fprintf(os.Stderr, "[%d/%d] Retrying %s...\n", i+1, len(retrying), epLabel)
-
-			outputDir := buildTVSeasonDownloadDir(baseDir, selected.Title, fe.SeasonNum)
-			if err := downloadSingleEpisode(primary, selected, fe.Episode, fe.SeasonNum, outputDir, epLabel); err != nil {
-				fmt.Fprintf(os.Stderr, "  Failed: %v\n", err)
-				failed = append(failed, fe)
-			} else {
-				downloaded++
-			}
-		}
-
-		printMultiSeasonSummary(totalEpisodes, downloaded, failed)
+		run.retry()
+		fmt.Fprint(os.Stderr, run.summary())
 	}
 
 	return nil
 }
 
-// printMultiSeasonSummary prints the multi-season download results.
-func printMultiSeasonSummary(total, downloaded int, failed []failedEpisode) {
-	if len(failed) == 0 {
-		fmt.Fprintf(os.Stderr, "\nDownloaded %d/%d episodes across all seasons.\n", downloaded, total)
-	} else {
-		labels := make([]string, len(failed))
-		for i, fe := range failed {
+type multiSeasonRun struct {
+	primary  provider.Provider
+	selected media.SearchResult
+	baseDir  string
+	lister   *seasonLister
+
+	total      int
+	downloaded int
+	failed     []failedEpisode
+	unlisted   []media.Season
+}
+
+func (r *multiSeasonRun) downloadSeason(season media.Season) {
+	fmt.Fprintf(os.Stderr, "\n=== Season %d ===\n", season.Number)
+
+	stopEps := ui.StartSpinner(fmt.Sprintf("Fetching Season %d episodes...", season.Number))
+	episodes, err := r.lister.episodes(season)
+	stopEps()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to fetch Season %d episodes: %v\n", season.Number, err)
+		r.unlisted = append(r.unlisted, season)
+		return
+	}
+	if len(episodes) == 0 {
+		fmt.Fprintf(os.Stderr, "Season %d has no episodes, skipping\n", season.Number)
+		return
+	}
+
+	r.total += len(episodes)
+	for i, ep := range episodes {
+		fmt.Fprintf(os.Stderr, "Downloading Season %d, Episode %d of %d: %s\n",
+			season.Number, i+1, len(episodes), formatSeasonEpisodeLabel(season.Number, ep))
+		r.downloadEpisode(failedEpisode{SeasonNum: season.Number, Episode: ep})
+	}
+}
+
+func (r *multiSeasonRun) downloadEpisode(fe failedEpisode) {
+	outputDir := buildTVSeasonDownloadDir(r.baseDir, r.selected.Title, fe.SeasonNum)
+	epLabel := formatSeasonEpisodeLabel(fe.SeasonNum, fe.Episode)
+	if err := downloadSingleEpisode(r.primary, r.selected, fe.Episode, fe.SeasonNum, outputDir, epLabel); err != nil {
+		fmt.Fprintf(os.Stderr, "  Failed: %v\n", err)
+		r.failed = append(r.failed, fe)
+		return
+	}
+	r.downloaded++
+}
+
+func (r *multiSeasonRun) retry() {
+	episodes, seasons := r.failed, r.unlisted
+	r.failed, r.unlisted = nil, nil
+
+	for i, fe := range episodes {
+		fmt.Fprintf(os.Stderr, "[%d/%d] Retrying %s...\n", i+1, len(episodes), formatSeasonEpisodeLabel(fe.SeasonNum, fe.Episode))
+		r.downloadEpisode(fe)
+	}
+	if len(seasons) > 0 {
+		r.lister.forgetScan()
+	}
+	for _, season := range seasons {
+		r.downloadSeason(season)
+	}
+}
+
+func (r *multiSeasonRun) summary() string {
+	if len(r.failed) == 0 && len(r.unlisted) == 0 {
+		return fmt.Sprintf("\nDownloaded %d/%d episodes across all seasons.\n", r.downloaded, r.total)
+	}
+	var parts []string
+	if len(r.failed) > 0 {
+		labels := make([]string, len(r.failed))
+		for i, fe := range r.failed {
 			labels[i] = fmt.Sprintf("S%02dE%02d", fe.SeasonNum, fe.Episode.Number)
 		}
-		fmt.Fprintf(os.Stderr, "\nDownloaded %d/%d episodes. Failed: %s\n",
-			downloaded, total, strings.Join(labels, ", "))
+		parts = append(parts, "Failed: "+strings.Join(labels, ", "))
 	}
+	if len(r.unlisted) > 0 {
+		labels := make([]string, len(r.unlisted))
+		for i, season := range r.unlisted {
+			labels[i] = fmt.Sprintf("S%02d", season.Number)
+		}
+		parts = append(parts, "Episode list not fetched: "+strings.Join(labels, ", "))
+	}
+	return fmt.Sprintf("\nDownloaded %d/%d episodes. %s\n", r.downloaded, r.total, strings.Join(parts, ". "))
 }
