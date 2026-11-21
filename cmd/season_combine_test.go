@@ -228,3 +228,35 @@ func TestTUIEpisodeListFallbackRefusesAPrefixThatMayBeTruncated(t *testing.T) {
 		})
 	}
 }
+
+func TestTUIEpisodeListFallbackPassesOverATruncatedPrefixForALaterList(t *testing.T) {
+	truncated := fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList)
+	cases := []struct {
+		name        string
+		later       *stubProvider
+		wantEps     int
+		wantPartial bool
+	}{
+		{"a later complete list", chainMember("b", numbered(1, 2, 3), nil), 3, false},
+		{"a later gapped list stays partial", chainMember("b", numbered(1, 5), gapErr()), 2, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hostileEnv(t)
+			chainOf(t, chainMember("a", numbered(1), truncated), c.later)
+			eps, partial, err := tuiEpisodeListFallback(&stubProvider{}, media.SearchResult{ID: "x", Title: "Some Show", Type: media.TV}, 1)
+			if err != nil || len(eps) != c.wantEps || partial != c.wantPartial {
+				t.Fatalf("episodes = %d, partial = %v, err = %v; want %d episodes, partial %v", len(eps), partial, err, c.wantEps, c.wantPartial)
+			}
+		})
+	}
+}
+
+func TestTUIEpisodeListFallbackRefusesANegativeSeason(t *testing.T) {
+	hostileEnv(t)
+	chainOf(t, chainMember("a", numbered(1, 2), nil))
+	eps, _, err := tuiEpisodeListFallback(&stubProvider{}, media.SearchResult{ID: "x", Title: "Some Show", Type: media.TV}, -1)
+	if err == nil || len(eps) != 0 {
+		t.Fatalf("episodes = %d, err = %v; want an error and no list for a negative season", len(eps), err)
+	}
+}

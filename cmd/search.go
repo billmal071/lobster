@@ -237,12 +237,16 @@ func init() {
 // tuiEpisodeListFallback is tui.EpisodeListFallback: the chain's answer for a
 // season the TUI's own provider could not list.
 func tuiEpisodeListFallback(prov provider.Provider, item media.SearchResult, seasonNumber int) ([]media.Episode, bool, error) {
-	a := fallbackEpisodeList(prov, item, seasonNumber)
+	var a *episodeAnswer
+	if seasonNumber >= 0 {
+		var err error
+		a, err = confirmedEpisodeList(fallbackSeasonHits(prov, contentRequest(item), []int{seasonNumber}), seasonNumber, item.Title)
+		if err != nil {
+			return nil, false, err
+		}
+	}
 	if a == nil {
 		return nil, false, fmt.Errorf("no fallback provider could list season %d of %q", seasonNumber, item.Title)
-	}
-	if a.shortfall.mayBeTruncated() {
-		return nil, false, fmt.Errorf("no fallback provider could confirm season %d of %q: %s", seasonNumber, item.Title, a.shortfall.reason)
 	}
 	return a.episodes, a.shortfall.gap, nil
 }

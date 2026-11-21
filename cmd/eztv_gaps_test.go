@@ -293,3 +293,93 @@ func TestEpisodesOffersTheOnlySeasonOfAGappedSeasonList(t *testing.T) {
 		t.Fatalf("output = %s, want season 9 offered with a season_list_incomplete warning", buf.String())
 	}
 }
+
+func chainMember(id string, eps []media.Episode, err error) *stubProvider {
+	return &stubProvider{
+		results:         []media.SearchResult{{ID: id, Title: "Some Show", Type: media.TV}},
+		seasons:         seasonsOf(1),
+		episodes:        eps,
+		episodesWithErr: eps,
+		episodesErr:     err,
+	}
+}
+
+func numbered(nums ...int) []media.Episode {
+	var eps []media.Episode
+	for _, n := range nums {
+		eps = append(eps, media.Episode{ID: fmt.Sprintf("1x%d", n), Number: n})
+	}
+	return eps
+}
+
+func TestConfirmedEpisodeListSkipsPrefixesThatMayBeTruncated(t *testing.T) {
+	truncated := fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList)
+	unconfirmed := fmt.Errorf("%w: %w: episode 2 answered 404 once", provider.ErrIncompleteEpisodeList, provider.ErrUnconfirmedEpisodeList)
+	cases := []struct {
+		name        string
+		chain       []provider.Provider
+		wantFrom    string
+		wantEps     int
+		wantRefusal string
+	}{
+		{"a truncated prefix then a complete list",
+			[]provider.Provider{chainMember("a", numbered(1), truncated), chainMember("b", numbered(1, 2, 3), nil)}, "b", 3, ""},
+		{"an unconfirmed prefix then a complete list",
+			[]provider.Provider{chainMember("a", numbered(1), unconfirmed), chainMember("b", numbered(1, 2, 3), nil)}, "b", 3, ""},
+		{"a truncated prefix then a gapped list",
+			[]provider.Provider{chainMember("a", numbered(1), truncated), chainMember("b", numbered(1, 5), gapErr())}, "b", 2, ""},
+		{"two truncated prefixes then a complete list",
+			[]provider.Provider{chainMember("a", numbered(1), truncated), chainMember("b", numbered(1, 2), unconfirmed), chainMember("c", numbered(1, 2, 3), nil)}, "c", 3, ""},
+		{"a complete list ahead of a longer one keeps chain order",
+			[]provider.Provider{chainMember("a", numbered(1, 2), nil), chainMember("b", numbered(1, 2, 3), nil)}, "a", 2, ""},
+		{"a failing member then a truncated prefix then a complete list",
+			[]provider.Provider{chainMember("a", nil, errors.New("boom")), chainMember("b", numbered(1), truncated), chainMember("c", numbered(1, 2), nil)}, "c", 2, ""},
+		{"only truncated prefixes are refused with the first one's reason",
+			[]provider.Provider{chainMember("a", numbered(1), truncated), chainMember("b", numbered(1, 2), unconfirmed)}, "", 0, "page 2 failed"},
+		{"a truncated prefix then a failing member is refused",
+			[]provider.Provider{chainMember("a", numbered(1), truncated), chainMember("b", nil, errors.New("boom"))}, "", 0, "page 2 failed"},
+		{"nothing listed is neither an answer nor a refusal",
+			[]provider.Provider{chainMember("a", nil, errors.New("boom")), chainMember("b", nil, nil)}, "", 0, ""},
+		{"an empty chain", nil, "", 0, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hostileEnv(t)
+			chainOf(t, c.chain...)
+			sel := media.SearchResult{ID: "x", Title: "Some Show", Type: media.TV}
+			a, err := confirmedEpisodeList(fallbackSeasonHits(&stubProvider{}, contentRequest(sel), []int{1}), 1, sel.Title)
+			if c.wantRefusal != "" {
+				if a != nil || err == nil || !strings.Contains(err.Error(), c.wantRefusal) {
+					t.Fatalf("answer = %v, err = %v; want a refusal naming %q", a, err, c.wantRefusal)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("err = %v, want none", err)
+			}
+			if c.wantFrom == "" {
+				if a != nil {
+					t.Fatalf("answer from %s, want none", a.hit.id)
+				}
+				return
+			}
+			if a == nil || a.hit.id != c.wantFrom || len(a.episodes) != c.wantEps {
+				t.Fatalf("answer = %+v, want %d episodes from %s", a, c.wantEps, c.wantFrom)
+			}
+		})
+	}
+}
+
+func TestBatchPassesOverATruncatedFallbackPrefixForALaterCompleteList(t *testing.T) {
+	hostileEnv(t)
+	chainOf(t,
+		chainMember("a", numbered(1), fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList)),
+		chainMember("b", numbered(1, 2, 3), nil),
+	)
+	primary := &stubProvider{episodesErr: errors.New("boom")}
+	l := newSeasonLister(primary, media.SearchResult{ID: "x", Title: "Some Show", Type: media.TV})
+	eps, err := l.episodes(media.Season{ID: "1", Number: 1})
+	if err != nil || len(eps) != 3 {
+		t.Fatalf("episodes = %d, err = %v; want the second fallback's 3 episodes", len(eps), err)
+	}
+}

@@ -91,7 +91,7 @@ func TestProbeSeasonsOutcomes(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			hit, failed := probeSeasons(context.Background(), c.p, req)
+			hit, failed := probeSeasons(context.Background(), c.p, req, nil)
 			if (hit != nil) != c.wantHit {
 				t.Fatalf("hit = %v, want hit %v", hit, c.wantHit)
 			}
