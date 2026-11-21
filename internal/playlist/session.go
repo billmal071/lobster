@@ -141,10 +141,17 @@ func (s *Session) Title() string {
 
 // HasNext returns true if there is a next episode in this season or a next season.
 func (s *Session) HasNext() bool {
-	if s.EpisodeIdx < len(s.Episodes)-1 {
+	if s.hasNextInSeason() {
 		return true
 	}
 	return !s.EpisodesPartial && s.SeasonIdx < len(s.Seasons)-1
+}
+
+func (s *Session) hasNextInSeason() bool {
+	if s.EpisodeIdx >= len(s.Episodes)-1 {
+		return false
+	}
+	return !s.EpisodesPartial || s.Episodes[s.EpisodeIdx+1].Number == s.Current().Number+1
 }
 
 // HasPrevious returns true if there is a previous episode in this season or a previous season.
@@ -159,7 +166,7 @@ func (s *Session) HasPrevious() bool {
 // next season's episodes from the provider. Returns an error if already at
 // the last episode of the last season.
 func (s *Session) Next() (media.Episode, error) {
-	if s.EpisodeIdx < len(s.Episodes)-1 {
+	if s.hasNextInSeason() {
 		s.EpisodeIdx++
 		return s.Current(), nil
 	}
@@ -201,6 +208,9 @@ func (s *Session) Next() (media.Episode, error) {
 }
 
 func (s *Session) IncompleteListError() error {
+	if s.EpisodeIdx < len(s.Episodes)-1 {
+		return fmt.Errorf("season %d episode list may be incomplete: stopping after episode %d, before a gap in its numbering", s.CurrentSeason().Number, s.Current().Number)
+	}
 	return fmt.Errorf("season %d episode list may be incomplete: stopping after its last measured episode", s.CurrentSeason().Number)
 }
 

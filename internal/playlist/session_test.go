@@ -385,6 +385,67 @@ func TestNextKeepsACompleteSeasonThatDoesNotStartAtEpisodeOne(t *testing.T) {
 	}
 }
 
+func gappedSeasonSession(partial bool) *Session {
+	mp := &mockProvider{episodes: map[string][]media.Episode{"s2": {{Number: 1, ID: "m1"}}}}
+	seasons := []media.Season{{Number: 1, ID: "s1"}, {Number: 2, ID: "s2"}}
+	eps := []media.Episode{{Number: 1, ID: "n1"}, {Number: 3, ID: "n3"}, {Number: 4, ID: "n4"}}
+	s := New(mp, media.SearchResult{ID: "x", Title: "X", Type: media.TV}, seasons, eps, 0, 0)
+	s.EpisodesPartial = partial
+	return s
+}
+
+func TestNextStopsAtAGapInAPartialList(t *testing.T) {
+	s := gappedSeasonSession(true)
+	if s.HasNext() {
+		t.Error("HasNext true before a gap in a partial list, so episode 2 would be skipped")
+	}
+	ep, err := s.Next()
+	if err == nil || !strings.Contains(err.Error(), "season 1") || !strings.Contains(err.Error(), "after episode 1") {
+		t.Fatalf("Next = %v, %v, want an error saying season 1 stops after episode 1", ep, err)
+	}
+	if s.SeasonIdx != 0 || s.EpisodeIdx != 0 {
+		t.Fatalf("position moved to season idx %d episode idx %d, want it left on episode 1", s.SeasonIdx, s.EpisodeIdx)
+	}
+
+	s.EpisodeIdx = 1
+	if !s.HasNext() {
+		t.Error("HasNext false between consecutive episodes 3 and 4 of a partial list")
+	}
+	if ep, err := s.Next(); err != nil || ep.ID != "n4" {
+		t.Fatalf("Next = %v, %v, want n4: episodes 3 and 4 are consecutive", ep, err)
+	}
+}
+
+func TestNextCrossesAGapInACompleteList(t *testing.T) {
+	s := gappedSeasonSession(false)
+	if !s.HasNext() {
+		t.Error("HasNext false before a gap in a complete list")
+	}
+	if ep, err := s.Next(); err != nil || ep.ID != "n3" {
+		t.Fatalf("Next = %v, %v, want n3: a complete list has no episode 2 to wait for", ep, err)
+	}
+}
+
+func TestNextIntoAPartialSeasonStopsAtItsFirstGap(t *testing.T) {
+	partial := fmt.Errorf("eztv page failed: %w", provider.ErrIncompleteEpisodeList)
+	mp := &mockProvider{
+		episodes: map[string][]media.Episode{"s2": {{Number: 1, ID: "n1"}, {Number: 3, ID: "n3"}}},
+		errs:     map[string]error{"s2": partial},
+	}
+	seasons := []media.Season{{Number: 1, ID: "s1"}, {Number: 2, ID: "s2"}}
+	s := New(mp, media.SearchResult{ID: "x", Title: "X", Type: media.TV}, seasons,
+		[]media.Episode{{Number: 1, ID: "e1"}}, 0, 0)
+	if ep, err := s.Next(); err != nil || ep.ID != "n1" {
+		t.Fatalf("Next = %v, %v, want n1", ep, err)
+	}
+	if s.HasNext() {
+		t.Error("HasNext true before the gap in season 2")
+	}
+	if ep, err := s.Next(); err == nil {
+		t.Fatalf("Next = %v, want an error: episode 2 of season 2 is missing from a partial list", ep)
+	}
+}
+
 func TestNextStopsAtEndOfMeasuredPrefix(t *testing.T) {
 	partial := fmt.Errorf("probe budget: %w", provider.ErrIncompleteEpisodeList)
 	build := func(err error) *Session {

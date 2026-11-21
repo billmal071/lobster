@@ -417,6 +417,20 @@ func TestAutoplayStopsWithAnErrorWhenNextSeasonsPartialListSkipsEpisodeOne(t *te
 	}
 }
 
+func TestAutoplayStopsCleanlyAtAGapInAPartialSeason(t *testing.T) {
+	warned := captureWarnings(t)
+	sess := partialSeasonSession(false)
+	sess.Provider.(*stubProvider).episodesWithErr = []media.Episode{{ID: "e21", Number: 1}, {ID: "e23", Number: 3}}
+	got, err := playUntilStopped(t, sess, true)
+	if err != nil {
+		t.Fatalf("err = %v, want a clean stop", err)
+	}
+	wantPlayed(t, got, []playedEp{{1, 2}, {2, 1}})
+	if !containsSubstring(*warned, "season 2 episode list may be incomplete: stopping after episode 1") {
+		t.Fatalf("warnings = %q, want one saying season 2 stops after episode 1", *warned)
+	}
+}
+
 func TestMenuIsNotShownAtEndOfMeasuredPrefixBeforeALaterSeason(t *testing.T) {
 	warned := captureWarnings(t)
 	sess := partialSeasonSession(true)
