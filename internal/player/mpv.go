@@ -57,14 +57,14 @@ func (m *MPV) Available() bool {
 func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFiles []string) (PlayResult, error) {
 	stream, cleanup, err := wrapDeobfuscated(stream)
 	if err != nil {
-		return PlayResult{}, err
+		return PlayResult{PositionUnknown: true}, err
 	}
 	defer cleanup()
 
 	// Create randomized IPC path (Unix socket on Unix, named pipe on Windows)
 	ipc, err := newIPCSocket()
 	if err != nil {
-		return PlayResult{}, err
+		return PlayResult{PositionUnknown: true}, err
 	}
 	defer ipc.cleanup()
 
@@ -107,19 +107,20 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 	cmd.Stdin = os.Stdin
 
 	if err := cmd.Start(); err != nil {
-		return PlayResult{}, fmt.Errorf("starting mpv: %w", err)
+		return PlayResult{PositionUnknown: true}, fmt.Errorf("starting mpv: %w", err)
 	}
 
 	// Track position and duration from IPC in a goroutine, using atomics to avoid data race.
 	// The ipcDone channel is used to synchronize the goroutine before reading final values.
 	var posBits, durBits atomic.Uint64
-	var observed atomic.Bool
+	var observed, everProgressed atomic.Bool
 	ipcDone := make(chan struct{})
 	procDone := make(chan struct{})
 	startTime := time.Now()
 	go func() {
 		defer close(ipcDone)
-		pos, dur, ok := m.trackPlayback(ipc, procDone)
+		pos, dur, ok, progressed := m.trackPlaybackProgress(ipc, procDone)
+		everProgressed.Store(progressed)
 		posBits.Store(math.Float64bits(pos))
 		durBits.Store(math.Float64bits(dur))
 		observed.Store(ok)
@@ -152,8 +153,8 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 
 	// If mpv exited almost instantly with no playback progress,
 	// the stream likely failed to load (e.g., CDN unreachable).
-	if result.Position == 0 && elapsed < 5*time.Second {
-		return PlayResult{}, fmt.Errorf("stream failed to load (mpv exited in %s with no playback)", elapsed.Round(time.Millisecond))
+	if !everProgressed.Load() && elapsed < 5*time.Second {
+		return PlayResult{PositionUnknown: true}, fmt.Errorf("stream failed to load (mpv exited in %s with no playback)", elapsed.Round(time.Millisecond))
 	}
 
 	return result, nil
@@ -207,8 +208,16 @@ func dialWithRetry(ipc *ipcSocket, stop <-chan struct{}) (io.ReadWriteCloser, er
 // up the IPC event loop), but trackPlayback drains it before returning, so no
 // invocation can interleave with the caller's exit-time save.
 func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, float64, bool) {
+	pos, dur, observed, _ := m.trackPlaybackProgress(ipc, stop)
+	return pos, dur, observed
+}
+
+// trackPlaybackProgress is trackPlayback plus a fourth return saying whether
+// the position was ever above zero, which a later seek back to the start does
+// not undo.
+func (m *MPV) trackPlaybackProgress(ipc *ipcSocket, stop <-chan struct{}) (float64, float64, bool, bool) {
 	var lastPos, lastDur float64
-	var observed bool
+	var observed, progressed bool
 
 	var ckCh chan [2]float64
 	ckDone := make(chan struct{})
@@ -237,7 +246,7 @@ func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, floa
 		// applies: "no connection within 30s" on its own sends the reader
 		// looking for a network problem that is not there.
 		fmt.Fprintf(os.Stderr, "mpv ipc: position tracking unavailable: %v%s\n", err, ipcSandboxHint(ipc))
-		return 0, 0, false
+		return 0, 0, false, false
 	}
 	defer conn.Close()
 
@@ -255,7 +264,7 @@ func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, floa
 			// IPC write failed — mpv may have exited early or the socket
 			// is broken. Return zero state so the caller can detect this.
 			fmt.Fprintf(os.Stderr, "mpv ipc: failed to observe %s: %v\n", prop, err)
-			return 0, 0, false
+			return 0, 0, false, false
 		}
 	}
 
@@ -275,14 +284,11 @@ func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, floa
 			continue
 		}
 		if event.Name == "time-pos" && event.Data != nil {
-			// mpv told us where playback is, so the position this call returns
-			// is a measurement — including when that measurement is 0, which
-			// is why this is set before the > 0 filter below rather than from
-			// lastPos.
 			observed = true
+			lastPos = *event.Data
 		}
 		if event.Name == "time-pos" && event.Data != nil && *event.Data > 0 {
-			lastPos = *event.Data
+			progressed = true
 			// Hand the position to the checkpoint writer, at most once per
 			// interval. The send never blocks: if the writer is still busy
 			// with the previous write, this position is simply skipped and a
@@ -300,7 +306,7 @@ func (m *MPV) trackPlayback(ipc *ipcSocket, stop <-chan struct{}) (float64, floa
 		}
 	}
 
-	return lastPos, lastDur, observed
+	return lastPos, lastDur, observed, progressed
 }
 
 // formatDuration formats seconds as HH:MM:SS.

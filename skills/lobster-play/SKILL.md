@@ -129,7 +129,7 @@ The `log` path is randomly generated (`play-<random>.log` in the user cache
 dir) — it is not derived from the pid, so the only way to find a given run's
 log is the `log` key in that run's own JSON output. `resume_tracking` reflects
 whether the *configured player* reports playback position (true for mpv,
-false for vlc/iina and other players) — it has nothing to do with whether you
+false for vlc, iina, celluloid and other players) — it has nothing to do with whether you
 detached; a detached play runs the same attached playback internally, in a
 background process.
 
@@ -164,8 +164,28 @@ episode count is a provider problem, not a ref problem.
 Then:
 
 ```sh
-lobster play --ref "eyJpZCI6..." --season 2 --episode 3 --detach
+lobster play --ref "eyJpZCI6..." --season 2 --episode 3 --detach --autoplay=false
 ```
+
+A detached series play carries on to the following episodes by itself when a
+playlist session is created (the play resolved a season and an episode list),
+unless you pass `--autoplay=false`. When the primary provider cannot list
+seasons and the play falls back to a single stream, there is no session and it
+stops after that one episode, even with mpv. Pass it when the user asked for one named episode;
+omit it only when they asked to watch on from there ("start The Bear from season
+2", "binge it"). Autoplay continues only with mpv, which reports when an episode
+ends; vlc, iina and celluloid stop after the one episode either way. An episode
+counts as finished only when mpv reports both a playback position and a known
+duration and closes within the last ten seconds (the last tenth of the runtime
+for an episode shorter than 100 seconds), so quitting near the end still starts
+the next episode; closing earlier stops the run. When mpv reports no position or
+no duration the episode never counts as finished and the run stops there, even
+if it played to the end, so autoplay is not guaranteed. A season
+whose episode list the provider marks as possibly short stops after its last
+measured episode, or before the first gap in its episode numbers, instead of
+skipping the gap or moving on to the next season. A next season whose
+possibly short list does not start at episode 1 is not entered: the run stops
+with an error instead of skipping the missing episodes.
 
 ## Rules
 

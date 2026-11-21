@@ -528,11 +528,12 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		// that says it may be short is not evidence that an episode above it
 		// does not exist, so that case still falls through to the recovery
 		// below, which needs no list.
-		if sf := shortfallFor(err); sf.code != "" && len(episodes) > 0 &&
+		partialList := false
+		if provider.PartialEpisodeList(episodes, err) &&
 			(episode == 0 || episodeIndex(episodes, episode) >= 0) {
+			warnPartialSeason(p, selectedSeason, title, shortfallFor(err).reason)
+			partialList = true
 			err = nil
-			warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",
-				providerLabel(p), selectedSeason.Number, title, sf.reason)
 		}
 
 		if err != nil || len(episodes) == 0 {
@@ -575,6 +576,9 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				}
 				selectedSeason = answer.season
 				episodes = answer.episodes
+				if partialList = answer.shortfall.code != ""; partialList {
+					warnPartialSeason(p, selectedSeason, title, answer.shortfall.reason)
+				}
 				err = nil
 			} else if episode > 0 {
 				// A caller who already knows which episode it wants does not
@@ -711,7 +715,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		debugf("episode: %d (ID: %s)", selectedEpisode.Number, selectedEpisode.ID)
 
 		// Create a playlist session for continuous playback
-		sess := playlist.NewWithProviderID(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx)
+		sess := newPlaybackSession(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx, partialList)
 		cachedServerName = ""
 		return runPlaybackLoop(sess)
 	}
@@ -1294,4 +1298,19 @@ func initDownloadManager(c *config.Config) (*dlmanager.Manager, func(), error) {
 	}
 
 	return mgr, cleanup, nil
+}
+
+func warnPartialSeason(p provider.Provider, season media.Season, title, reason string) {
+	warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",
+		providerLabel(p), season.Number, title, reason)
+}
+
+func newPlaybackSession(p provider.Provider, selected media.SearchResult, providerID string, chainPrimary provider.Provider,
+	seasons []media.Season, episodes []media.Episode, seasonIdx, episodeIdx int, partial bool) *playlist.Session {
+	sess := playlist.NewWithProviderID(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx)
+	sess.EpisodesPartial = partial
+	sess.OnPartialSeason = func(season media.Season, err error) {
+		warnPartialSeason(sess.Provider, season, selected.Title, shortfallFor(err).reason)
+	}
+	return sess
 }
