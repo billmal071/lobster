@@ -453,13 +453,18 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case detailFetchedMsg:
-		m.err = nil
-		if m.currentItem != nil && m.currentItem.ID == msg.id {
+		if m.isSelected(msg.id) {
+			m.err = nil
 			m.currentDetail = msg.detail
 		}
 
+	case detailErrMsg:
+		if m.isSelected(msg.id) {
+			m.err = msg.err
+		}
+
 	case posterFetchedMsg:
-		if m.currentItem != nil && m.currentItem.ID == msg.id {
+		if m.isSelected(msg.id) {
 			if msg.inline {
 				m.posterB64 = msg.b64
 				m.posterImgW = msg.imgW
@@ -717,6 +722,10 @@ func (m AppModel) renderTabBar() string {
 
 func (m AppModel) supersededRequest(requested tab, gen int) bool {
 	return requested != m.activeTab || gen != m.tabReqGen
+}
+
+func (m AppModel) isSelected(id string) bool {
+	return m.currentItem != nil && m.currentItem.ID == id
 }
 
 func (m AppModel) providerForActiveTab() provider.Provider {

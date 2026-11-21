@@ -196,7 +196,7 @@ func fetchDetailCmd(p provider.Provider, id string) tea.Cmd {
 	return func() tea.Msg {
 		detail, err := p.GetDetails(id)
 		if err != nil {
-			return errMsg{err}
+			return detailErrMsg{id: id, err: err}
 		}
 		return detailFetchedMsg{id: id, detail: detail}
 	}

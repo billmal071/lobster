@@ -36,6 +36,11 @@ type detailFetchedMsg struct {
 	detail *media.ContentDetail
 }
 
+type detailErrMsg struct {
+	id  string
+	err error
+}
+
 // seasonsFetchedMsg is sent when TV show seasons are fetched.
 type seasonsFetchedMsg []media.Season
 
