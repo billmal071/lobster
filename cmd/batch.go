@@ -416,11 +416,12 @@ func parseSeasonRange(input string, seasons []media.Season) ([]media.Season, err
 // different providers, which is not something the download summary would ever
 // mention.
 type seasonLister struct {
-	primary  provider.Provider
-	selected media.SearchResult
-	wants    []int
-	hits     []*seasonHit
-	scanned  bool
+	primary    provider.Provider
+	selected   media.SearchResult
+	wants      []int
+	hits       []*seasonHit
+	scanFailed bool
+	scanned    bool
 }
 
 func newSeasonLister(p provider.Provider, selected media.SearchResult, batch ...media.Season) *seasonLister {
@@ -447,9 +448,9 @@ func (l *seasonLister) episodes(season media.Season) ([]media.Episode, error) {
 	}
 	if !l.scanned {
 		l.scanned = true
-		l.hits = fallbackSeasonHits(l.primary, contentRequest(l.selected), l.wants)
+		l.hits, l.scanFailed = fallbackSeasonScan(l.primary, contentRequest(l.selected), l.wants)
 	}
-	a, refusal := confirmedEpisodeList(l.hits, season.Number, l.selected.Title)
+	a, refusal := confirmedEpisodeList(l.hits, l.scanFailed, season.Number, l.selected.Title)
 	if a != nil {
 		debugf("batch: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), season.Number)
 		return a.episodes, nil

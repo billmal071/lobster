@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -678,15 +679,16 @@ type episodeAnswer struct {
 }
 
 func firstEpisodeList(hits []*seasonHit, wantSeason int) *episodeAnswer {
-	if lists := episodeLists(hits, wantSeason); len(lists) > 0 {
+	if lists, _ := episodeLists(hits, wantSeason); len(lists) > 0 {
 		return lists[0]
 	}
 	return nil
 }
 
-func confirmedEpisodeList(hits []*seasonHit, season int, title string) (*episodeAnswer, error) {
+func confirmedEpisodeList(hits []*seasonHit, scanFailed bool, season int, title string) (*episodeAnswer, error) {
 	var refused *episodeAnswer
-	for _, a := range episodeLists(hits, season) {
+	lists, listFailed := episodeLists(hits, season)
+	for _, a := range lists {
 		if !a.shortfall.mayBeTruncated() {
 			return a, nil
 		}
@@ -697,26 +699,31 @@ func confirmedEpisodeList(hits []*seasonHit, season int, title string) (*episode
 	if refused != nil {
 		return nil, fmt.Errorf("no fallback provider could confirm season %d of %q: %s", season, title, refused.shortfall.reason)
 	}
+	if scanFailed || listFailed {
+		return nil, fmt.Errorf("no fallback provider could list season %d of %q: a fallback lookup failed", season, title)
+	}
 	return nil, nil
 }
 
 // episodeLists asks every hit for the requested season's episodes and returns
-// the ones that answer, in chain order.
+// the ones that answer, in chain order, and whether any hit's lookup failed
+// rather than answering.
 //
 // It fans out under the same deadline the season scan uses, for the same
 // reason: asking up to eleven providers in turn, each against a 30s HTTP
 // timeout, is minutes of silence on a degraded chain, and `episodes` exists so
 // an agent is never left waiting. The result is in provider order, so it does
 // not depend on which provider was quickest.
-func episodeLists(hits []*seasonHit, wantSeason int) []*episodeAnswer {
+func episodeLists(hits []*seasonHit, wantSeason int) ([]*episodeAnswer, bool) {
 	if len(hits) == 0 {
-		return nil
+		return nil, false
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), episodesFallbackTimeout)
 	defer cancel()
 
 	answers := make([]*episodeAnswer, len(hits))
+	failures := make([]bool, len(hits))
 	var wg sync.WaitGroup
 	for i, h := range hits {
 		sel, ok := pickSeason(h.seasons, wantSeason)
@@ -736,6 +743,8 @@ func episodeLists(hits []*seasonHit, wantSeason int) []*episodeAnswer {
 			}
 			if err != nil || len(eps) == 0 {
 				debugf("episodes: fallback %T cannot list season %d (err=%v, episodes=%d)", h.provider, sel.Number, err, len(eps))
+				kind, _ := classifyList(len(eps), err)
+				failures[idx] = kind == lookupFailed
 				return
 			}
 			answers[idx] = &episodeAnswer{hit: h, season: sel, episodes: eps, shortfall: shortfall}
@@ -749,7 +758,7 @@ func episodeLists(hits []*seasonHit, wantSeason int) []*episodeAnswer {
 			listed = append(listed, a)
 		}
 	}
-	return listed
+	return listed, slices.Contains(failures, true)
 }
 
 // episodesWithContext is seasonsWithContext for GetEpisodes, with the same
@@ -784,7 +793,8 @@ type seasonHit struct {
 // expires mid-call. Of several matching candidates the first whose list holds
 // every season in wants is returned, or else the first that lists any. failed
 // is true when any lookup errored or timed out rather than answering, whichever
-// candidate hit came from.
+// candidate hit came from, and when a candidate passed over for firstListed had
+// a list that was cut short.
 func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request, wants []int) (hit *seasonHit, failed bool) {
 	results, err := searchWithContext(ctx, p, req.Title)
 	if errors.Is(err, provider.ErrNoResults) {
@@ -813,6 +823,8 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 			}
 			if firstListed == nil {
 				firstListed = listed
+			} else if look.gap == gapShort {
+				failed = true
 			}
 		}
 	}

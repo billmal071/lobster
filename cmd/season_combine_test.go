@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"lobster/internal/media"
@@ -258,5 +259,27 @@ func TestTUIEpisodeListFallbackRefusesANegativeSeason(t *testing.T) {
 	eps, _, err := tuiEpisodeListFallback(&stubProvider{}, media.SearchResult{ID: "x", Title: "Some Show", Type: media.TV}, -1)
 	if err == nil || len(eps) != 0 {
 		t.Fatalf("episodes = %d, err = %v; want an error and no list for a negative season", len(eps), err)
+	}
+}
+
+func TestTUIEpisodeListFallbackSaysWhenAFallbackLookupFailed(t *testing.T) {
+	cases := []struct {
+		name   string
+		member *stubProvider
+		want   string
+	}{
+		{"the search failed", &stubProvider{searchErr: errBoom}, "a fallback lookup failed"},
+		{"the listing failed", chainMember("a", nil, errBoom), "a fallback lookup failed"},
+		{"nothing failed", chainMember("a", nil, nil), `could list season 1 of "Some Show"`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hostileEnv(t)
+			chainOf(t, c.member)
+			_, _, err := tuiEpisodeListFallback(&stubProvider{}, media.SearchResult{ID: "x", Title: "Some Show", Type: media.TV}, 1)
+			if err == nil || !strings.HasSuffix(err.Error(), c.want) {
+				t.Fatalf("err = %v, want it to end with %q", err, c.want)
+			}
+		})
 	}
 }

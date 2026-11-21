@@ -327,6 +327,8 @@ func TestProbeSeasonsPrefersACandidateListingTheWantedSeasons(t *testing.T) {
 		{"a duplicated wanted season", scripted(showResults("a", "b"), short, full), []int{4, 4}, "b", false, 2},
 		{"season 0 is a season", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(0, 1)}), []int{0}, "b", false, 2},
 		{"a gapped later list that has it", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(4), err: gapErr()}), []int{4}, "b", false, 2},
+		{"a later list cut short that lacks it leaves the scan unsure", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(1), err: fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList)}), []int{4}, "a", true, 2},
+		{"a later gapped list that lacks it is an answer", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(1), err: gapErr()}), []int{4}, "a", false, 2},
 		{"a failure ahead of both is kept", scripted(showResults("z", "a", "b"), seasonOutcome{err: errBoom}, short, full), []int{4}, "b", true, 3},
 	}
 	for _, c := range cases {
@@ -417,4 +419,15 @@ func TestSingleSeasonScansAskForTheirSeason(t *testing.T) {
 			t.Fatalf("episodesRun = %v, want season 2 listed from candidate b", err)
 		}
 	})
+}
+
+func TestResolveSeasonIsUnsureWhenAPassedOverCandidateListWasCutShort(t *testing.T) {
+	hostileEnv(t)
+	cut := seasonOutcome{seasons: seasonsOf(1), err: fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList)}
+	chainOf(t, scripted(showResults("a", "b"), seasonOutcome{seasons: seasonsOf(1)}, cut))
+	req := resolver.Request{ID: "x/1", Title: "Show", MediaType: media.TV}
+	res := resolveSeason(&stubProvider{}, req, seasonLookup{kind: lookupAbsent}, 2)
+	if res.verdict != seasonUndetermined {
+		t.Fatalf("verdict = %v, want undetermined: candidate b's list stopped early, so season 2 may exist", res.verdict)
+	}
 }

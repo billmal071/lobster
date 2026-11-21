@@ -338,8 +338,14 @@ func TestConfirmedEpisodeListSkipsPrefixesThatMayBeTruncated(t *testing.T) {
 			[]provider.Provider{chainMember("a", numbered(1), truncated), chainMember("b", numbered(1, 2), unconfirmed)}, "", 0, "page 2 failed"},
 		{"a truncated prefix then a failing member is refused",
 			[]provider.Provider{chainMember("a", numbered(1), truncated), chainMember("b", nil, errors.New("boom"))}, "", 0, "page 2 failed"},
-		{"nothing listed is neither an answer nor a refusal",
-			[]provider.Provider{chainMember("a", nil, errors.New("boom")), chainMember("b", nil, nil)}, "", 0, ""},
+		{"a listing that failed and nothing else is a failure",
+			[]provider.Provider{chainMember("a", nil, errors.New("boom")), chainMember("b", nil, nil)}, "", 0, "a fallback lookup failed"},
+		{"a search that failed and nothing else is a failure",
+			[]provider.Provider{&stubProvider{searchErr: errors.New("boom")}, chainMember("b", nil, nil)}, "", 0, "a fallback lookup failed"},
+		{"a failed listing beside a complete list is not",
+			[]provider.Provider{chainMember("a", nil, errors.New("boom")), chainMember("b", numbered(1, 2), nil)}, "b", 2, ""},
+		{"members that answer with no episodes are neither an answer nor a failure",
+			[]provider.Provider{chainMember("a", nil, provider.ErrNoResults), chainMember("b", nil, provider.ErrNotCarried), chainMember("c", nil, nil)}, "", 0, ""},
 		{"an empty chain", nil, "", 0, ""},
 	}
 	for _, c := range cases {
@@ -347,7 +353,8 @@ func TestConfirmedEpisodeListSkipsPrefixesThatMayBeTruncated(t *testing.T) {
 			hostileEnv(t)
 			chainOf(t, c.chain...)
 			sel := media.SearchResult{ID: "x", Title: "Some Show", Type: media.TV}
-			a, err := confirmedEpisodeList(fallbackSeasonHits(&stubProvider{}, contentRequest(sel), []int{1}), 1, sel.Title)
+			hits, scanFailed := fallbackSeasonScan(&stubProvider{}, contentRequest(sel), []int{1})
+			a, err := confirmedEpisodeList(hits, scanFailed, 1, sel.Title)
 			if c.wantRefusal != "" {
 				if a != nil || err == nil || !strings.Contains(err.Error(), c.wantRefusal) {
 					t.Fatalf("answer = %v, err = %v; want a refusal naming %q", a, err, c.wantRefusal)
@@ -381,5 +388,28 @@ func TestBatchPassesOverATruncatedFallbackPrefixForALaterCompleteList(t *testing
 	eps, err := l.episodes(media.Season{ID: "1", Number: 1})
 	if err != nil || len(eps) != 3 {
 		t.Fatalf("episodes = %d, err = %v; want the second fallback's 3 episodes", len(eps), err)
+	}
+}
+
+func TestBatchDoesNotSkipASeasonTheChainFailedToList(t *testing.T) {
+	cases := []struct {
+		name     string
+		member   provider.Provider
+		wantFail bool
+	}{
+		{"a fallback listing failed", chainMember("a", nil, errors.New("boom")), true},
+		{"a fallback search failed", &stubProvider{searchErr: errors.New("boom")}, true},
+		{"the fallback also lists nothing", chainMember("a", nil, nil), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hostileEnv(t)
+			chainOf(t, c.member)
+			l := newSeasonLister(&stubProvider{}, media.SearchResult{ID: "x", Title: "Some Show", Type: media.TV})
+			eps, err := l.episodes(media.Season{ID: "1", Number: 1})
+			if (err != nil) != c.wantFail || len(eps) != 0 {
+				t.Fatalf("episodes = %d, err = %v; want failure %v", len(eps), err, c.wantFail)
+			}
+		})
 	}
 }

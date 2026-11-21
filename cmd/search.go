@@ -239,8 +239,9 @@ func init() {
 func tuiEpisodeListFallback(prov provider.Provider, item media.SearchResult, seasonNumber int) ([]media.Episode, bool, error) {
 	var a *episodeAnswer
 	if seasonNumber >= 0 {
+		hits, scanFailed := fallbackSeasonScan(prov, contentRequest(item), []int{seasonNumber})
 		var err error
-		a, err = confirmedEpisodeList(fallbackSeasonHits(prov, contentRequest(item), []int{seasonNumber}), seasonNumber, item.Title)
+		a, err = confirmedEpisodeList(hits, scanFailed, seasonNumber, item.Title)
 		if err != nil {
 			return nil, false, err
 		}
