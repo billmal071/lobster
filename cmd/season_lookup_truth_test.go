@@ -372,3 +372,49 @@ func TestBatchListerScansForEverySeasonOfTheBatch(t *testing.T) {
 		t.Fatalf("GetSeasons calls = %d, want 2: one scan for the whole batch", fb.calls)
 	}
 }
+
+func laterCandidateHasSeason(season int) *scriptedLookup {
+	var earlier []int
+	for n := 1; n < season; n++ {
+		earlier = append(earlier, n)
+	}
+	results := []media.SearchResult{{ID: "a", Title: "Some Show", Type: media.TV}, {ID: "b", Title: "Some Show", Type: media.TV}}
+	fb := scripted(results, seasonOutcome{seasons: seasonsOf(earlier...)}, seasonOutcome{seasons: seasonsOf(append(earlier, season)...)})
+	fb.stubProvider.episodes = []media.Episode{{ID: "e1", Number: 1}}
+	return fb
+}
+
+func TestSingleSeasonScansAskForTheirSeason(t *testing.T) {
+	sel := media.SearchResult{ID: "x/1", Title: "Some Show", Type: media.TV}
+
+	t.Run("the interactive episode-list recovery", func(t *testing.T) {
+		hostileEnv(t)
+		chainOf(t, laterCandidateHasSeason(4))
+		a := fallbackEpisodeList(&stubProvider{}, sel, 4)
+		if a == nil || a.hit.id != "b" || a.season.Number != 4 {
+			t.Fatalf("answer = %+v, want season 4 from candidate b", a)
+		}
+	})
+
+	t.Run("the download dialog", func(t *testing.T) {
+		hostileEnv(t)
+		chainOf(t, laterCandidateHasSeason(4))
+		eps, _, err := tuiEpisodeListFallback(&stubProvider{}, sel, 4)
+		if err != nil || len(eps) != 1 {
+			t.Fatalf("episodes = %d, err = %v; want candidate b's list of season 4", len(eps), err)
+		}
+	})
+
+	t.Run("the episodes command", func(t *testing.T) {
+		hostileEnv(t)
+		captureAgentOut(t)
+		primary := twoSeasonStub()
+		primary.episodesErr = errBoom
+		withStubProvider(t, primary)
+		chainOf(t, laterCandidateHasSeason(2))
+		withEpisodesFlags(t, tvRef(t, ""), 2)
+		if err := episodesRun(episodesCmd, nil); err != nil {
+			t.Fatalf("episodesRun = %v, want season 2 listed from candidate b", err)
+		}
+	})
+}

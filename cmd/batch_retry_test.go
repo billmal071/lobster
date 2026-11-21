@@ -160,3 +160,17 @@ func TestMultiSeasonSummaryNamesFailedEpisodesAndUnlistedSeasons(t *testing.T) {
 		})
 	}
 }
+
+func TestMultiSeasonOffersARetryWhenOnlyASeasonListFailed(t *testing.T) {
+	hostileEnv(t)
+	fb, primary, sel := flakyBatch(t)
+	fb.listingFailures["f2"] = 1
+	confirmRetries(t, 1)
+
+	_ = batchDownloadMultiSeason(primary, sel, primary.seasons[1:2])
+
+	want := []string{"fallback-1:2:1"}
+	if got := fb.episodesAsked(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("the chain was asked to stream %v, want %v: a batch whose only failure is a season list still offers the retry", got, want)
+	}
+}
