@@ -94,13 +94,32 @@ func TestDecodeListMalformedJSON(t *testing.T) {
 	}
 }
 
+func paddedListing(size int) []byte {
+	doc := `{"results":[{"id":603,"title":"The Matrix"}]}`
+	return []byte(doc + strings.Repeat(" ", size-len(doc)))
+}
+
 func TestOversizedBodyIsAnError(t *testing.T) {
+	for name, size := range map[string]int{"one byte over the limit": maxBody + 1, "well over the limit": maxBody + 4096} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Write(paddedListing(size))
+			})
+			_, err := c.Trending(media.Movie)
+			if err == nil || !strings.Contains(err.Error(), "TMDB response too large") {
+				t.Fatalf("Trending() error = %v, want TMDB response too large", err)
+			}
+		})
+	}
+}
+
+func TestBodyAtTheSizeLimitIsDecoded(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"results":[`))
-		w.Write([]byte(strings.Repeat(" ", maxBody+10)))
+		w.Write(paddedListing(maxBody))
 	})
-	if _, err := c.Trending(media.Movie); err == nil {
-		t.Fatal("oversized body decoded without error")
+	got, err := c.Trending(media.Movie)
+	if err != nil || len(got) != 1 || got[0].Title != "The Matrix" {
+		t.Fatalf("Trending() = %+v, %v; want the one row of a body exactly at the limit", got, err)
 	}
 }
 
