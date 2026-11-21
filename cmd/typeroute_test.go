@@ -451,6 +451,29 @@ func TestResolveAndPlayRoutesAMovieToYTSAtSelectionTime(t *testing.T) {
 	}
 }
 
+func TestResolveAndPlayPlaysAnUnresolvedCatalogueMovieFromYTS(t *testing.T) {
+	rec := &recordingPlayer{}
+	playStreamHarness(t, rec)
+	cfg.Base = "auto"
+	cfg.Quality = "1080"
+
+	yts := matrixOnYTS()
+	yts.stream = &media.Stream{URL: "http://127.0.0.1:1/yts-2160p.mkv"}
+	prev := newYTSProvider
+	newYTSProvider = func() provider.Provider { return yts }
+	t.Cleanup(func() { newYTSProvider = prev })
+
+	scraper := &scraperStreamStub{stream: &media.Stream{URL: "http://127.0.0.1:1/scraper-1080p.m3u8"}}
+	sel := media.SearchResult{ID: "movie/603", Unresolved: true, FromCatalogue: true, Title: "The Matrix", Year: "1999", Type: media.Movie}
+
+	if err := resolveAndPlay(scraper, sel, 0, 0); err != nil {
+		t.Fatalf("resolveAndPlay: %v", err)
+	}
+	if rec.url != "http://127.0.0.1:1/yts-2160p.mkv" {
+		t.Fatalf("player received %q, want the YTS stream the route matched", rec.url)
+	}
+}
+
 // historyIDs returns the IDs of every row currently in the test's history
 // file, in file order.
 func historyIDs(t *testing.T) []string {

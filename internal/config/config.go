@@ -105,7 +105,18 @@ type Config struct {
 	// stores account credentials the same way.)
 	OSUsername string `toml:"opensubtitles_username"`
 	OSPassword string `toml:"opensubtitles_password"`
+	// TMDBAPIKey is the user's own themoviedb.org API key. Empty means the
+	// lists come from the streaming provider as before. LOBSTER_TMDB_KEY
+	// overrides it (Load).
+	TMDBAPIKey string `toml:"tmdb_api_key"`
 }
+
+// TMDBKeyEnv is the environment variable that overrides tmdb_api_key.
+const TMDBKeyEnv = "LOBSTER_TMDB_KEY"
+
+// String and GoString keep the secrets in Config out of any %v, %+v or %#v.
+func (c Config) String() string   { return "lobster config (fields not printed)" }
+func (c Config) GoString() string { return c.String() }
 
 // XtreamConfig holds optional Xtream-codes credentials for a paid IPTV sub.
 type XtreamConfig struct {
@@ -269,6 +280,18 @@ func ConfigPath() (string, error) {
 // Load reads the config file and merges with defaults.
 // If the config file doesn't exist, defaults are returned.
 func Load() (*Config, error) {
+	cfg, err := loadFile()
+	if err != nil {
+		return nil, err
+	}
+	if k := strings.TrimSpace(os.Getenv(TMDBKeyEnv)); k != "" {
+		cfg.TMDBAPIKey = k
+	}
+	cfg.TMDBAPIKey = strings.TrimSpace(cfg.TMDBAPIKey)
+	return cfg, nil
+}
+
+func loadFile() (*Config, error) {
 	cfg := Default()
 
 	path, err := ConfigPath()

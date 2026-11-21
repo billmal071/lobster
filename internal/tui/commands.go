@@ -17,34 +17,58 @@ import (
 )
 
 // fetchTabCmd fetches the default listing for a dashboard category.
-func fetchTabCmd(p provider.Provider, active tab) tea.Cmd {
+func fetchTabCmd(p provider.Provider, active tab, gen int) tea.Cmd {
 	return func() tea.Msg {
 		mediaType := media.Movie
 		if active == tabSeries || active == tabAnime {
 			mediaType = media.TV
 		}
 
+		if t, ok := p.(interface {
+			TrendingWithNotice(media.MediaType) ([]media.SearchResult, string, error)
+		}); ok {
+			results, notice, err := t.TrendingWithNotice(mediaType)
+			if err != nil {
+				return fetchErrMsg{err: err, tab: active, gen: gen}
+			}
+			if notice == "" {
+				return resultsFetchedMsg{results: results, tab: active, gen: gen}
+			}
+			return tea.BatchMsg{
+				func() tea.Msg { return resultsFetchedMsg{results: results, tab: active, gen: gen} },
+				func() tea.Msg { return noticeMsg{text: notice, tab: active, gen: gen} },
+			}
+		}
+
 		results, err := p.Trending(mediaType)
 		if err != nil {
-			return errMsg{err}
+			return fetchErrMsg{err: err, tab: active, gen: gen}
 		}
-		return resultsFetchedMsg(results)
+		if n, ok := p.(interface{ TakeNotice() string }); ok {
+			if notice := n.TakeNotice(); notice != "" {
+				return tea.BatchMsg{
+					func() tea.Msg { return resultsFetchedMsg{results: results, tab: active, gen: gen} },
+					func() tea.Msg { return noticeMsg{text: notice, tab: active, gen: gen} },
+				}
+			}
+		}
+		return resultsFetchedMsg{results: results, tab: active, gen: gen}
 	}
 }
 
 // searchCmd searches for items matching the query using the primary provider
 // and optional fallback providers. When the primary returns few results (< 3),
 // fallbacks are searched in parallel and results are merged/deduplicated.
-func searchCmd(p provider.Provider, query string, fallbacks ...provider.Provider) tea.Cmd {
+func searchCmd(p provider.Provider, query string, active tab, gen int, fallbacks ...provider.Provider) tea.Cmd {
 	return func() tea.Msg {
 		results, err := p.Search(query)
 		if err != nil {
-			return errMsg{err}
+			return fetchErrMsg{err: err, tab: active, gen: gen}
 		}
 
 		// If we got enough results or have no fallbacks, return immediately.
 		if len(results) >= 3 || len(fallbacks) == 0 {
-			return resultsFetchedMsg(results)
+			return resultsFetchedMsg{results: results, tab: active, gen: gen}
 		}
 
 		// Search fallbacks in parallel with a 5s timeout.
@@ -52,7 +76,7 @@ func searchCmd(p provider.Provider, query string, fallbacks ...provider.Provider
 		// use TMDB IDs as their universal content identifier — any provider can
 		// resolve streams for results discovered by another.
 		merged := tuiMultiSearch(results, fallbacks, query)
-		return resultsFetchedMsg(merged)
+		return resultsFetchedMsg{results: merged, tab: active, gen: gen}
 	}
 }
 
@@ -172,7 +196,7 @@ func fetchDetailCmd(p provider.Provider, id string) tea.Cmd {
 	return func() tea.Msg {
 		detail, err := p.GetDetails(id)
 		if err != nil {
-			return errMsg{err}
+			return detailErrMsg{id: id, err: err}
 		}
 		return detailFetchedMsg{id: id, detail: detail}
 	}

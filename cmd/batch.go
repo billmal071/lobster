@@ -190,8 +190,8 @@ func openBatchStream(chainPrimary provider.Provider, selected media.SearchResult
 // built by excluding its primary, which would otherwise skip the one source
 // the user named and the one proven to carry the episode list.
 func resolveBatchStream(chainPrimary provider.Provider, selected media.SearchResult, ep media.Episode, seasonNum int) (*media.Stream, error) {
-	if sp, ok := chainPrimary.(provider.StreamProvider); ok && cfg != nil && cfg.APIURL == "" && config.IsTorrentBase(cfg.Base) {
-		stream, err := sp.Watch(selected.ID, ep.ID, "", cfgQuality())
+	if sp, ok := chainPrimary.(provider.StreamProvider); ok && cfg != nil && cfg.APIURL == "" && config.IsTorrentBase(cfg.Base) && !selected.Unresolved {
+		stream, err := sp.Watch(selected.CallID(), ep.ID, "", cfgQuality())
 		if err == nil && stream != nil && stream.URL != "" {
 			return stream, nil
 		}
@@ -427,7 +427,11 @@ func newSeasonLister(p provider.Provider, selected media.SearchResult) *seasonLi
 }
 
 func (l *seasonLister) episodes(season media.Season) ([]media.Episode, error) {
-	episodes, err := l.primary.GetEpisodes(l.selected.ID, season.ID)
+	var episodes []media.Episode
+	err := fmt.Errorf("%q is not on this provider", l.selected.Title)
+	if !l.selected.Unresolved {
+		episodes, err = l.primary.GetEpisodes(l.selected.CallID(), season.ID)
+	}
 	if err == nil && len(episodes) > 0 {
 		return episodes, nil
 	}

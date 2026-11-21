@@ -458,12 +458,47 @@ download_dir = "~/Videos/lobster"
 # whatever api_url says.
 # api_url = "https://your-consumet-instance.example.com"
 
+# Optional: your own TMDB API key, for richer lists (see "TMDB catalogue"
+# below). LOBSTER_TMDB_KEY overrides it.
+# tmdb_api_key = "..."
+
 # Live TV sources. See "Live TV and Sports" above.
 [live_tv]
 iptv_org = true          # include the built-in iptv-org playlist
 oneball = true           # include 1ball.pk live sports (opens its match page in your browser)
 playlists = []           # extra M3U URLs or local file paths
 ```
+
+### TMDB catalogue (optional)
+
+With a TMDB API key, the Movies, Series and Anime tabs and the `trending` and
+`recent` commands list titles from the official TMDB API instead of the
+streaming source. This is the only way the Anime tab shows anything, and
+`recent` works where the source's own list is gone. Get a free key from your
+own account at themoviedb.org, then set `tmdb_api_key` in `config.toml` or the
+`LOBSTER_TMDB_KEY` environment variable (the variable wins). Either a v3 API
+key or a v4 read access token works.
+
+- The key is sent only to `api.themoviedb.org`, is never written to logs or
+  printed by `lobster doctor`, and is not shipped with lobster.
+- Playback is unchanged: picking a catalogue title searches the usual sources
+  by title and year. The catalogue supplies lists and details, never streams.
+  Resuming such a title from history, which stores no year, opens the usual
+  picker when the source lists that title, so you confirm which work it is;
+  if the source lists none, the usual fallback sources are tried. Under
+  `--base tbcpl` or `1shows.org`, whose own IDs look like TMDB's, history
+  entries are treated as the source's own and resume as before.
+- Without a key nothing changes, except one line saying the key enables richer
+  lists. If TMDB rejects the key, rate-limits you or cannot be reached, lobster
+  says so in one line and shows the source's own list instead.
+- Anime tab: Japanese-language animation, most popular first. It has no
+  "recent" list: the anime source returns none, with or without a key.
+- Responses are cached in memory for ten minutes.
+
+This product uses TMDB and the TMDB APIs but is not endorsed, certified, or
+otherwise approved by TMDB. TMDB's terms allow non-commercial use only and
+require you to use your own key; read them at
+https://www.themoviedb.org/api-terms-of-use before enabling this.
 
 ---
 

@@ -342,3 +342,39 @@ func TestFallbackForANyaaSeasonResultAsksForThatSeasonByBaseTitle(t *testing.T) 
 		t.Errorf("episode ID = %q, want 77:3:4", rec.episodeID)
 	}
 }
+
+type watchIDRecorder struct {
+	stubStreamProvider
+	ids []string
+}
+
+func (p *watchIDRecorder) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+	p.ids = append(p.ids, mediaID)
+	return p.stream, nil
+}
+
+func TestResolveBatchStreamAsksTheTorrentSourceForItsOwnID(t *testing.T) {
+	prev := cfg
+	cfg = &config.Config{Base: "eztv", Quality: "1080"}
+	t.Cleanup(func() { cfg = prev })
+	withRecordingFallbackChain(t, &stubProvider{searchErr: errors.New("scraper down")})
+
+	const magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Show"
+	ep := media.Episode{Number: 2, ID: "2"}
+
+	resolved := &watchIDRecorder{stubStreamProvider: stubStreamProvider{stream: &media.Stream{URL: magnet}}}
+	sel := media.SearchResult{ID: "tv/37854", ProviderID: "eztv/show-1", Title: "Show", Type: media.TV, FromCatalogue: true}
+	if _, err := resolveBatchStream(resolved, sel, ep, 1); err != nil {
+		t.Fatalf("resolveBatchStream: %v", err)
+	}
+	if len(resolved.ids) != 1 || resolved.ids[0] != "eztv/show-1" {
+		t.Fatalf("Watch was asked for %v, want the provider ID eztv/show-1", resolved.ids)
+	}
+
+	unresolved := &watchIDRecorder{stubStreamProvider: stubStreamProvider{stream: &media.Stream{URL: magnet}}}
+	sel = media.SearchResult{ID: "tv/37854", Title: "Show", Type: media.TV, FromCatalogue: true, Unresolved: true}
+	_, _ = resolveBatchStream(unresolved, sel, ep, 1)
+	if len(unresolved.ids) != 0 {
+		t.Fatalf("an unresolved catalogue row reached the provider as %v", unresolved.ids)
+	}
+}
