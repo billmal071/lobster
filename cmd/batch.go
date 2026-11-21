@@ -418,12 +418,19 @@ func parseSeasonRange(input string, seasons []media.Season) ([]media.Season, err
 type seasonLister struct {
 	primary  provider.Provider
 	selected media.SearchResult
+	wants    []int
 	hits     []*seasonHit
 	scanned  bool
 }
 
-func newSeasonLister(p provider.Provider, selected media.SearchResult) *seasonLister {
-	return &seasonLister{primary: p, selected: selected}
+func newSeasonLister(p provider.Provider, selected media.SearchResult, batch ...media.Season) *seasonLister {
+	l := &seasonLister{primary: p, selected: selected}
+	for _, s := range batch {
+		if s.Number >= 0 {
+			l.wants = append(l.wants, s.Number)
+		}
+	}
+	return l
 }
 
 func (l *seasonLister) episodes(season media.Season) ([]media.Episode, error) {
@@ -436,7 +443,7 @@ func (l *seasonLister) episodes(season media.Season) ([]media.Episode, error) {
 	}
 	if !l.scanned {
 		l.scanned = true
-		l.hits = fallbackSeasonHits(l.primary, contentRequest(l.selected), nil)
+		l.hits = fallbackSeasonHits(l.primary, contentRequest(l.selected), l.wants)
 	}
 	a, refusal := confirmedEpisodeList(l.hits, season.Number, l.selected.Title)
 	if a != nil {
@@ -470,7 +477,7 @@ func batchDownloadMultiSeason(primary provider.Provider, selected media.SearchRe
 	var downloaded int
 	var failed []failedEpisode
 
-	lister := newSeasonLister(primary, selected)
+	lister := newSeasonLister(primary, selected, seasons...)
 
 	for _, season := range seasons {
 		fmt.Fprintf(os.Stderr, "\n=== Season %d ===\n", season.Number)

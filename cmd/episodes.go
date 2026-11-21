@@ -781,8 +781,10 @@ type seasonHit struct {
 
 // probeSeasons asks one fallback provider whether it has req's work and can
 // enumerate its seasons. It returns nil for "no", including when the context
-// expires mid-call. failed is true when any lookup errored or timed out rather
-// than answering, including one tried before the candidate that returned hit.
+// expires mid-call. Of several matching candidates the first whose list holds
+// every season in wants is returned, or else the first that lists any. failed
+// is true when any lookup errored or timed out rather than answering, whichever
+// candidate hit came from.
 func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request, wants []int) (hit *seasonHit, failed bool) {
 	results, err := searchWithContext(ctx, p, req.Title)
 	if errors.Is(err, provider.ErrNoResults) {
@@ -792,6 +794,7 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 		debugf("episodes: fallback %T search failed: %v", p, err)
 		return nil, true
 	}
+	var firstListed *seasonHit
 	for _, c := range resolver.Candidates(results, req) {
 		if !resolver.Matches(c, req) {
 			debugf("episodes: fallback %T candidate %q (ID: %s) is not the requested work, skipping", p, c.Title, c.ID)
@@ -804,10 +807,25 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 			failed = true
 		case lookupListed:
 			look.provider, look.id = p, c.ID
-			return &seasonHit{seasonLookup: look, title: c.Title}, failed
+			listed := &seasonHit{seasonLookup: look, title: c.Title}
+			if listsEverySeason(seasons, wants) {
+				return listed, failed
+			}
+			if firstListed == nil {
+				firstListed = listed
+			}
 		}
 	}
-	return nil, failed
+	return firstListed, failed
+}
+
+func listsEverySeason(seasons []media.Season, wants []int) bool {
+	for _, want := range wants {
+		if _, ok := pickSeason(seasons, want); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // seasonsWithContext runs GetSeasons, abandoning the result if the context

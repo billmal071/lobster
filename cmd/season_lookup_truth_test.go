@@ -303,3 +303,72 @@ func TestValidateSeasonEpisodeDefersForACatalogueListWhenAFallbackLookupFailed(t
 		t.Fatalf("validateSeasonEpisode = %v, want nil: a failed fallback lookup cannot turn a catalogue's partial list into a refusal", err)
 	}
 }
+
+func TestProbeSeasonsPrefersACandidateListingTheWantedSeasons(t *testing.T) {
+	req := resolver.Request{ID: "x/1", Title: "Show", MediaType: media.TV}
+	short, full := seasonOutcome{seasons: seasonsOf(1, 2)}, seasonOutcome{seasons: seasonsOf(1, 2, 3, 4)}
+	cases := []struct {
+		name       string
+		p          *scriptedLookup
+		wants      []int
+		wantID     string
+		wantFailed bool
+		wantCalls  int
+	}{
+		{"a later candidate lists the wanted season", scripted(showResults("a", "b"), short, full), []int{4}, "b", false, 2},
+		{"no candidate lists it: the first listed is kept", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(1, 2, 3)}), []int{4}, "a", false, 2},
+		{"a later lookup that fails keeps the first listed and the failure", scripted(showResults("a", "b"), short, seasonOutcome{err: errBoom}), []int{4}, "a", true, 2},
+		{"a later candidate with no seasons keeps the first listed", scripted(showResults("a", "b"), short, seasonOutcome{}), []int{4}, "a", false, 2},
+		{"a later candidate that does not carry the show keeps the first listed", scripted(showResults("a", "b"), short, seasonOutcome{err: provider.ErrNotCarried}), []int{4}, "a", false, 2},
+		{"the first listed already has it: later candidates are not probed", scripted(showResults("a", "b"), short, full), []int{2}, "a", false, 1},
+		{"no wanted season takes the first listed", scripted(showResults("a", "b"), short, full), nil, "a", false, 1},
+		{"an unspecified season takes the first listed", scripted(showResults("a", "b"), short, full), []int{seasonUnspecified}, "a", false, 1},
+		{"every wanted season must be listed", scripted(showResults("a", "b", "c"), short, seasonOutcome{seasons: seasonsOf(4)}, full), []int{1, 4}, "c", false, 3},
+		{"a duplicated wanted season", scripted(showResults("a", "b"), short, full), []int{4, 4}, "b", false, 2},
+		{"season 0 is a season", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(0, 1)}), []int{0}, "b", false, 2},
+		{"a gapped later list that has it", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(4), err: gapErr()}), []int{4}, "b", false, 2},
+		{"a failure ahead of both is kept", scripted(showResults("z", "a", "b"), seasonOutcome{err: errBoom}, short, full), []int{4}, "b", true, 3},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hit, failed := probeSeasons(context.Background(), c.p, req, c.wants)
+			if hit == nil || hit.id != c.wantID {
+				t.Fatalf("hit = %+v, want candidate %q", hit, c.wantID)
+			}
+			if failed != c.wantFailed {
+				t.Errorf("failed = %v, want %v", failed, c.wantFailed)
+			}
+			if c.p.calls != c.wantCalls {
+				t.Errorf("GetSeasons calls = %d, want %d", c.p.calls, c.wantCalls)
+			}
+		})
+	}
+}
+
+func TestResolveSeasonFindsASeasonOnlyALaterCandidateLists(t *testing.T) {
+	hostileEnv(t)
+	chainOf(t, scripted(showResults("a", "b"), seasonOutcome{seasons: seasonsOf(1, 2)}, seasonOutcome{seasons: seasonsOf(1, 2, 3, 4)}))
+	req := resolver.Request{ID: "x/1", Title: "Show", MediaType: media.TV}
+	res := resolveSeason(&stubProvider{}, req, seasonLookup{kind: lookupAbsent}, 4)
+	if res.verdict != seasonFound || res.answer.id != "b" || res.season.Number != 4 {
+		t.Fatalf("verdict = %v from %q season %d, want season 4 found on candidate b", res.verdict, res.answer.id, res.season.Number)
+	}
+}
+
+func TestBatchListerScansForEverySeasonOfTheBatch(t *testing.T) {
+	hostileEnv(t)
+	fb := scripted(showResults("a", "b"), seasonOutcome{seasons: seasonsOf(1, 2)}, seasonOutcome{seasons: seasonsOf(1, 2, 3)})
+	fb.stubProvider.episodes = []media.Episode{{ID: "e1", Number: 1}}
+	chainOf(t, fb)
+	primary := &stubProvider{episodesErr: errBoom}
+	batch := seasonsOf(1, 3)
+	l := newSeasonLister(primary, media.SearchResult{ID: "x/1", Title: "Show", Type: media.TV}, append(seasonsOf(-2), batch...)...)
+	for _, s := range batch {
+		if eps, err := l.episodes(s); err != nil || len(eps) != 1 {
+			t.Fatalf("season %d: episodes = %d, err = %v; want the list of the candidate that has every season of the batch", s.Number, len(eps), err)
+		}
+	}
+	if fb.calls != 2 {
+		t.Fatalf("GetSeasons calls = %d, want 2: one scan for the whole batch", fb.calls)
+	}
+}
