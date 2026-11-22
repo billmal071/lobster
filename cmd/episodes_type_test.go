@@ -126,3 +126,39 @@ func TestEpisodesStillAcceptsAFallbackHoldingTheSeries(t *testing.T) {
 		t.Fatalf("envelope did not carry the fallback's episodes: %s", got)
 	}
 }
+
+func TestEpisodesRefusesAFallbackHoldingOnlyASameTitledSeriesFromAnotherYear(t *testing.T) {
+	hostileEnv(t)
+	captureAgentOut(t)
+
+	withStubProvider(t, &stubProvider{seasonsErr: errors.New("unknown id")})
+
+	remake := &seasonSpyProvider{stubProvider: stubProvider{
+		results: []media.SearchResult{
+			{ID: "fb/spider-man-2017", Title: "Spider-Man", Year: "2017", Type: media.TV},
+		},
+		seasons:  []media.Season{{ID: "s1", Number: 1}},
+		episodes: []media.Episode{{ID: "e1", Number: 1, Title: "Horizon High"}},
+	}}
+	prevFallbacks := agentFallbackProviders
+	agentFallbackProviders = func(provider.Provider) []provider.Provider {
+		return []provider.Provider{remake}
+	}
+	t.Cleanup(func() { agentFallbackProviders = prevFallbacks })
+
+	ref, err := encodeRef(playRef{ID: "tv/888", Title: "Spider-Man", Year: "1994", Type: "tv"})
+	if err != nil {
+		t.Fatalf("encodeRef: %v", err)
+	}
+	withEpisodesFlags(t, ref, 1)
+
+	runErr := episodesRun(episodesCmd, nil)
+
+	if asked := remake.asked(); len(asked) > 0 {
+		t.Fatalf("GetSeasons was called on %v, the 2017 series, for a 1994 ref", asked)
+	}
+	var ee *exitError
+	if !errors.As(runErr, &ee) {
+		t.Fatalf("episodesRun returned %T (%v), want a non-zero exit rather than the 2017 series' seasons", runErr, runErr)
+	}
+}

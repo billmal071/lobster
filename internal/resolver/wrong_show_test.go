@@ -261,7 +261,6 @@ func TestAdmissionKnownLimits(t *testing.T) {
 	}{
 		{"part subtitle of a film", Request{Title: "Dune", MediaType: media.Movie}, media.SearchResult{ID: "m/1", Title: "Dune: Part Two", Type: media.Movie}},
 		{"later season of the same show", Request{Title: "Attack on Titan", MediaType: media.TV, Season: 1, Episode: 1}, media.SearchResult{ID: "t/1", Title: "Attack on Titan: Season 2", Type: media.TV}},
-		{"remake with accents folded, no year check", Request{Title: "Shogun", Year: "1980", MediaType: media.TV, Season: 1, Episode: 1}, media.SearchResult{ID: "t/2", Title: "Shōgun", Type: media.TV, Year: "2024"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if !admits(t, tc.req, tc.row) {
@@ -287,5 +286,73 @@ func TestAdmissionRefusesANyaaSequelRowWhenNeitherSideHasATitleToCompare(t *test
 				t.Fatalf("%q (ID %s) was admitted for %q", tc.row.Title, tc.row.ID, tc.req.Title)
 			}
 		})
+	}
+}
+
+func TestAdmissionRefusesASameTitledWorkFromAnotherYear(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		req  Request
+		row  media.SearchResult
+	}{
+		{"later remake of a film", Request{Title: "Foo", Year: "2013", MediaType: media.Movie}, media.SearchResult{ID: "m/1", Title: "Foo", Type: media.Movie, Year: "2020"}},
+		{"earlier original of a film", Request{Title: "Foo", Year: "2020", MediaType: media.Movie}, media.SearchResult{ID: "m/1", Title: "Foo", Type: media.Movie, Year: "2013"}},
+		{"two years apart", Request{Title: "Foo", Year: "2013", MediaType: media.Movie}, media.SearchResult{ID: "m/1", Title: "Foo", Type: media.Movie, Year: "2015"}},
+		{"remake of a series, accents folded", Request{Title: "Shogun", Year: "1980", MediaType: media.TV, Season: 1, Episode: 1}, media.SearchResult{ID: "t/2", Title: "Shōgun", Type: media.TV, Year: "2024"}},
+		{"year qualifier in the row's title", Request{Title: "Doctor Who", Year: "1963", MediaType: media.TV, Season: 1, Episode: 1}, media.SearchResult{ID: "t/3", Title: "Doctor Who (2005)", Type: media.TV, Year: "2005"}},
+		{"other media type", Request{Title: "Foo", Year: "2013", MediaType: media.Movie}, media.SearchResult{ID: "cartoon/foo", Title: "Foo", Type: media.TV, Year: "2020"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &watchCountingSP{fakeSP: &fakeSP{searchResults: []media.SearchResult{tc.row}, stream: &media.Stream{URL: "https://cdn/remake.m3u8"}}}
+			got, stage, err := resolveWithProvider(p, tc.req, func(string, ...any) {})
+			if got != nil || err == nil || stage != "match" {
+				t.Fatalf("got %v stage=%q err=%v for the %s request; the only row is from %s", got, stage, err, tc.req.Year, tc.row.Year)
+			}
+			if p.watched != 0 {
+				t.Fatalf("Watch called %d times for a work from %s", p.watched, tc.row.Year)
+			}
+		})
+	}
+}
+
+func TestAdmissionKeepsARowWhoseYearIsUnknownOrWithinOne(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		req  Request
+		row  media.SearchResult
+	}{
+		{"row one year later", Request{Title: "Foo", Year: "2013", MediaType: media.Movie}, media.SearchResult{ID: "m/1", Title: "Foo", Type: media.Movie, Year: "2014"}},
+		{"row one year earlier", Request{Title: "Foo", Year: "2013", MediaType: media.Movie}, media.SearchResult{ID: "m/1", Title: "Foo", Type: media.Movie, Year: "2012"}},
+		{"row without a year", Request{Title: "Foo", Year: "2013", MediaType: media.Movie}, media.SearchResult{ID: "m/1", Title: "Foo", Type: media.Movie}},
+		{"request without a year", Request{Title: "Foo", MediaType: media.Movie}, media.SearchResult{ID: "m/1", Title: "Foo", Type: media.Movie, Year: "2020"}},
+		{"row year that is not a number", Request{Title: "Foo", Year: "2013", MediaType: media.Movie}, media.SearchResult{ID: "m/1", Title: "Foo", Type: media.Movie, Year: "TBA"}},
+		{"request year that is not a number", Request{Title: "Foo", Year: "2013-05-01", MediaType: media.Movie}, media.SearchResult{ID: "m/1", Title: "Foo", Type: media.Movie, Year: "2020"}},
+		{"identical ID from another year", Request{ID: "m/1", Title: "Foo", Year: "2013", MediaType: media.Movie}, media.SearchResult{ID: "m/1", Title: "Foo", Type: media.Movie, Year: "2020"}},
+		{"Nyaa sequel row from a later year", Request{Title: "One Punch Man", Year: "2015", MediaType: media.TV, Season: 2, Episode: 3}, media.SearchResult{ID: "nyaa/One+Punch+Man?s=2", Title: "One Punch Man Season 2", Type: media.TV, Year: "2019"}},
+		{"season-marked request, its Nyaa row from a later year", Request{Title: "One Punch Man 2nd Season", Year: "2015", MediaType: media.TV, Season: 1, Episode: 1}, media.SearchResult{ID: "nyaa/One+Punch+Man?s=2", Title: "One Punch Man", Type: media.TV, Year: "2019"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !admits(t, tc.req, tc.row) {
+				t.Fatalf("%q (%s) was refused for %q (%s)", tc.row.Title, tc.row.Year, tc.req.Title, tc.req.Year)
+			}
+		})
+	}
+}
+
+func TestResolveWithProviderStreamsTheRequestedYearAmongSameTitledRows(t *testing.T) {
+	rows := []media.SearchResult{}
+	streams := map[string]*media.Stream{}
+	for i := 0; i < 6; i++ {
+		id := fmt.Sprintf("movie/remake-%d", i)
+		rows = append(rows, media.SearchResult{ID: id, Title: "Foo", Type: media.Movie, Year: "2020"})
+		streams[id] = &media.Stream{URL: "https://cdn/remake.m3u8"}
+	}
+	rows = append(rows, media.SearchResult{ID: "movie/original", Title: "Foo", Type: media.Movie, Year: "2013"}, rows[0])
+	streams["movie/original"] = &media.Stream{URL: "https://cdn/original.m3u8"}
+	p := &perIDSP{fakeSP: &fakeSP{searchResults: rows}, streams: streams}
+
+	got, _, err := resolveWithProvider(p, Request{Title: "Foo", Year: "2013", MediaType: media.Movie}, func(string, ...any) {})
+	if err != nil || got == nil || got.URL != "https://cdn/original.m3u8" {
+		t.Fatalf("got %v / %v, want the 2013 film's stream", got, err)
 	}
 }

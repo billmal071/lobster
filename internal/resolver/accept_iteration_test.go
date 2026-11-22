@@ -138,7 +138,7 @@ func TestResolveWithProviderRefusalNeverFallsThroughToADifferentWork(t *testing.
 
 // TestResolveWithProviderWithoutAcceptStillFallsThroughToTheNextCandidate checks that a request with no Accept hook still falls through to the next candidate when the best one fails.
 func TestResolveWithProviderWithoutAcceptStillFallsThroughToTheNextCandidate(t *testing.T) {
-	p := twoWorksProvider("2013", &media.Stream{URL: "https://cdn/other.m3u8"}, nil)
+	p := twoWorksProvider("1996", &media.Stream{URL: "https://cdn/other.m3u8"}, nil)
 	p.errs["movie/1"] = errors.New("status 404")
 	got, _, err := resolveWithProvider(p, Request{Title: "Foo", Year: "1995", MediaType: media.Movie}, func(string, ...any) {})
 	if err != nil || got == nil || got.URL != "https://cdn/other.m3u8" {

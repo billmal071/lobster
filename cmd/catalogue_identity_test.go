@@ -70,6 +70,26 @@ func TestUnresolvedCatalogueRowNeverReachesTheProviderWithItsCatalogueID(t *test
 	}
 }
 
+func TestUnresolvedCatalogueRowNeverPlaysASameTitledSeriesFromAnotherYear(t *testing.T) {
+	url := catalogueHarness(t)
+	fb := newListingChainProvider(url)
+	fb.results[0].Year = "2020"
+	withFallbackChain(t, fb)
+	prov := &idRecordingProvider{stubProvider: &stubProvider{seasons: []media.Season{{ID: "s1", Number: 1}}}}
+	sel := media.SearchResult{ID: "tv/37854", Unresolved: true, FromCatalogue: true, Title: "Some Show", Year: "2013", Type: media.TV}
+
+	if err := resolveAndPlay(prov, sel, 1, 22); err == nil {
+		t.Fatal("resolveAndPlay = nil; the chain only has the 2020 series")
+	}
+	if asked := fb.mediaAsked(); asked != "" {
+		t.Fatalf("the 2020 series %s was asked for a stream", asked)
+	}
+	entries, err := history.Load()
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("history = %+v, %v; want nothing saved under the 2013 row", entries, err)
+	}
+}
+
 type idServers struct {
 	*stubProvider
 	url       string

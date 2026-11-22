@@ -374,11 +374,13 @@ just slower.
 
 `lobster episodes` is not covered by that. When the primary cannot enumerate a
 ref's seasons it re-searches the chain by title, but a fallback's result is
-only accepted if its title matches the ref's after normalisation. A show the
+only accepted if its title matches the ref's after normalisation and its
+release year, when both are known, is within one year of the ref's. A show the
 two spell differently — `Marvel's Agents of S.H.I.E.L.D.` in the ref against
 `Agents of S.H.I.E.L.D.` on the fallback — is rejected, and `episodes` exits 2
-with `no seasons found`. `play --ref` has no such check, so it plays the very
-ref `episodes --ref` cannot list. If `episodes` says a ref has no seasons, run
+with `no seasons found`. A same-titled remake from another year is rejected the
+same way. Playback's fallback applies the same title and year check, so it does
+not play such a result either. If `episodes` says a ref has no seasons, run
 `lobster find --base tbcpl` for the title and pass the new TBCPL ref to
 `episodes`; the old ref's ID belongs to the source that found it, and TBCPL
 cannot use it.
