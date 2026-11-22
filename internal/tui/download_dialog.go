@@ -88,6 +88,9 @@ func (d *downloadDialog) start(item media.SearchResult, p provider.Provider, mgr
 		if err != nil && !(errors.Is(err, provider.ErrIncompleteEpisodeList) && len(seasons) > 0) {
 			return dlSeasonsMsg{err: err}
 		}
+		if len(seasons) == 0 {
+			return dlSeasonsMsg{err: errors.New("no seasons found")}
+		}
 		return dlSeasonsMsg{seasons: seasons}
 	}
 }
@@ -300,13 +303,22 @@ func (d *downloadDialog) fetchEpisodes(seasonIdx int) tea.Cmd {
 		if err != nil && provider.ListedWithCatalogueGap(len(episodes), err) {
 			err, partial = nil, true
 		}
+		var fallbackErr error
 		if (err != nil || len(episodes) == 0) && EpisodeListFallback != nil {
-			if eps, fpartial, ferr := EpisodeListFallback(prov, item, season.Number); ferr == nil && len(eps) > 0 {
+			eps, fpartial, ferr := EpisodeListFallback(prov, item, season.Number)
+			if ferr == nil && len(eps) > 0 {
 				return dlEpisodesMsg{episodes: eps, partial: fpartial}
 			}
+			fallbackErr = ferr
 		}
 		if err != nil {
 			return dlEpisodesMsg{err: err}
+		}
+		if len(episodes) == 0 && fallbackErr != nil {
+			return dlEpisodesMsg{err: fmt.Errorf("no episodes listed for season %d: %w", season.Number, fallbackErr)}
+		}
+		if len(episodes) == 0 {
+			return dlEpisodesMsg{err: fmt.Errorf("no episodes listed for season %d", season.Number)}
 		}
 		return dlEpisodesMsg{episodes: episodes, partial: partial}
 	}
