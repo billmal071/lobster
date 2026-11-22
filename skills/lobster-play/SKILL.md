@@ -185,7 +185,10 @@ whose episode list the provider marks as possibly short stops after its last
 measured episode, or before the first gap in its episode numbers, instead of
 skipping the gap or moving on to the next season. A next season whose
 possibly short list does not start at episode 1 is not entered: the run stops
-with an error instead of skipping the missing episodes.
+with an error instead of skipping the missing episodes. When the season list
+itself is marked as possibly short, the run stops after a season whose
+successor in the list is not the next season number, and after the last listed
+season, with a warning that the season list may be incomplete.
 
 ## Rules
 
