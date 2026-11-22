@@ -571,8 +571,10 @@ func seasonRequest(r playRef) resolver.Request {
 // caller — the interactive episode menu, the TUI download dialog, a
 // multi-season batch — with nothing to show, and the chain usually has the
 // list. The answer is a provider's own list, so a number offered from it is a
-// number that provider will honour.
-func fallbackEpisodeList(primary provider.Provider, content media.SearchResult, seasonNumber int) *episodeAnswer {
+// number that provider will honour. pref says which list: the first in chain
+// order, the first that is complete or short only by catalogue gaps with any
+// other as a last resort, or such a list and nothing else.
+func fallbackEpisodeList(primary provider.Provider, content media.SearchResult, seasonNumber int, pref listPreference) *episodeAnswer {
 	if seasonNumber < 0 {
 		// Every caller here has a season in hand. A negative number is not a
 		// request for "whatever is first" — it is a caller that lost track of
@@ -581,7 +583,35 @@ func fallbackEpisodeList(primary provider.Provider, content media.SearchResult, 
 		debugf("fallback episode list: refusing a negative season number %d", seasonNumber)
 		return nil
 	}
-	return firstEpisodeList(fallbackSeasonHits(primary, contentRequest(content), []int{seasonNumber}), seasonNumber)
+	hits := fallbackSeasonHits(primary, contentRequest(content), []int{seasonNumber})
+	if pref == firstListed {
+		return firstEpisodeList(hits, seasonNumber)
+	}
+	lists, _ := episodeLists(hits, seasonNumber)
+	if a := firstConfirmed(lists); a != nil || pref == confirmedOnly {
+		return a
+	}
+	if len(lists) > 0 {
+		return lists[0]
+	}
+	return nil
+}
+
+type listPreference int
+
+const (
+	firstListed listPreference = iota
+	confirmedElseFirst
+	confirmedOnly
+)
+
+func firstConfirmed(lists []*episodeAnswer) *episodeAnswer {
+	for _, a := range lists {
+		if !a.shortfall.mayBeTruncated() {
+			return a
+		}
+	}
+	return nil
 }
 
 // contentRequest is a selected search result as the resolver sees it: the
@@ -696,18 +726,12 @@ func firstEpisodeList(hits []*seasonHit, wantSeason int) *episodeAnswer {
 }
 
 func confirmedEpisodeList(hits []*seasonHit, scanFailed bool, season int, title string) (*episodeAnswer, error) {
-	var refused *episodeAnswer
 	lists, listFailed := episodeLists(hits, season)
-	for _, a := range lists {
-		if !a.shortfall.mayBeTruncated() {
-			return a, nil
-		}
-		if refused == nil {
-			refused = a
-		}
+	if a := firstConfirmed(lists); a != nil {
+		return a, nil
 	}
-	if refused != nil {
-		return nil, fmt.Errorf("no fallback provider could confirm season %d of %q: %s", season, title, refused.shortfall.reason)
+	if len(lists) > 0 {
+		return nil, fmt.Errorf("no fallback provider could confirm season %d of %q: %s", season, title, lists[0].shortfall.reason)
 	}
 	if scanFailed || listFailed {
 		return nil, fmt.Errorf("no fallback provider could list season %d of %q: a fallback lookup failed", season, title)

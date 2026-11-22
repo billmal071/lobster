@@ -396,7 +396,7 @@ func TestSingleSeasonScansAskForTheirSeason(t *testing.T) {
 	t.Run("the interactive episode-list recovery", func(t *testing.T) {
 		hostileEnv(t)
 		chainOf(t, laterCandidateHasSeason(4))
-		a := fallbackEpisodeList(&stubProvider{}, sel, 4)
+		a := fallbackEpisodeList(&stubProvider{}, sel, 4, firstListed)
 		if a == nil || a.hit.id != "b" || a.season.Number != 4 {
 			t.Fatalf("answer = %+v, want season 4 from candidate b", a)
 		}

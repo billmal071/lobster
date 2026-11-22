@@ -530,13 +530,17 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		// that says it may be short is not evidence that an episode above it
 		// does not exist, so that case still falls through to the recovery
 		// below, which needs no list.
+		listShortfall := episodeShortfall{}
 		if sf := shortfallFor(err); sf.code != "" && len(episodes) > 0 &&
 			(episode == 0 || episodeIndex(episodes, episode) >= 0) {
 			err = nil
+			listShortfall = sf
 			warnShortList(sf, p, selectedSeason.Number, title)
 		}
 
-		if err != nil || len(episodes) == 0 {
+		batchMenu := flagDownload != "" && episode == 0
+		unlisted := err != nil || len(episodes) == 0
+		if unlisted || (batchMenu && listShortfall.mayBeTruncated()) {
 			// The primary has season data but cannot enumerate this season's
 			// episodes. MovieBox and VidNest are exactly that shape: their
 			// season counts are measured while their episode listings are
@@ -554,10 +558,20 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			// The list is a chain provider's own, so playback moves to that
 			// provider too: the numbers offered are numbers it will honour.
 			// Only the provider-call key moves with it, not selected.ID.
-			debugf("primary provider episodes failed: %v (%d episodes), trying fallbacks", err, len(episodes))
-			fmt.Fprintf(os.Stderr, "Provider has no episode list, trying fallbacks...\n")
+			pref := firstListed
+			switch {
+			case !unlisted:
+				pref = confirmedOnly
+				debugf("the episode list may be cut short; asking the fallbacks for one a batch can use")
+			case batchMenu:
+				pref = confirmedElseFirst
+			}
+			if unlisted {
+				debugf("primary provider episodes failed: %v (%d episodes), trying fallbacks", err, len(episodes))
+				fmt.Fprintf(os.Stderr, "Provider has no episode list, trying fallbacks...\n")
+			}
 
-			answer := fallbackEpisodeList(chainPrimary, selected, selectedSeason.Number)
+			answer := fallbackEpisodeList(chainPrimary, selected, selectedSeason.Number, pref)
 			// A requested episode must be in the list before the session is
 			// built on it. A chain provider can have a real but shorter list
 			// than the show — a currently-airing season, say — and playing
@@ -577,8 +591,9 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				selectedSeason = answer.season
 				episodes = answer.episodes
 				err = nil
+				listShortfall = answer.shortfall
 				warnShortList(answer.shortfall, p, selectedSeason.Number, title)
-			} else if episode > 0 {
+			} else if unlisted && episode > 0 {
 				// A caller who already knows which episode it wants does not
 				// need a list: the fallback resolver reaches a StreamProvider
 				// through Watch with an episode ID built arithmetically from
@@ -669,8 +684,11 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				}
 			}
 
-			// In download mode, offer batch options
-			if flagDownload != "" {
+			offerBatch := flagDownload != "" && !listShortfall.mayBeTruncated()
+			if flagDownload != "" && !offerBatch {
+				fmt.Fprintf(os.Stderr, "No source could confirm where season %d ends, so batch download is not offered; pick an episode to download it.\n", selectedSeason.Number)
+			}
+			if offerBatch {
 				batchItems := []string{"Download all episodes", "Download range (e.g., 1-5)"}
 				episodeItems = append(batchItems, episodeItems...)
 			}
@@ -681,7 +699,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			}
 
 			// Handle batch options
-			if flagDownload != "" {
+			if offerBatch {
 				if episodeIdx == 0 {
 					// Download all episodes
 					return batchDownload(chainPrimary, selected, episodes, selectedSeason)
