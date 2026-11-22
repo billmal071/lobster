@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"lobster/internal/config"
@@ -12,7 +13,10 @@ import (
 	"lobster/internal/provider"
 )
 
-const downloadAllEntry = "Download all episodes"
+const (
+	downloadAllEntry   = "Download all episodes"
+	downloadRangeEntry = "Download range (e.g., 1-5)"
+)
 
 func downloadMode(t *testing.T) {
 	t.Helper()
@@ -155,12 +159,16 @@ func TestDownloadMenuBatchEntries(t *testing.T) {
 			captureWarnings(t)
 			withFallbackChain(t, c.chain()...)
 			offered := episodeMenuOffered(t, c.primary())
-			if got := slices.Contains(offered, downloadAllEntry); got != c.wantBatch {
-				t.Fatalf("menu = %v; batch entries offered = %v, want %v", offered, got, c.wantBatch)
+			for _, entry := range []string{downloadAllEntry, downloadRangeEntry} {
+				if got := slices.Contains(offered, entry); got != c.wantBatch {
+					t.Fatalf("menu = %v; %q offered = %v, want %v", offered, entry, got, c.wantBatch)
+				}
 			}
-			episodes := len(offered)
-			if c.wantBatch {
-				episodes -= 2
+			episodes := 0
+			for _, entry := range offered {
+				if strings.HasPrefix(entry, "Episode ") {
+					episodes++
+				}
 			}
 			if episodes != c.wantCount {
 				t.Fatalf("menu = %v; %d episodes offered, want %d", offered, episodes, c.wantCount)

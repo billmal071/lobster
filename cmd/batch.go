@@ -426,16 +426,22 @@ type seasonLister struct {
 
 func newSeasonLister(p provider.Provider, selected media.SearchResult, batch ...media.Season) *seasonLister {
 	l := &seasonLister{primary: p, selected: selected}
-	for _, s := range batch {
+	l.want(batch)
+	return l
+}
+
+func (l *seasonLister) want(seasons []media.Season) {
+	l.wants = nil
+	for _, s := range seasons {
 		if s.Number >= 0 {
 			l.wants = append(l.wants, s.Number)
 		}
 	}
-	return l
 }
 
-func (l *seasonLister) forgetScan() {
+func (l *seasonLister) forgetScan(unlisted []media.Season) {
 	l.scanned, l.hits = false, nil
+	l.want(unlisted)
 }
 
 func (l *seasonLister) episodes(season media.Season) ([]media.Episode, error) {
@@ -560,7 +566,7 @@ func (r *multiSeasonRun) retry() {
 		r.downloadEpisode(fe)
 	}
 	if len(seasons) > 0 {
-		r.lister.forgetScan()
+		r.lister.forgetScan(seasons)
 	}
 	for _, season := range seasons {
 		r.downloadSeason(season)

@@ -38,6 +38,8 @@ func TestProbeSeasonsKeepsEachCandidateThatAddsAWantedSeason(t *testing.T) {
 		{"three candidates cover three seasons in provider order", scripted(showResults("a", "b", "c"), only(3), only(1), only(2)), []int{1, 2, 3}, []string{"a", "b", "c"}, false},
 		{"a failed lookup between two kept candidates is reported", scripted(showResults("a", "b", "c"), only(1), seasonOutcome{err: errBoom}, only(2)), []int{1, 2}, []string{"a", "c"}, true},
 		{"a later list cut short is kept for its season and leaves the scan unsure", scripted(showResults("a", "b"), only(1), cut), []int{1, 2}, []string{"a", "b"}, true},
+		{"a first list cut short that lacks a wanted season leaves the scan unsure", scripted(showResults("a"), cut), []int{1, 2}, []string{"a"}, true},
+		{"a first list cut short that has every wanted season is an answer", scripted(showResults("a"), cut), []int{2}, []string{"a"}, false},
 		{"a candidate listing every wanted season is returned alone", scripted(showResults("a", "b", "c"), only(1), only(1, 2, 3), only(2)), []int{1, 2, 3}, []string{"b"}, false},
 		{"one wanted season keeps a single candidate", scripted(showResults("a", "b"), only(1, 2), only(1, 2, 3)), []int{4}, []string{"a"}, false},
 		{"a duplicated wanted season", scripted(showResults("a", "b"), only(1), only(2)), []int{2, 1, 2}, []string{"a", "b"}, false},
@@ -82,7 +84,7 @@ func TestBatchListerRescansASplitShowAfterARetryForgetsTheScan(t *testing.T) {
 	if _, err := l.episodes(media.Season{ID: "2", Number: 2}); err != nil {
 		t.Fatalf("first listing: %v", err)
 	}
-	l.forgetScan()
+	l.forgetScan(seasonsOf(2))
 	fb.calls = 0
 	if eps, err := l.episodes(media.Season{ID: "2", Number: 2}); err != nil || len(eps) != 1 {
 		t.Fatalf("after a retry: episodes = %d, err = %v; want season 2 from the later candidate again", len(eps), err)

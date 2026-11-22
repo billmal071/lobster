@@ -70,10 +70,10 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	case seasonNoList:
 		return emitErr("no_results", exitNoResults, "no seasons found for %q", r.Title)
 	case seasonLookupFailed:
-		return primaryFailedErr(primary, r.Title, look)
+		return primaryFailedErr(primary, r.Title, look, "no fallback provider listed any")
 	case seasonUndetermined:
 		if !res.anyListed && look.kind == lookupFailed {
-			return primaryFailedErr(primary, r.Title, look)
+			return primaryFailedErr(primary, r.Title, look, "a fallback provider's lookup failed")
 		}
 		if !res.anyListed {
 			return emitErr("providers_failed", exitProvidersFailed,
@@ -164,6 +164,9 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 				askedLacks = src.primaryLacks
 			}
 		}
+	}
+	if !src.fromPrimary && epsKind == lookupAbsent && len(eps) == 0 {
+		err = nil
 	}
 	if err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "getting episodes: %v", err)
@@ -422,10 +425,10 @@ func listSeasonEpisodes(p provider.Provider, src seasonAnswer, sel media.Season)
 	return episodesWithContext(ctx, p, src.id, sel.ID)
 }
 
-func primaryFailedErr(primary provider.Provider, title string, look seasonLookup) error {
+func primaryFailedErr(primary provider.Provider, title string, look seasonLookup, fallbacks string) error {
 	return emitErr("providers_failed", exitProvidersFailed,
-		"no provider could list the seasons of %q: %s reported %v, and no fallback provider answered within %s",
-		title, providerLabel(primary), look.err, episodesFallbackTimeout)
+		"no provider could list the seasons of %q: %s reported %v, and %s",
+		title, providerLabel(primary), look.err, fallbacks)
 }
 
 // providerLabel names a provider for the JSON envelope. provider.Provider has
@@ -828,8 +831,8 @@ type seasonHit struct {
 // holds every season in wants is returned alone; otherwise the first that lists
 // any, followed by each later one that lists a season in wants the ones kept so
 // far lack. failed is true when any lookup errored or timed out rather than
-// answering, whichever candidates were kept, and when a candidate after the
-// first listed had a list that was cut short.
+// answering, whichever candidates were kept, and when a list that lacks a
+// season in wants was cut short.
 func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request, wants []int) (hits []*seasonHit, failed bool) {
 	results, err := searchWithContext(ctx, p, req.Title)
 	if errors.Is(err, provider.ErrNoResults) {
@@ -855,7 +858,7 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 			if listsEverySeason(seasons, wants) {
 				return []*seasonHit{listed}, failed
 			}
-			if len(hits) > 0 && look.gap == gapShort {
+			if look.gap == gapShort {
 				failed = true
 			}
 			if len(hits) == 0 || addsWantedSeason(hits, seasons, wants) {

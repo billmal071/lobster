@@ -71,6 +71,49 @@ func TestDialogFallbackDoesNotCallANoIndexSourceAFailedLookup(t *testing.T) {
 	}
 }
 
+func cutShortBeforeSeasonTwo() *scriptedLookup {
+	return scripted([]media.SearchResult{{ID: "a", Title: "Some Show", Type: media.TV}},
+		seasonOutcome{seasons: seasonsOf(1), err: fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList)})
+}
+
+func TestEpisodesPrimaryFailureMessageSaysWhatTheFallbacksDid(t *testing.T) {
+	failing := func() provider.Provider { return &stubProvider{seasonsErr: errBoom} }
+	t.Run("every fallback answered", func(t *testing.T) {
+		_, message := episodesErrEnvelope(t, failing(), &scriptedLookup{stubProvider: &stubProvider{}, searchErr: provider.ErrNoResults})
+		if !strings.Contains(message, "boom") || !strings.Contains(message, "no fallback provider listed any") || strings.Contains(message, "within") {
+			t.Fatalf("message = %q, want the source's error and that no fallback listed seasons, with no timeout claim", message)
+		}
+	})
+	t.Run("a fallback lookup failed", func(t *testing.T) {
+		_, message := episodesErrEnvelope(t, failing(), &scriptedLookup{stubProvider: &stubProvider{}, searchErr: errBoom})
+		if !strings.Contains(message, "boom") || !strings.Contains(message, "a fallback provider's lookup failed") {
+			t.Fatalf("message = %q, want the source's error and the failed fallback lookup", message)
+		}
+	})
+}
+
+func TestBatchRetryScansForTheSeasonsStillUnlisted(t *testing.T) {
+	hostileEnv(t)
+	fb := scripted(showResults("a", "b"), seasonOutcome{seasons: seasonsOf(2)}, seasonOutcome{seasons: seasonsOf(1, 2)},
+		seasonOutcome{seasons: seasonsOf(2)}, seasonOutcome{seasons: seasonsOf(1, 2)})
+	fb.stubProvider.episodes = []media.Episode{{ID: "e1", Number: 1}}
+	chainOf(t, fb)
+	l := newSeasonLister(&stubProvider{episodesErr: errBoom}, media.SearchResult{ID: "x/1", Title: "Show", Type: media.TV}, seasonsOf(1, 2)...)
+	if _, err := l.episodes(media.Season{ID: "1", Number: 1}); err != nil {
+		t.Fatalf("first round: %v", err)
+	}
+	if got := l.hits[0].id; got != "b" {
+		t.Fatalf("first round used title %q, want b, the one listing both seasons", got)
+	}
+	l.forgetScan(seasonsOf(2))
+	if _, err := l.episodes(media.Season{ID: "2", Number: 2}); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if got := l.hits[0].id; got != "a" {
+		t.Fatalf("retry used title %q, want a, the first that lists the season still unlisted", got)
+	}
+}
+
 func TestEpisodesEmptySeasonTruthTable(t *testing.T) {
 	down := func() provider.Provider { return &scriptedLookup{stubProvider: &stubProvider{}, searchErr: errBoom} }
 	absent := func() provider.Provider {
@@ -92,6 +135,11 @@ func TestEpisodesEmptySeasonTruthTable(t *testing.T) {
 		{"source lists no episodes, no fallback is configured", emptySeasonTwoPrimary(), nil, "no_results"},
 		{"season from a fallback with no episodes, a later fallback search failed", &stubProvider{}, []provider.Provider{chainListing(nil, nil), down()}, "providers_failed"},
 		{"season from a fallback with no episodes, a later fallback's episode lookup failed", &stubProvider{}, []provider.Provider{chainListing(nil, nil), chainListing(nil, errBoom)}, "providers_failed"},
+		{"the configured source itself has no episode index, every fallback answered", &stubProvider{seasons: seasonsOf(1, 2), episodesErr: noEpisodeIndex()}, []provider.Provider{absent()}, "providers_failed"},
+		{"season from a fallback with no episode index, nothing else lists it", &stubProvider{}, []provider.Provider{chainListing(nil, noEpisodeIndex())}, "no_results"},
+		{"season from a fallback with no episode index, a later fallback search failed", &stubProvider{}, []provider.Provider{chainListing(nil, noEpisodeIndex()), down()}, "providers_failed"},
+		{"season from a fallback whose episode lookup failed", &stubProvider{}, []provider.Provider{chainListing(nil, errBoom)}, "providers_failed"},
+		{"source lists no episodes, a fallback's season list was cut short before the season", emptySeasonTwoPrimary(), []provider.Provider{cutShortBeforeSeasonTwo()}, "providers_failed"},
 		{"season from a fallback with no episodes, the rest answered without the show", &stubProvider{}, []provider.Provider{chainListing(nil, nil), absent()}, "no_results"},
 	}
 	for _, c := range cases {
