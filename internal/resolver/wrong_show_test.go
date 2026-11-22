@@ -270,3 +270,22 @@ func TestAdmissionKnownLimits(t *testing.T) {
 		})
 	}
 }
+
+func TestAdmissionRefusesANyaaSequelRowWhenNeitherSideHasATitleToCompare(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		req  Request
+		row  media.SearchResult
+	}{
+		{"punctuation request, punctuation base", Request{Title: "...", MediaType: media.TV, Season: 2, Episode: 1}, media.SearchResult{ID: "nyaa/%21%21%21?s=2", Title: "Unrelated Season 2", Type: media.TV}},
+		{"empty request, empty base", Request{Title: "", MediaType: media.TV, Season: 2, Episode: 1}, media.SearchResult{ID: "nyaa/?s=2", Title: "Unrelated Season 2", Type: media.TV}},
+		{"bare season title, empty base", Request{Title: "Season 2", MediaType: media.TV, Season: 1, Episode: 1}, media.SearchResult{ID: "nyaa/?s=2", Title: "Unrelated", Type: media.TV}},
+		{"punctuation before the season, punctuation base", Request{Title: "... Season 2", MediaType: media.TV, Season: 1, Episode: 1}, media.SearchResult{ID: "nyaa/---?s=2", Title: "Unrelated", Type: media.TV}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if admits(t, tc.req, tc.row) {
+				t.Fatalf("%q (ID %s) was admitted for %q", tc.row.Title, tc.row.ID, tc.req.Title)
+			}
+		})
+	}
+}

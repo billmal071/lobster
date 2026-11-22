@@ -490,6 +490,11 @@ func candidateScore(r media.SearchResult, req Request) int {
 // normalize is the shared title comparison key; see titlekey.Normalize.
 func normalize(s string) string { return titlekey.Normalize(s) }
 
+func sameTitle(a, b string) bool {
+	key := normalize(a)
+	return key != "" && key == normalize(b)
+}
+
 // yearDiff returns the absolute difference between two year strings, or a large
 // value if either does not parse.
 func yearDiff(a, b string) int {
@@ -528,7 +533,7 @@ func sequelSeason(title, candidateID string, season int) int {
 	want := titleSeasonNumber(title, t)
 	got, _ := strconv.Atoi(id[2])
 	base, err := url.QueryUnescape(id[1])
-	if err != nil || want != got || normalize(base) != normalize(title[:t[0]]) {
+	if err != nil || want != got || !sameTitle(base, title[:t[0]]) {
 		return season
 	}
 	return want
