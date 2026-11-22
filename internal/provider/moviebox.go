@@ -452,7 +452,7 @@ func (m *MovieBox) GetSeasons(id string) ([]media.Season, error) {
 // Either way the caller ends up with a real list or an honest failure, neither
 // of which a fabricated 1..10 could offer.
 func (m *MovieBox) GetEpisodes(id string, seasonID string) ([]media.Episode, error) {
-	return nil, fmt.Errorf("moviebox: episode listing unavailable; the detail endpoint requires authentication")
+	return nil, fmt.Errorf("moviebox: %w; the detail endpoint requires authentication", ErrNoEpisodeIndex)
 }
 
 // GetServers returns a synthetic server for direct streaming.

@@ -41,7 +41,7 @@ func classifyList(n int, err error) (lookupKind, listGap) {
 	switch {
 	case err == nil && n > 0:
 		return lookupListed, gapNone
-	case err == nil, errors.Is(err, provider.ErrNoResults), errors.Is(err, provider.ErrNotCarried) && n == 0:
+	case err == nil, errors.Is(err, provider.ErrNoResults), n == 0 && (errors.Is(err, provider.ErrNotCarried) || errors.Is(err, provider.ErrNoEpisodeIndex)):
 		return lookupAbsent, gapNone
 	case provider.ListedWithCatalogueGap(n, err):
 		return lookupListed, gapCatalogue

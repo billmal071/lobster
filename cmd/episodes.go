@@ -126,6 +126,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	if sf := shortfallFor(err); len(eps) > 0 && sf.code != "" {
 		shortfall, err = sf, nil
 	}
+	fallbackFailed := false
 	if err != nil || len(eps) == 0 {
 		// Enumerating seasons and enumerating episodes are different
 		// questions, and a provider can answer the first and not the second:
@@ -147,11 +148,14 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		// chain, so that case costs no extra scan. Only a primary-sourced
 		// season list has to run the scan here.
 		debugf("episodes: %T enumerated seasons but not episodes (err=%v, episodes=%d); asking the fallback chain", p, err, len(eps))
-		alts := src.alts
+		alts, scanFailed := src.alts, src.scanFailed
 		if src.fromPrimary {
-			alts = fallbackSeasonHits(primary, seasonRequest(r), []int{wantSeason})
+			alts, scanFailed = fallbackSeasonScan(primary, seasonRequest(r), []int{wantSeason})
 		}
-		if a := firstEpisodeList(alts, wantSeason); a != nil {
+		lists, listFailed := episodeLists(alts, wantSeason)
+		fallbackFailed = len(lists) == 0 && (scanFailed || listFailed)
+		if len(lists) > 0 {
+			a := lists[0]
 			debugf("episodes: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), a.season.Number)
 			p, seasons, sel, eps, err = a.hit.provider, a.hit.seasons, a.season, a.episodes, nil
 			shortfall = a.shortfall
@@ -179,6 +183,11 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	// no_results rather than providers_failed, because nothing failed in a way
 	// anyone reported: the chain was asked and came back empty-handed, which
 	// is what no_results already means one line up at the season gate.
+	if len(eps) == 0 && fallbackFailed {
+		return emitErr("providers_failed", exitProvidersFailed,
+			"%s listed no episodes for season %d of %q, and a fallback provider's lookup failed, so the season may still have episodes",
+			providerLabel(p), sel.Number, r.Title)
+	}
 	if len(eps) == 0 {
 		return emitErr("no_results", exitNoResults,
 			"no episodes found for season %d of %q", sel.Number, r.Title)

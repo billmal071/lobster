@@ -91,3 +91,6 @@ var ErrIncompleteEpisodeList = errors.New("episode list may be incomplete")
 // episodes, which are the ones a caller is most likely to want. So it is
 // reported, under its own code, with words that say the list is probably whole.
 var ErrUnconfirmedEpisodeList = errors.New("the end of the episode list was not confirmed")
+
+// ErrNoEpisodeIndex reports a source that never lists episodes, which is an answer about the source and not a lookup that failed.
+var ErrNoEpisodeIndex = errors.New("episode listing unavailable")
