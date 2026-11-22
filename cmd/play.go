@@ -231,7 +231,7 @@ func validateSeasonEpisode(p provider.Provider, r playRef, season, episode int) 
 		}
 	}
 	if gapped {
-		return emitErr("no_results", exitNoResults, "%s does not carry episode %d of season %d of %q",
+		return emitErr("no_results", exitNoResults, "%s has no standalone release for episode %d of season %d of %q",
 			strings.ToUpper(searchProviderBase(p)), episode, season, r.Title)
 	}
 	return emitErr("no_results", exitNoResults,
@@ -383,7 +383,7 @@ type errSeasonNotFound struct {
 
 func (e errSeasonNotFound) Error() string {
 	if e.source != "" {
-		return fmt.Sprintf("%s does not carry season %d of %q", e.source, e.season, e.title)
+		return fmt.Sprintf("%s has no standalone release for season %d of %q", e.source, e.season, e.title)
 	}
 	return fmt.Sprintf("season %d not found for %q (list them with 'lobster episodes --ref ...')", e.season, e.title)
 }

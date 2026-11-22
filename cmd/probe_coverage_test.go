@@ -89,4 +89,7 @@ func TestBatchListerRescansASplitShowAfterARetryForgetsTheScan(t *testing.T) {
 	if eps, err := l.episodes(media.Season{ID: "2", Number: 2}); err != nil || len(eps) != 1 {
 		t.Fatalf("after a retry: episodes = %d, err = %v; want season 2 from the later candidate again", len(eps), err)
 	}
+	if fb.calls != 2 {
+		t.Fatalf("GetSeasons calls after a retry = %d, want 2: one rescan of both candidates", fb.calls)
+	}
 }

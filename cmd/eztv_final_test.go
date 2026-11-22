@@ -100,8 +100,8 @@ func TestSeasonAbsentFromAGappedListIsNoResultsNotProvidersFailed(t *testing.T) 
 	if !errors.As(err, &ee) || ee.code != exitNoResults {
 		t.Fatalf("err = %v, want exit %d: EZTV fetched its whole list and season 1 is not in it", err, exitNoResults)
 	}
-	if !strings.Contains(buf.String(), "EZTV does not carry season 1") {
-		t.Errorf("output = %s, want it to say EZTV does not carry season 1", buf.String())
+	if !strings.Contains(buf.String(), "EZTV has no standalone release for season 1") {
+		t.Errorf("output = %s, want it to say EZTV has no standalone release for season 1, since a season pack is not searched", buf.String())
 	}
 }
 
@@ -116,7 +116,7 @@ func TestValidateRefusesASeasonAbsentFromAGappedList(t *testing.T) {
 	if !errors.As(err, &ee) || ee.code != exitNoResults {
 		t.Fatalf("err = %v, want exit %d for a season missing from a gapped season list", err, exitNoResults)
 	}
-	if !strings.Contains(buf.String(), "EZTV does not carry season 1") {
+	if !strings.Contains(buf.String(), "EZTV has no standalone release for season 1") {
 		t.Errorf("output = %s, want the refusal to name EZTV as the source that lacks the season", buf.String())
 	}
 }
@@ -199,7 +199,7 @@ func TestResolveAndPlayWarnsOfGapsInAKeptList(t *testing.T) {
 	if err := resolveAndPlay(primary, sel, 5, 5); err != nil {
 		t.Fatalf("resolveAndPlay = %v", err)
 	}
-	if !containsSubstring(*warnings, "has no release for some episodes") {
+	if !containsSubstring(*warnings, "has no standalone release for some episodes") {
 		t.Fatalf("warnings = %v, want the gap wording, not the enumeration-shortfall one", *warnings)
 	}
 }
@@ -225,7 +225,7 @@ func TestResolveAndPlayWarnsOfGapsInAFallbackList(t *testing.T) {
 	if err := resolveAndPlay(primary, sel, 5, 5); err != nil {
 		t.Fatalf("resolveAndPlay = %v", err)
 	}
-	if !containsSubstring(*warnings, "has no release for some episodes") {
+	if !containsSubstring(*warnings, "has no standalone release for some episodes") {
 		t.Fatalf("warnings = %v, want the gap warning for the fallback's list", *warnings)
 	}
 }
@@ -246,7 +246,7 @@ func TestResolveAndPlayNamesEZTVWhenAGappedSeasonListLacksTheSeason(t *testing.T
 	if !errors.As(err, &notFound) {
 		t.Fatalf("err = %v, want errSeasonNotFound", err)
 	}
-	if !strings.Contains(err.Error(), "EZTV does not carry season 2") {
+	if !strings.Contains(err.Error(), "EZTV has no standalone release for season 2") {
 		t.Errorf("err = %q, want it to name EZTV as the source whose catalogue lacks the season", err)
 	}
 }
@@ -307,6 +307,6 @@ func TestEpisodesIsProvidersFailedWhenAFallbackLookupFailsOnAGappedList(t *testi
 	err := episodesRun(episodesCmd, nil)
 	var ee *exitError
 	if !errors.As(err, &ee) || ee.code != exitProvidersFailed {
-		t.Fatalf("err = %v, want exit %d: a failed fallback lookup must not read as 'EZTV does not carry the season'", err, exitProvidersFailed)
+		t.Fatalf("err = %v, want exit %d: a failed fallback lookup must not read as 'EZTV has no standalone release for the season'", err, exitProvidersFailed)
 	}
 }

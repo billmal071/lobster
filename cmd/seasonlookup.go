@@ -67,7 +67,7 @@ const (
 )
 
 // seasonResolution is combineSeasons' answer. gapSource names the provider whose
-// catalogue gap makes an absence "does not carry" rather than "does not exist".
+// catalogue gap makes an absence "has no standalone release" rather than "does not exist".
 type seasonResolution struct {
 	verdict   seasonVerdict
 	answer    seasonAnswer

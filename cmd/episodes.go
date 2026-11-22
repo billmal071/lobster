@@ -85,8 +85,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 			flagSeason, r.Title)
 	case seasonAbsent:
 		if res.gapSource != nil {
-			return emitErr("no_results", exitNoResults, "%s does not carry season %d of %q",
-				strings.ToUpper(searchProviderBase(res.gapSource)), flagSeason, r.Title)
+			return emitErr("no_results", exitNoResults, "%s", seasonNotFound(res, flagSeason, r.Title).Error())
 		}
 		return emitErr("no_results", exitNoResults, "season %d not found for %q", flagSeason, r.Title)
 	}
@@ -303,7 +302,7 @@ func episodeSourceWarnings(asked, answered provider.Provider, shortfall episodeS
 			providerLabel(answered), listed, shortfall.reason)
 		if shortfall.gap {
 			message = fmt.Sprintf(
-				"%s has no release for some episodes of this season, so the %d episodes above are all it carries and others may exist elsewhere: %s",
+				"%s has no standalone release for some episodes of this season, so the %d episodes above are the ones it has standalone releases for and others may exist elsewhere: %s",
 				providerLabel(answered), listed, shortfall.reason)
 		}
 		if shortfall.code == "episode_list_unconfirmed" {

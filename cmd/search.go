@@ -1320,7 +1320,7 @@ func warnShortList(sf episodeShortfall, p provider.Provider, season int, title s
 	switch {
 	case sf.code == "":
 	case sf.gap:
-		warnf("%s has no release for some episodes of season %d of %q: %s",
+		warnf("%s has no standalone release for some episodes of season %d of %q: %s",
 			providerLabel(p), season, title, sf.reason)
 	default:
 		warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",

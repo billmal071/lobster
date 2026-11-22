@@ -133,8 +133,11 @@ func TestEpisodesGapWordingIsNotTheEnumerationShortfall(t *testing.T) {
 	if len(w) != 1 || w[0].Code != "episode_list_incomplete" {
 		t.Fatalf("warnings = %+v, want one episode_list_incomplete", w)
 	}
-	if strings.Contains(w[0].Message, "establish where this season ends") || !strings.Contains(w[0].Message, "has no release for some episodes") {
+	if strings.Contains(w[0].Message, "establish where this season ends") || !strings.Contains(w[0].Message, "has no standalone release for some episodes") {
 		t.Errorf("message = %q, want gap wording rather than the enumeration-shortfall wording", w[0].Message)
+	}
+	if strings.Contains(w[0].Message, "all it carries") || !strings.Contains(w[0].Message, "the 2 episodes above are the ones it has standalone releases for") {
+		t.Errorf("message = %q, want the listed count qualified as standalone releases: a season pack may hold the rest", w[0].Message)
 	}
 }
 
@@ -149,8 +152,8 @@ func TestValidateNamesTheSourceWhenAGappedListLacksTheEpisode(t *testing.T) {
 	withStubProviderBase(t, primary, "eztv")
 	_ = validateSeasonEpisode(primary, playRef{ID: "eztv/1", Title: "South Park", Type: "tv"}, 5, 4)
 	out := buf.String()
-	if !strings.Contains(out, "EZTV does not carry") || strings.Contains(out, "has no episode") {
-		t.Errorf("output = %s, want it to say EZTV does not carry the episode, not that the show has none", out)
+	if !strings.Contains(out, "EZTV has no standalone release for episode 4 of season 5") || strings.Contains(out, "has no episode") {
+		t.Errorf("output = %s, want it to say EZTV has no standalone release for the episode, not that the show has none", out)
 	}
 }
 
@@ -174,7 +177,7 @@ func TestGappedFallbackListNamesItselfNotTheFailedPrimary(t *testing.T) {
 
 	_ = episodesRun(episodesCmd, nil)
 	out := buf.String()
-	if !strings.Contains(out, "EZTV does not carry season 1") || strings.Contains(out, "FLIXHQ") {
+	if !strings.Contains(out, "EZTV has no standalone release for season 1") || strings.Contains(out, "FLIXHQ") {
 		t.Errorf("output = %s, want EZTV named, not the primary whose lookup merely failed", out)
 	}
 }
