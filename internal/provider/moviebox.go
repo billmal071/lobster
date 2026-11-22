@@ -57,10 +57,10 @@ func (m *MovieBox) rotateHost() {
 }
 
 const (
-	hmacKey1  = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
-	hmacKey2  = "Xqn2nnO41/L92o1iuXhSLHTbXvY4Z5ZZ62m8mSLA"
-	mbAppID   = "302770f8bb6543ce8bdff585943a1eca"
-	mbAppKey  = "a9d263ae575d4f5d94eab086a150c67e"
+	hmacKey1 = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
+	hmacKey2 = "Xqn2nnO41/L92o1iuXhSLHTbXvY4Z5ZZ62m8mSLA"
+	mbAppID  = "302770f8bb6543ce8bdff585943a1eca"
+	mbAppKey = "a9d263ae575d4f5d94eab086a150c67e"
 )
 
 // sign signs a request with HMAC-MD5 and returns the required headers.
