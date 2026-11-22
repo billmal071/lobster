@@ -646,3 +646,50 @@ func TestResolveRowKeepsTheDirectTMDBIDForAProviderWithTMDBShapedIDs(t *testing.
 		t.Fatal("MintsTMDBShapedIDs must be true only for a provider that declares it")
 	}
 }
+
+func TestResolveRowRefusesATitleWithNothingToCompare(t *testing.T) {
+	for _, title := range []string{"...", "", "   ", "'’"} {
+		t.Run(title, func(t *testing.T) {
+			inner := &showProvider{results: []media.SearchResult{
+				{ID: "tv/unrelated-1", Title: "!!!", Type: media.TV, Year: "2020"},
+			}}
+			p := Wrap(inner, okServer(t), General)
+			got := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: title, Type: media.TV, Year: "2020", FromCatalogue: true})
+			if !got.Unresolved || got.ProviderID != "" {
+				t.Fatalf("ResolveRow = %+v, want Unresolved with no provider ID", got)
+			}
+			if len(inner.searches) != 0 {
+				t.Fatalf("provider searched %q for a title with nothing to compare", inner.searches)
+			}
+		})
+	}
+}
+
+func TestSeasonsFailForACatalogueRowWhoseTitleHasNothingToCompare(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"results":[{"id":7,"name":"...","first_air_date":"2020-01-01"}]}`)
+	})
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/unrelated-1", Title: "!!!", Type: media.TV, Year: "2020"},
+	}}
+	p := Wrap(inner, c, General)
+	rows, err := p.Trending(media.TV)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("Trending = %+v, %v", rows, err)
+	}
+	if _, err := p.GetSeasons(rows[0].ID); err == nil {
+		t.Fatalf("GetSeasons asked the provider for %q; want an error", inner.seasonIDs)
+	}
+	if len(inner.seasonIDs) != 0 {
+		t.Fatalf("provider was asked for seasons of %q", inner.seasonIDs)
+	}
+}
+
+func TestResolveRowKeepsTheDirectTMDBIDWhenTheTitleHasNothingToCompare(t *testing.T) {
+	inner := &tmdbIDProvider{fakeInner: &fakeInner{}}
+	p := Wrap(inner, nil, General)
+	got := p.ResolveRow(media.SearchResult{ID: "tv/37854", Title: "...", Type: media.TV, FromCatalogue: true})
+	if got.Unresolved || got.ProviderID != "tv/37854" {
+		t.Fatalf("ResolveRow = %+v, want the direct TMDB ID and not Unresolved", got)
+	}
+}

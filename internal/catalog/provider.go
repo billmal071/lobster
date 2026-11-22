@@ -143,6 +143,9 @@ func (p *Provider) resolve(row media.SearchResult) (string, error) {
 		return row.ID, nil
 	}
 	key := resolveKey{row.ID, titlekey.Normalize(row.Title), row.Year, row.Type}
+	if key.title == "" {
+		return "", fmt.Errorf("%q has no title to match on this provider", row.Title)
+	}
 	p.mu.Lock()
 	if r, ok := p.resolved[key]; ok {
 		p.mu.Unlock()
