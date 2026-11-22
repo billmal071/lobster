@@ -375,7 +375,7 @@ func resolveTier(ctx context.Context, providers []provider.Provider, req resolve
 			err = fmt.Errorf("all providers failed: %s", report.Summary())
 		}
 		debugf("resolve failed: %s", report.Summary())
-		return nil, &resolveFailure{report: report, err: err}
+		return nil, &resolveFailure{report: report, err: err, season: req.Season, episode: req.Episode}
 	}
 	debugf("resolve ok via report: %s", report.Summary())
 	return stream, nil
@@ -396,8 +396,10 @@ func resolveTier(ctx context.Context, providers []provider.Provider, req resolve
 // download loop, makeStreamResolver — read exactly as they did before this
 // type existed. Only a caller that asks for the structure gets it.
 type resolveFailure struct {
-	report *resolver.Report
-	err    error
+	report  *resolver.Report
+	err     error
+	season  int
+	episode int
 }
 
 func (e *resolveFailure) Error() string { return e.err.Error() }

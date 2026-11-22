@@ -503,3 +503,54 @@ func TestRetryStartPosDistinguishesMeasuredZeroFromNoMeasurement(t *testing.T) {
 		})
 	}
 }
+
+func playFailureMessage(t *testing.T, autoplay bool, season, episode int) string {
+	t.Helper()
+	hostileEnv(t)
+	playStreamHarness(t, &stubPlayerImpl{})
+	buf := captureAgentOut(t)
+	withPlayerAvailable(t)
+
+	a, b := newDeadChain("Some Show")
+	withFallbackChain(t, a, b)
+	withStubProvider(t, autoplayStub())
+	withEpisodesFlags(t, tvRef(t, ""), season)
+	prevEpisode, prevAuto := flagEpisode, flagAutoplay
+	flagEpisode, flagAutoplay = episode, autoplay
+	t.Cleanup(func() { flagEpisode, flagAutoplay = prevEpisode, prevAuto })
+
+	plays := 0
+	prevPlay := playEpisode
+	playEpisode = func(s *playlist.Session) error {
+		plays++
+		if autoplay && plays == 1 {
+			s.LastPosition, s.LastDuration = endedNaturally.Position, endedNaturally.Duration
+			return nil
+		}
+		return playCurrentEpisode(s)
+	}
+	t.Cleanup(func() { playEpisode = prevPlay })
+
+	if err := playRun(playCmd, nil); exitCodeOf(err) != exitProvidersFailed {
+		t.Fatalf("playRun = %v (exit %d), want exit %d; envelope: %s", err, exitCodeOf(err), exitProvidersFailed, buf.String())
+	}
+	env := decodeErrEnvelope(t, buf.String())
+	if len(env.Error.Providers) != 2 {
+		t.Fatalf("error.providers has %d rows, want 2; envelope: %s", len(env.Error.Providers), buf.String())
+	}
+	return env.Error.Message
+}
+
+func TestPlayFailureAfterAutoplayAdvanceNamesTheEpisodeThatFailed(t *testing.T) {
+	msg := playFailureMessage(t, true, 1, 2)
+	if !strings.Contains(msg, `no source could stream season 2 episode 1 of "Some Show"`) {
+		t.Fatalf("message = %q, want it to name season 2 episode 1, the episode autoplay advanced to", msg)
+	}
+}
+
+func TestPlayFailureOfASingleEpisodeNamesTheRequestedEpisode(t *testing.T) {
+	msg := playFailureMessage(t, false, 1, 2)
+	if !strings.Contains(msg, `no source could stream season 1 episode 2 of "Some Show"`) {
+		t.Fatalf("message = %q, want it to name the requested season 1 episode 2", msg)
+	}
+}

@@ -327,7 +327,7 @@ func playRun(cmd *cobra.Command, args []string) error {
 			return emitErrDetail("providers_failed", exitProvidersFailed,
 				map[string]any{"providers": resolveErr.providerRows()},
 				"no source could stream %s: %d providers tried, none produced a playable stream (per-provider reasons in error.providers)",
-				playTarget(r.Title, flagSeason, flagEpisode), resolveErr.providersTried())
+				playTarget(r.Title, resolveErr.season, resolveErr.episode), resolveErr.providersTried())
 		}
 		return emitErr("providers_failed", exitProvidersFailed, "%v", err)
 	}
@@ -338,10 +338,10 @@ func playRun(cmd *cobra.Command, args []string) error {
 	})
 }
 
-// playTarget names what the run was trying to play, for a failure message.
-// Season and episode are included only when both were requested, which for
-// `play --ref` means exactly "this is a series" — the command refuses a TV ref
-// without both (playRun's season_episode_required gate).
+// playTarget names what a failed resolution was trying to play. Season and
+// episode are included only when both are positive, which for `play --ref`
+// means exactly "this is a series" — the command refuses a TV ref without both
+// (playRun's season_episode_required gate).
 func playTarget(title string, season, episode int) string {
 	if season > 0 && episode > 0 {
 		return fmt.Sprintf("season %d episode %d of %q", season, episode, title)
