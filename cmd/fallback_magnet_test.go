@@ -161,6 +161,39 @@ func TestResolveBatchStreamAsksTheSelectedTorrentSourceFirst(t *testing.T) {
 	}
 }
 
+// TestResolveBatchStreamAsksTheTorrentSourceByNumber checks that the selected torrent source is asked for the season and episode numbers in the resolver's form, never for an episode ID another provider's list may have supplied.
+func TestResolveBatchStreamAsksTheTorrentSourceByNumber(t *testing.T) {
+	prev := cfg
+	cfg = &config.Config{Base: "nyaa", Quality: "1080"}
+	t.Cleanup(func() { cfg = prev })
+	withRecordingFallbackChain(t, &stubProvider{searchErr: errors.New("scraper down")})
+
+	const magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Show"
+	for _, tc := range []struct {
+		name   string
+		selID  string
+		ep     media.Episode
+		season int
+		want   string
+	}{
+		{"a bare number from another provider's season 1 list", "nyaa/Show?s=2", media.Episode{Number: 3, ID: "3"}, 1, "nyaa/Show?s=2:1:3"},
+		{"a scraper's episode path", "eztv/tt0944947", media.Episode{Number: 3, ID: "/series/show-123/2-3/"}, 2, "eztv/tt0944947:2:3"},
+		{"the source's own id", "eztv/tt0944947", media.Episode{Number: 10, ID: "2x10"}, 2, "eztv/tt0944947:2:10"},
+		{"a placeholder with no id", "nyaa/Show", media.Episode{}, 1, "nyaa/Show:1:0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			primary := &recordingStreamProvider{url: magnet}
+			sel := media.SearchResult{ID: tc.selID, Title: "Show", Type: media.TV}
+			if _, err := resolveBatchStream(primary, sel, tc.ep, tc.season); err != nil {
+				t.Fatalf("resolveBatchStream: %v", err)
+			}
+			if got := primary.episodeAsked(); got != tc.want {
+				t.Fatalf("selected source asked for episode %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // Under torrent_fallback the chain really does carry the TV torrent source,
 // so the stub above stands in for a provider that is wired in.
 func TestFallbackProvidersIncludesEZTVWhenOptedIn(t *testing.T) {

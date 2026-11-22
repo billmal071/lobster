@@ -411,6 +411,12 @@ func TestNyaaWatchAcceptsFallbackEpisodeForm(t *testing.T) {
 	if _, err := n.Watch(nyaaEraiID, nyaaEraiID+":2:12", "Default", "1080"); err == nil {
 		t.Error("season 2 does not exist in the feed; Watch must fail")
 	}
+	if _, err := n.Watch(nyaaS3ID, nyaaS3ID+":1:12", "Default", "1080"); err == nil {
+		t.Error("a series ID marked season 3 was asked for season 1; Watch must fail")
+	}
+	if _, err := n.Watch(nyaaS3ID, nyaaS3ID+":3:0", "Default", "1080"); err == nil {
+		t.Error("episode 0 names no episode; Watch must fail")
+	}
 }
 
 // Dead torrents are dropped while a live one exists, so "best" cannot pick
