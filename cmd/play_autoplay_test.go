@@ -554,3 +554,34 @@ func TestPlayFailureOfASingleEpisodeNamesTheRequestedEpisode(t *testing.T) {
 		t.Fatalf("message = %q, want it to name the requested season 1 episode 2", msg)
 	}
 }
+
+func TestPlayDoesNotAutoplayPastAnInitialEpisodeListFlaggedIncomplete(t *testing.T) {
+	hostileEnv(t)
+	playStreamHarness(t, &stubPlayerImpl{})
+	captureAgentOut(t)
+	captureWarnings(t)
+	withPlayerAvailable(t)
+
+	stub := autoplayStub()
+	stub.episodesErr = fmt.Errorf("probe budget: %w", provider.ErrIncompleteEpisodeList)
+	stub.episodesWithErr = []media.Episode{{ID: "e11", Number: 1}, {ID: "e12", Number: 2}}
+	withStubProvider(t, stub)
+	withEpisodesFlags(t, tvRef(t, ""), 1)
+	prevEpisode, prevAuto := flagEpisode, flagAutoplay
+	flagEpisode, flagAutoplay = 2, true
+	t.Cleanup(func() { flagEpisode, flagAutoplay = prevEpisode, prevAuto })
+
+	var played []playedEp
+	prevPlay := playEpisode
+	playEpisode = func(s *playlist.Session) error {
+		played = append(played, playedEp{s.CurrentSeason().Number, s.Current().Number})
+		s.LastPosition, s.LastDuration = endedNaturally.Position, endedNaturally.Duration
+		return nil
+	}
+	t.Cleanup(func() { playEpisode = prevPlay })
+
+	if err := playRun(playCmd, nil); err != nil {
+		t.Fatalf("playRun: %v", err)
+	}
+	wantPlayed(t, played, []playedEp{{1, 2}})
+}
