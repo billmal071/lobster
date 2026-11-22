@@ -472,6 +472,12 @@ func TestResolveAndPlayPlaysAnUnresolvedCatalogueMovieFromYTS(t *testing.T) {
 	if rec.url != "http://127.0.0.1:1/yts-2160p.mkv" {
 		t.Fatalf("player received %q, want the YTS stream the route matched", rec.url)
 	}
+	yts.mu.Lock()
+	watched := yts.lastWatchID
+	yts.mu.Unlock()
+	if watched != "yts/1745" {
+		t.Fatalf("YTS was asked to watch %q, want yts/1745 — a catalogue ID would be rejected", watched)
+	}
 }
 
 // historyIDs returns the IDs of every row currently in the test's history
