@@ -449,7 +449,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 					return errSeasonNotFound{season: season, title: title}
 				}
 				debugf("season %d recovered from %T", altSel.Number, alt.provider)
-				p, providerID, seasons = alt.provider, alt.id, altSeasons
+				p, providerID, seasons, seasonsPartial = alt.provider, alt.id, altSeasons, alt.partial
 				// The season came out of this very list, so the lookup cannot
 				// miss; clamp anyway rather than index with -1.
 				if seasonIdx = seasonIndex(seasons, altSel.Number); seasonIdx < 0 {
@@ -569,6 +569,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				p = answer.hit.provider
 				providerID = answer.hit.id
 				seasons = answer.hit.seasons
+				seasonsPartial = answer.hit.partial
 				// The season came out of this very list, so the lookup
 				// cannot miss; clamp anyway rather than index with -1.
 				if seasonIdx = seasonIndex(seasons, answer.season.Number); seasonIdx < 0 {
@@ -715,7 +716,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		debugf("episode: %d (ID: %s)", selectedEpisode.Number, selectedEpisode.ID)
 
 		// Create a playlist session for continuous playback
-		sess := newPlaybackSession(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx, partialList)
+		sess := newPlaybackSession(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx, partialList, seasonsPartial)
 		cachedServerName = ""
 		return runPlaybackLoop(sess)
 	}
@@ -1306,9 +1307,10 @@ func warnPartialSeason(p provider.Provider, season media.Season, title, reason s
 }
 
 func newPlaybackSession(p provider.Provider, selected media.SearchResult, providerID string, chainPrimary provider.Provider,
-	seasons []media.Season, episodes []media.Episode, seasonIdx, episodeIdx int, partial bool) *playlist.Session {
+	seasons []media.Season, episodes []media.Episode, seasonIdx, episodeIdx int, episodesPartial, seasonsPartial bool) *playlist.Session {
 	sess := playlist.NewWithProviderID(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx)
-	sess.EpisodesPartial = partial
+	sess.EpisodesPartial = episodesPartial
+	sess.SeasonsPartial = seasonsPartial
 	sess.OnPartialSeason = func(season media.Season, err error) {
 		warnPartialSeason(sess.Provider, season, selected.Title, shortfallFor(err).reason)
 	}

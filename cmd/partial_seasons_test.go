@@ -7,6 +7,7 @@ import (
 
 	"lobster/internal/media"
 	"lobster/internal/player"
+	"lobster/internal/playlist"
 	"lobster/internal/provider"
 )
 
@@ -197,5 +198,106 @@ func TestEpisodesDoesNotWarnAboutSeasonsWhenTheListIsComplete(t *testing.T) {
 		if w.Code == "season_list_incomplete" {
 			t.Fatalf("unexpected %+v for a complete season list", w)
 		}
+	}
+}
+
+var gappedShow = media.SearchResult{ID: "tv/show-1", Title: "Some Show", Type: media.TV}
+
+func gappedSeasonsStub(partial bool, numbers ...int) *stubProvider {
+	stub := &stubProvider{
+		results:          []media.SearchResult{gappedShow},
+		episodesBySeason: map[string][]media.Episode{},
+	}
+	for _, n := range numbers {
+		id := fmt.Sprintf("s%d", n)
+		stub.seasons = append(stub.seasons, media.Season{ID: id, Number: n})
+		stub.episodesBySeason[id] = []media.Episode{{ID: id + "e1", Number: 1}}
+	}
+	if partial {
+		stub.seasonsErr = errSeasonsIncomplete
+	}
+	return stub
+}
+
+func autoplayFrom(t *testing.T, primary provider.Provider, season int, chain ...provider.Provider) ([]playedEp, *[]string) {
+	t.Helper()
+	hostileEnv(t)
+	playStreamHarness(t, &stubPlayerImpl{})
+	warned := captureWarnings(t)
+	withFallbackChain(t, chain...)
+
+	var played []playedEp
+	prevPlay, prevAuto := playEpisode, flagAutoplay
+	playEpisode = func(s *playlist.Session) error {
+		played = append(played, playedEp{s.CurrentSeason().Number, s.Current().Number})
+		s.LastPosition, s.LastDuration = endedNaturally.Position, endedNaturally.Duration
+		return nil
+	}
+	flagAutoplay = true
+	t.Cleanup(func() { playEpisode, flagAutoplay = prevPlay, prevAuto })
+
+	if err := resolveAndPlay(primary, gappedShow, season, 1); err != nil {
+		t.Fatalf("resolveAndPlay: %v", err)
+	}
+	return played, warned
+}
+
+func TestAutoplayStopsBeforeAGapInAPartialPrimarySeasonList(t *testing.T) {
+	played, warned := autoplayFrom(t, gappedSeasonsStub(true, 1, 3), 1)
+	wantPlayed(t, played, []playedEp{{1, 1}})
+	if !containsSubstring(*warned, "season list may be incomplete: stopping after season 1") {
+		t.Fatalf("warnings = %q, want one saying the season list stops after season 1", *warned)
+	}
+}
+
+func TestAutoplayCrossesAGapInACompletePrimarySeasonList(t *testing.T) {
+	played, warned := autoplayFrom(t, gappedSeasonsStub(false, 1, 3), 1)
+	wantPlayed(t, played, []playedEp{{1, 1}, {3, 1}})
+	if containsSubstring(*warned, "may be incomplete") {
+		t.Fatalf("warnings = %q, want none for a complete season list", *warned)
+	}
+}
+
+func TestAutoplayWarnsInsteadOfEndOfSeriesAtTheEndOfAPartialSeasonList(t *testing.T) {
+	played, warned := autoplayFrom(t, gappedSeasonsStub(true, 1, 2), 1)
+	wantPlayed(t, played, []playedEp{{1, 1}, {2, 1}})
+	if !containsSubstring(*warned, "season list may be incomplete: stopping after season 2") {
+		t.Fatalf("warnings = %q, want one saying the season list may be incomplete after season 2", *warned)
+	}
+}
+
+func TestAutoplayCrossesAGapInACompleteChainSeasonListAfterAPartialPrimary(t *testing.T) {
+	played, warned := autoplayFrom(t, gappedSeasonsStub(true, 1, 3), 2, gappedSeasonsStub(false, 2, 4))
+	wantPlayed(t, played, []playedEp{{2, 1}, {4, 1}})
+	if containsSubstring(*warned, "stopping after") {
+		t.Fatalf("warnings = %q, want no stop: the season list in use is the chain's complete one", *warned)
+	}
+}
+
+func TestAutoplayStopsBeforeAGapInAPartialChainSeasonListAfterACompletePrimary(t *testing.T) {
+	played, warned := autoplayFrom(t, gappedSeasonsStub(false, 1), 2, gappedSeasonsStub(true, 2, 4))
+	wantPlayed(t, played, []playedEp{{2, 1}})
+	if !containsSubstring(*warned, "season list may be incomplete: stopping after season 2") {
+		t.Fatalf("warnings = %q, want one saying the season list stops after season 2", *warned)
+	}
+}
+
+func TestAutoplayCrossesAGapInACompleteChainSeasonListWhenAPartialPrimaryCannotListEpisodes(t *testing.T) {
+	primary := gappedSeasonsStub(true, 1, 3)
+	primary.episodesErr = errors.New("episodes unavailable")
+	played, warned := autoplayFrom(t, primary, 1, gappedSeasonsStub(false, 1, 3))
+	wantPlayed(t, played, []playedEp{{1, 1}, {3, 1}})
+	if containsSubstring(*warned, "stopping after") {
+		t.Fatalf("warnings = %q, want no stop: the season list in use is the chain's complete one", *warned)
+	}
+}
+
+func TestAutoplayStopsBeforeAGapInAPartialChainSeasonListWhenACompletePrimaryCannotListEpisodes(t *testing.T) {
+	primary := gappedSeasonsStub(false, 1, 3)
+	primary.episodesErr = errors.New("episodes unavailable")
+	played, warned := autoplayFrom(t, primary, 1, gappedSeasonsStub(true, 1, 3))
+	wantPlayed(t, played, []playedEp{{1, 1}})
+	if !containsSubstring(*warned, "season list may be incomplete: stopping after season 1") {
+		t.Fatalf("warnings = %q, want one saying the season list stops after season 1", *warned)
 	}
 }

@@ -339,7 +339,7 @@ func TestPlaybackSessionWarnsWhenSeasonCrossingIsPartial(t *testing.T) {
 	stub.episodesErr = fmt.Errorf("probe budget: %w", provider.ErrIncompleteEpisodeList)
 	stub.episodesWithErr = []media.Episode{{ID: "e21", Number: 1}}
 	sel := media.SearchResult{ID: "tv/show", Title: "Some Show", Type: media.TV}
-	sess := newPlaybackSession(stub, sel, "x", stub, seasons, eps, 0, len(eps)-1, false)
+	sess := newPlaybackSession(stub, sel, "x", stub, seasons, eps, 0, len(eps)-1, false, false)
 
 	var warned []string
 	prev := warnf
@@ -364,7 +364,7 @@ func partialSeasonSession(trailingSeason bool) *playlist.Session {
 	stub.episodesErr = fmt.Errorf("probe budget: %w", provider.ErrIncompleteEpisodeList)
 	stub.episodesWithErr = []media.Episode{{ID: "e21", Number: 1}, {ID: "e22", Number: 2}}
 	sel := media.SearchResult{ID: "tv/show", Title: "Some Show", Type: media.TV}
-	return newPlaybackSession(stub, sel, "x", stub, seasons, eps, 0, len(eps)-1, false)
+	return newPlaybackSession(stub, sel, "x", stub, seasons, eps, 0, len(eps)-1, false, false)
 }
 
 func playUntilStopped(t *testing.T, sess *playlist.Session, autoplay bool) ([]playedEp, error) {

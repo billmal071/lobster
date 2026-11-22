@@ -34,7 +34,7 @@ func runPlaybackLoop(sess *playlist.Session) error {
 
 		// If no next episode, we're done
 		if !sess.HasNext() {
-			if sess.EpisodesPartial {
+			if sess.EpisodesPartial || sess.SeasonsPartial {
 				warnf("%v", sess.IncompleteListError())
 				return nil
 			}

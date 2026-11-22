@@ -47,6 +47,7 @@ type Session struct {
 
 	OnPartialSeason func(season media.Season, err error)
 	EpisodesPartial bool
+	SeasonsPartial  bool
 
 	Seasons      []media.Season
 	Episodes     []media.Episode // episodes for current season
@@ -144,7 +145,14 @@ func (s *Session) HasNext() bool {
 	if s.hasNextInSeason() {
 		return true
 	}
-	return !s.EpisodesPartial && s.SeasonIdx < len(s.Seasons)-1
+	return !s.EpisodesPartial && s.hasNextSeason()
+}
+
+func (s *Session) hasNextSeason() bool {
+	if s.SeasonIdx >= len(s.Seasons)-1 {
+		return false
+	}
+	return !s.SeasonsPartial || s.Seasons[s.SeasonIdx+1].Number == s.CurrentSeason().Number+1
 }
 
 func (s *Session) hasNextInSeason() bool {
@@ -171,7 +179,7 @@ func (s *Session) Next() (media.Episode, error) {
 		return s.Current(), nil
 	}
 
-	if s.EpisodesPartial {
+	if s.EpisodesPartial || (s.SeasonsPartial && !s.hasNextSeason()) {
 		return media.Episode{}, s.IncompleteListError()
 	}
 
@@ -208,6 +216,12 @@ func (s *Session) Next() (media.Episode, error) {
 }
 
 func (s *Session) IncompleteListError() error {
+	if s.SeasonsPartial && !s.EpisodesPartial {
+		if s.SeasonIdx < len(s.Seasons)-1 {
+			return fmt.Errorf("season list may be incomplete: stopping after season %d, before a gap in its numbering", s.CurrentSeason().Number)
+		}
+		return fmt.Errorf("season list may be incomplete: stopping after season %d, its last measured season", s.CurrentSeason().Number)
+	}
 	if s.EpisodeIdx < len(s.Episodes)-1 {
 		return fmt.Errorf("season %d episode list may be incomplete: stopping after episode %d, before a gap in its numbering", s.CurrentSeason().Number, s.Current().Number)
 	}

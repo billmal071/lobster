@@ -545,3 +545,77 @@ func TestPreviousIntoACompleteSeasonDropsThePrefixFlag(t *testing.T) {
 		t.Fatalf("Next = %v in season idx %d, want b1 in season idx 1", ep, s.SeasonIdx)
 	}
 }
+
+func gappedSeasonListSession(seasonsPartial bool) *Session {
+	mp := &mockProvider{episodes: map[string][]media.Episode{
+		"s2": {{Number: 1, ID: "b1"}},
+		"s4": {{Number: 1, ID: "d1"}},
+	}}
+	seasons := []media.Season{{Number: 1, ID: "s1"}, {Number: 2, ID: "s2"}, {Number: 4, ID: "s4"}}
+	eps := []media.Episode{{Number: 1, ID: "a1"}, {Number: 2, ID: "a2"}}
+	s := New(mp, media.SearchResult{ID: "x", Title: "X", Type: media.TV}, seasons, eps, 0, 0)
+	s.SeasonsPartial = seasonsPartial
+	return s
+}
+
+func TestNextStopsBeforeAGapInAPartialSeasonList(t *testing.T) {
+	s := gappedSeasonListSession(true)
+	if ep, err := s.Next(); err != nil || ep.ID != "a2" {
+		t.Fatalf("Next inside season 1 = %v, %v, want a2", ep, err)
+	}
+	if !s.HasNext() {
+		t.Fatal("HasNext false before season 2, which directly follows season 1")
+	}
+	if ep, err := s.Next(); err != nil || ep.ID != "b1" || s.SeasonIdx != 1 {
+		t.Fatalf("Next = %v, %v (season idx %d), want b1 in season 2", ep, err, s.SeasonIdx)
+	}
+
+	if s.HasNext() {
+		t.Error("HasNext true before a gap in a partial season list, so season 3 would be skipped")
+	}
+	ep, err := s.Next()
+	if err == nil || !strings.Contains(err.Error(), "season list may be incomplete") || !strings.Contains(err.Error(), "after season 2") {
+		t.Fatalf("Next = %v, %v, want an error saying the season list stops after season 2", ep, err)
+	}
+	if s.SeasonIdx != 1 || s.EpisodeIdx != 0 {
+		t.Fatalf("position moved to season idx %d episode idx %d, want it left on season 2 episode 1", s.SeasonIdx, s.EpisodeIdx)
+	}
+}
+
+func TestNextCrossesAGapInACompleteSeasonList(t *testing.T) {
+	s := gappedSeasonListSession(false)
+	s.SetEpisodes([]media.Episode{{Number: 1, ID: "b1"}}, 1, 0)
+	if !s.HasNext() {
+		t.Error("HasNext false before a gap in a complete season list")
+	}
+	if ep, err := s.Next(); err != nil || ep.ID != "d1" || s.SeasonIdx != 2 {
+		t.Fatalf("Next = %v, %v (season idx %d), want d1 in season 4: a complete list has no season 3 to wait for", ep, err, s.SeasonIdx)
+	}
+}
+
+func TestNextAtTheEndOfAPartialSeasonListDoesNotCallItTheEndOfTheSeries(t *testing.T) {
+	s := gappedSeasonListSession(true)
+	s.SetEpisodes([]media.Episode{{Number: 1, ID: "d1"}}, 2, 0)
+	if s.HasNext() {
+		t.Error("HasNext true on the last episode of the last listed season")
+	}
+	_, err := s.Next()
+	if err == nil || !strings.Contains(err.Error(), "season list may be incomplete") || !strings.Contains(err.Error(), "season 4") {
+		t.Fatalf("Next = %v, want an error saying the season list may be incomplete after season 4", err)
+	}
+
+	s.SeasonsPartial = false
+	if _, err := s.Next(); err == nil || !strings.Contains(err.Error(), "end of series") {
+		t.Fatalf("Next = %v, want end of series for a complete season list", err)
+	}
+}
+
+func TestIncompleteListErrorNamesTheEpisodeListWhenBothListsArePartial(t *testing.T) {
+	s := gappedSeasonListSession(true)
+	s.EpisodesPartial = true
+	s.EpisodeIdx = 1
+	_, err := s.Next()
+	if err == nil || !strings.Contains(err.Error(), "season 1 episode list may be incomplete") {
+		t.Fatalf("Next = %v, want the episode list named: season 1 may have more episodes before any season boundary", err)
+	}
+}
