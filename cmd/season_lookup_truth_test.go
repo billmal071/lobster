@@ -91,7 +91,11 @@ func TestProbeSeasonsOutcomes(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			hit, failed := probeSeasons(context.Background(), c.p, req, nil)
+			hits, failed := probeSeasons(context.Background(), c.p, req, nil)
+			var hit *seasonHit
+			if len(hits) > 0 {
+				hit = hits[0]
+			}
 			if (hit != nil) != c.wantHit {
 				t.Fatalf("hit = %v, want hit %v", hit, c.wantHit)
 			}
@@ -333,9 +337,9 @@ func TestProbeSeasonsPrefersACandidateListingTheWantedSeasons(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			hit, failed := probeSeasons(context.Background(), c.p, req, c.wants)
-			if hit == nil || hit.id != c.wantID {
-				t.Fatalf("hit = %+v, want candidate %q", hit, c.wantID)
+			hits, failed := probeSeasons(context.Background(), c.p, req, c.wants)
+			if len(hits) != 1 || hits[0].id != c.wantID {
+				t.Fatalf("hits = %v, want only candidate %q", hitIDs(hits), c.wantID)
 			}
 			if failed != c.wantFailed {
 				t.Errorf("failed = %v, want %v", failed, c.wantFailed)

@@ -639,14 +639,15 @@ func fallbackSeasonHits(primary provider.Provider, req resolver.Request, wants [
 
 // fallbackSeasonScan is fallbackSeasonHits plus whether any provider's lookup
 // failed rather than answering, so a caller can tell "the chain lacks it" from
-// "the chain could not say".
+// "the chain could not say". A provider contributes more than one hit only when
+// several of its titles each list a different season in wants (probeSeasons).
 func fallbackSeasonScan(primary provider.Provider, req resolver.Request, wants []int) ([]*seasonHit, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), episodesFallbackTimeout)
 	defer cancel()
 
 	fallbacks := agentFallbackProviders(primary)
 	// Indexed by provider so the result is provider order, not arrival order.
-	hits := make([]*seasonHit, len(fallbacks))
+	hits := make([][]*seasonHit, len(fallbacks))
 	failures := make([]bool, len(fallbacks))
 	var wg sync.WaitGroup
 	for i, fb := range fallbacks {
@@ -662,8 +663,8 @@ func fallbackSeasonScan(primary provider.Provider, req resolver.Request, wants [
 	wg.Wait()
 
 	found := make([]*seasonHit, 0, len(hits))
-	for _, h := range hits {
-		if h != nil {
+	for _, perProvider := range hits {
+		for _, h := range perProvider {
 			debugf("episodes: %T answers for %q (ID %s)", h.provider, h.title, h.id)
 			found = append(found, h)
 		}
@@ -798,13 +799,14 @@ type seasonHit struct {
 }
 
 // probeSeasons asks one fallback provider whether it has req's work and can
-// enumerate its seasons. It returns nil for "no", including when the context
-// expires mid-call. Of several matching candidates the first whose list holds
-// every season in wants is returned, or else the first that lists any. failed
-// is true when any lookup errored or timed out rather than answering, whichever
-// candidate hit came from, and when a candidate passed over for firstListed had
-// a list that was cut short.
-func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request, wants []int) (hit *seasonHit, failed bool) {
+// enumerate its seasons. It returns nothing for "no", including when the
+// context expires mid-call. Of several matching candidates the first whose list
+// holds every season in wants is returned alone; otherwise the first that lists
+// any, followed by each later one that lists a season in wants the ones kept so
+// far lack. failed is true when any lookup errored or timed out rather than
+// answering, whichever candidates were kept, and when a candidate after the
+// first listed had a list that was cut short.
+func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request, wants []int) (hits []*seasonHit, failed bool) {
 	results, err := searchWithContext(ctx, p, req.Title)
 	if errors.Is(err, provider.ErrNoResults) {
 		return nil, false
@@ -813,7 +815,6 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 		debugf("episodes: fallback %T search failed: %v", p, err)
 		return nil, true
 	}
-	var firstListed *seasonHit
 	for _, c := range resolver.Candidates(results, req) {
 		if !resolver.Matches(c, req) {
 			debugf("episodes: fallback %T candidate %q (ID: %s) is not the requested work, skipping", p, c.Title, c.ID)
@@ -828,16 +829,33 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 			look.provider, look.id = p, c.ID
 			listed := &seasonHit{seasonLookup: look, title: c.Title}
 			if listsEverySeason(seasons, wants) {
-				return listed, failed
+				return []*seasonHit{listed}, failed
 			}
-			if firstListed == nil {
-				firstListed = listed
-			} else if look.gap == gapShort {
+			if len(hits) > 0 && look.gap == gapShort {
 				failed = true
+			}
+			if len(hits) == 0 || addsWantedSeason(hits, seasons, wants) {
+				hits = append(hits, listed)
 			}
 		}
 	}
-	return firstListed, failed
+	return hits, failed
+}
+
+func addsWantedSeason(kept []*seasonHit, seasons []media.Season, wants []int) bool {
+	for _, want := range wants {
+		if _, listed := pickSeason(seasons, want); !listed {
+			continue
+		}
+		covered := slices.ContainsFunc(kept, func(h *seasonHit) bool {
+			_, ok := pickSeason(h.seasons, want)
+			return ok
+		})
+		if !covered {
+			return true
+		}
+	}
+	return false
 }
 
 func listsEverySeason(seasons []media.Season, wants []int) bool {
