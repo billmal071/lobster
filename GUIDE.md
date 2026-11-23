@@ -380,7 +380,9 @@ two spell differently — `Marvel's Agents of S.H.I.E.L.D.` in the ref against
 `Agents of S.H.I.E.L.D.` on the fallback — is rejected, and `episodes` exits 2
 with `no seasons found`. A same-titled remake from another year is rejected the
 same way. Playback's fallback applies the same title and year check, so it does
-not play such a result either. If `episodes` says a ref has no seasons, run
+not play such a result either, with one exception: a Nyaa season entry whose
+show title and season number match the request is played whatever its year,
+even where `episodes` rejects it. If `episodes` says a ref has no seasons, run
 `lobster find --base tbcpl` for the title and pass the new TBCPL ref to
 `episodes`; the old ref's ID belongs to the source that found it, and TBCPL
 cannot use it.
