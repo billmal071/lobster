@@ -426,11 +426,11 @@ func TestResolveRowLeavesNativeRowsAlone(t *testing.T) {
 func TestResolveRowRetryOfAFailedRowClearsUnresolved(t *testing.T) {
 	inner := &showProvider{}
 	p := Wrap(inner, okServer(t), General)
-	failed := p.ResolveRow(media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, FromCatalogue: true})
+	failed := p.ResolveRow(media.SearchResult{ID: "tv/37854", Title: "One Piece", Type: media.TV, Year: "1999", FromCatalogue: true})
 	if !failed.Unresolved {
 		t.Fatalf("first resolve = %+v, want Unresolved", failed)
 	}
-	inner.results = []media.SearchResult{{ID: "tv/one-piece-100", Title: "One Piece", Type: media.TV}}
+	inner.results = []media.SearchResult{{ID: "tv/one-piece-100", Title: "One Piece", Type: media.TV, Year: "1999"}}
 	got := p.ResolveRow(failed)
 	if got.Unresolved || got.ProviderID != "tv/one-piece-100" || got.ID != "tv/37854" {
 		t.Fatalf("retry = %+v, want resolved with the catalogue ID kept", got)
@@ -691,5 +691,26 @@ func TestResolveRowKeepsTheDirectTMDBIDWhenTheTitleHasNothingToCompare(t *testin
 	got := p.ResolveRow(media.SearchResult{ID: "tv/37854", Title: "...", Type: media.TV, FromCatalogue: true})
 	if got.Unresolved || got.ProviderID != "tv/37854" {
 		t.Fatalf("ResolveRow = %+v, want the direct TMDB ID and not Unresolved", got)
+	}
+}
+
+func TestResolveRowWithoutAYearNeverTakesTheOnlySameTitledWork(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"}}}
+	p := Wrap(inner, okServer(t), General)
+	got := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, FromCatalogue: true})
+	if !got.Unresolved || got.ProviderID != "" {
+		t.Fatalf("ResolveRow = %+v, want Unresolved: a title alone cannot tell Utopia from its remake", got)
+	}
+}
+
+func TestSeasonsOfAYearlessCatalogueRowNeverReachTheProviderOnATitleMatch(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"}}}
+	p := Wrap(inner, okServer(t), General)
+	p.remember([]media.SearchResult{{ID: "tv/1", Title: "Utopia", Type: media.TV, FromCatalogue: true}})
+	_, _ = p.GetSeasons("tv/1")
+	for _, id := range inner.seasonIDs {
+		if id == "tv/utopia-2020" {
+			t.Fatalf("provider was asked for the seasons of %s, matched on title alone", id)
+		}
 	}
 }

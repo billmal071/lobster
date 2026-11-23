@@ -146,6 +146,9 @@ func (p *Provider) resolve(row media.SearchResult) (string, error) {
 	if key.title == "" {
 		return "", fmt.Errorf("%q has no title to match on this provider", row.Title)
 	}
+	if row.Year == "" {
+		return "", fmt.Errorf("%q has no release year to tell it from a same-titled work on this provider", row.Title)
+	}
 	p.mu.Lock()
 	if r, ok := p.resolved[key]; ok {
 		p.mu.Unlock()
