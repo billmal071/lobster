@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -38,7 +39,7 @@ func fetchTabCmd(p provider.Provider, active tab) tea.Cmd {
 func searchCmd(p provider.Provider, query string, fallbacks ...provider.Provider) tea.Cmd {
 	return func() tea.Msg {
 		results, err := p.Search(query)
-		if err != nil {
+		if err != nil && (len(fallbacks) == 0 || !errors.Is(err, provider.ErrNoResults)) {
 			return errMsg{err}
 		}
 
@@ -52,6 +53,9 @@ func searchCmd(p provider.Provider, query string, fallbacks ...provider.Provider
 		// use TMDB IDs as their universal content identifier — any provider can
 		// resolve streams for results discovered by another.
 		merged := tuiMultiSearch(results, fallbacks, query)
+		if len(merged) == 0 && err != nil {
+			return errMsg{err}
+		}
 		return resultsFetchedMsg(merged)
 	}
 }
