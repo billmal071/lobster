@@ -466,7 +466,7 @@ var episodesFallbackTimeout = multiSearchTimeout
 // `episodes --ref` reported "no seasons found" for a show `play --ref` then
 // played without complaint. The two commands must agree on what one ref means.
 //
-// Both apply the same admission rule, resolver.SameWork: play's
+// Both apply the same admission rule, resolver.Admits: play's
 // tryFallbackStream reaches it through resolver.Resolve. So a ref whose title
 // the fallback spells differently — "Marvel's Agents of S.H.I.E.L.D." against
 // "Agents of S.H.I.E.L.D." — neither plays from the chain nor lists anything.
@@ -475,12 +475,12 @@ var episodesFallbackTimeout = multiSearchTimeout
 // pass. Documented in GUIDE.md's "Content sources" section so the failure is
 // at least findable.
 //
-// The re-search is by title, admitted only if resolver.SameWork says the
+// The re-search is by title, admitted only if resolver.Admits says the
 // candidate is the same work, and then ranked and capped by
 // resolver.Candidates so the ref's ID/Title/Year all count — the reason a ref
 // carries more than an ID.
 // Ranking alone is not a gate: candidatesFor applies no score threshold, so
-// without SameWork the first fallback that returns any seasons for any show
+// without Admits the first fallback that returns any seasons for any show
 // wins, and the envelope echoes the ref's own title over it. The caller could
 // not detect the swap. A candidate that matches but returns an empty season
 // list is skipped too — it does not really have this show.
@@ -790,7 +790,7 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 	}
 	admitted := make([]media.SearchResult, 0, len(results))
 	for _, c := range results {
-		if !resolver.SameWork(c, req) {
+		if !resolver.Admits(c, req) {
 			debugf("episodes: fallback %T offered %q (%s), which is not %q (%s)", p, c.Title, c.Year, req.Title, req.Year)
 			continue
 		}

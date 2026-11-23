@@ -171,15 +171,21 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 func admittedCandidates(candidates []media.SearchResult, req Request, log func(string, ...any)) []media.SearchResult {
 	out := make([]media.SearchResult, 0, len(candidates))
 	for _, c := range candidates {
-		sameWork := req
-		sameWork.MediaType = c.Type
-		if SameWork(c, sameWork) || sequelSeason(req.Title, c.ID, 1) != 1 || isNyaaSequelOf(c, req) {
+		anyType := req
+		anyType.MediaType = c.Type
+		if Admits(c, anyType) {
 			out = append(out, c)
 			continue
 		}
 		log("fallback candidate %q (%s, ID: %s) refused: not the requested %q (%s)", c.Title, c.Year, c.ID, req.Title, req.Year)
 	}
 	return out
+}
+
+// Admits reports whether c may stand for the work req identifies: SameWork, or
+// a Nyaa season entry of it, whose year is the season's rather than the work's.
+func Admits(c media.SearchResult, req Request) bool {
+	return SameWork(c, req) || sequelSeason(req.Title, c.ID, 1) != 1 || isNyaaSequelOf(c, req)
 }
 
 // SameWork reports whether c is the work req identifies: the same ID, or a
@@ -218,7 +224,7 @@ func FallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 // Ranking is not filtering. Every candidate of the right media type is
 // returned, including ones that match nothing about req. resolveWithProvider
 // filters them itself (admittedCandidates) before asking for a stream; a caller
-// that only reads metadata off the candidate must gate on SameWork first.
+// that only reads metadata off the candidate must gate on Admits first.
 func Candidates(results []media.SearchResult, req Request) []media.SearchResult {
 	return candidatesFor(results, req)
 }

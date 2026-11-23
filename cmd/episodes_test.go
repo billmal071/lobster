@@ -1244,6 +1244,24 @@ func TestEpisodesDoesNotCarryAWarningFromAProviderThatListedNothing(t *testing.T
 	}
 }
 
+func TestProbeSeasonsAdmitsTheNyaaSequelEntryPlaybackAdmits(t *testing.T) {
+	cases := []struct {
+		name string
+		row  media.SearchResult
+		want bool
+	}{
+		{"nyaa season entry dated later", media.SearchResult{ID: "nyaa/One%20Punch%20Man?s=2", Title: "One Punch Man 2nd Season", Year: "2019", Type: media.TV}, true},
+		{"same-titled remake", media.SearchResult{ID: "tv/remake", Title: "One Punch Man 2nd Season", Year: "2019", Type: media.TV}, false},
+	}
+	for _, c := range cases {
+		p := &stubProvider{results: []media.SearchResult{c.row}, seasons: []media.Season{{ID: "s1", Number: 1}}}
+		hit := probeSeasons(context.Background(), p, resolver.Request{Title: "One Punch Man 2nd Season", Year: "2015", MediaType: media.TV})
+		if (hit != nil) != c.want {
+			t.Errorf("%s: hit = %+v, want admitted %v", c.name, hit, c.want)
+		}
+	}
+}
+
 func TestProbeSeasonsFindsTheWorkBehindFiveSameTitledRowsFromAnotherYear(t *testing.T) {
 	results := make([]media.SearchResult, 0, 7)
 	for i := 0; i < 6; i++ {
