@@ -241,6 +241,10 @@ func tuiEpisodeListFallback(prov provider.Provider, item media.SearchResult, sea
 	if w, ok := prov.(*catalog.Provider); ok {
 		prov = w.Unwrap()
 	}
+	item, err := identifyCatalogueRow(prov, item)
+	if err != nil {
+		return nil, err
+	}
 	a := fallbackEpisodeList(prov, item, seasonNumber)
 	if a == nil {
 		return nil, fmt.Errorf("no fallback provider could list season %d of %q", seasonNumber, item.Title)
@@ -300,6 +304,10 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	// Only the movie route moves the ID. The series branch hands `sel` back
 	// untouched on both of its paths, which is why the TV code below can go on
 	// using selected.ID for the provider calls.
+	selected, err := identifyCatalogueRow(p, selected)
+	if err != nil {
+		return err
+	}
 	p, routed := routeByType(p, selected)
 
 	routedAway := routed.ID != selected.ID

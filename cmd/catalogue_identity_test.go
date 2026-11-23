@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"lobster/internal/catalog"
+	"net/http"
 	"testing"
 
 	"lobster/internal/history"
@@ -211,6 +212,7 @@ func (emptySearchPlayProvider) Search(string) ([]media.SearchResult, error) {
 
 func TestResumeViaPickerNeverHandsAFallbackIDToThePrimary(t *testing.T) {
 	url := catalogueHarness(t)
+	tmdbDetails(t, http.StatusOK, `{"id":1,"first_air_date":"2013-04-01"}`)
 	withFallbackChain(t, newListingChainProvider(url))
 	offered := recordSelections(t, 0)
 	inner := &idRecordingProvider{stubProvider: &stubProvider{}}

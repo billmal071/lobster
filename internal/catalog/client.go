@@ -255,6 +255,7 @@ func (c *Client) Search(query string) ([]media.SearchResult, error) {
 type Detail struct {
 	media.ContentDetail
 	IMDbID string
+	Year   string
 }
 
 func parseID(id string) (string, string, error) {
@@ -316,7 +317,7 @@ func (c *Client) Details(id string) (*Detail, error) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, errors.New("decoding TMDB details failed")
 	}
-	d := &Detail{IMDbID: raw.ExternalIDs.IMDbID}
+	d := &Detail{IMDbID: raw.ExternalIDs.IMDbID, Year: year(raw.ReleaseDate, raw.FirstAirDate)}
 	d.Description = raw.Overview
 	if raw.VoteAverage > 0 {
 		d.Rating = strconv.FormatFloat(raw.VoteAverage, 'f', 1, 64)

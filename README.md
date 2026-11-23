@@ -484,8 +484,10 @@ key or a v4 read access token works.
 - Playback is unchanged: picking a catalogue title searches the usual sources
   by title and year. The catalogue supplies lists and details, never streams.
   Resuming such a title from history, which stores no year, opens the usual
-  picker when the source lists that title, so you confirm which work it is;
-  if the source lists none, the usual fallback sources are tried. Under
+  picker when the source lists that title, so you confirm which work it is.
+  If the source lists none, lobster asks TMDB for the title's release year and
+  tries the usual fallback sources with it; when TMDB cannot give a year, the
+  title is not played, since a title alone cannot tell it from a remake. Under
   `--base tbcpl` or `1shows.org`, whose own IDs look like TMDB's, history
   entries are treated as the source's own and resume as before.
 - Without a key nothing changes, except one line saying the key enables richer
