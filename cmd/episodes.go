@@ -671,8 +671,8 @@ func fallbackSeasonHits(primary provider.Provider, req resolver.Request, wants [
 
 // fallbackSeasonScan is fallbackSeasonHits plus whether any provider's lookup
 // failed rather than answering, so a caller can tell "the chain lacks it" from
-// "the chain could not say". A provider contributes more than one hit only when
-// several of its titles each list a different season in wants (probeSeasons).
+// "the chain could not say". A provider contributes one hit per title
+// probeSeasons keeps.
 func fallbackSeasonScan(primary provider.Provider, req resolver.Request, wants []int) ([]*seasonHit, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), episodesFallbackTimeout)
 	defer cancel()
@@ -827,11 +827,12 @@ type seasonHit struct {
 // probeSeasons asks one fallback provider whether it has req's work and can
 // enumerate its seasons. It returns nothing for "no", including when the
 // context expires mid-call. Of several matching candidates the first whose list
-// holds every season in wants is returned alone; otherwise the first that lists
-// any, followed by each later one that lists a season in wants the ones kept so
-// far lack. failed is true when any lookup errored or timed out rather than
-// answering, whichever candidates were kept, and when a list that lacks a
-// season in wants was cut short.
+// holds every season in wants is returned first, followed by those kept before
+// it; otherwise the first that lists any, followed by each later one that lists
+// a season in wants the ones kept so far lack or whose list was cut short.
+// failed is true when any lookup errored or timed out rather than answering,
+// whichever candidates were kept, and when a list that lacks a season in wants
+// was cut short.
 func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request, wants []int) (hits []*seasonHit, failed bool) {
 	results, err := searchWithContext(ctx, p, req.Title)
 	if errors.Is(err, provider.ErrNoResults) {
@@ -855,12 +856,12 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 			look.provider, look.id = p, c.ID
 			listed := &seasonHit{seasonLookup: look, title: c.Title}
 			if listsEverySeason(seasons, wants) {
-				return []*seasonHit{listed}, failed
+				return append([]*seasonHit{listed}, hits...), failed
 			}
 			if look.gap == gapShort {
 				failed = true
 			}
-			if len(hits) == 0 || addsWantedSeason(hits, seasons, wants) {
+			if len(hits) == 0 || look.gap == gapShort || addsWantedSeason(hits, seasons, wants) {
 				hits = append(hits, listed)
 			}
 		}
