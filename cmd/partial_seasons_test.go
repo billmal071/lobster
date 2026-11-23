@@ -8,6 +8,7 @@ import (
 	"lobster/internal/media"
 	"lobster/internal/player"
 	"lobster/internal/provider"
+	"lobster/internal/resolver"
 )
 
 var errSeasonsIncomplete = fmt.Errorf("%w: eztv could not fetch every page", provider.ErrIncompleteEpisodeList)
@@ -197,5 +198,43 @@ func TestEpisodesDoesNotWarnAboutSeasonsWhenTheListIsComplete(t *testing.T) {
 		if w.Code == "season_list_incomplete" {
 			t.Fatalf("unexpected %+v for a complete season list", w)
 		}
+	}
+}
+
+// TestSeasonMissingFromAPartialListAsksForTheEpisode checks that --season with no --episode prompts for the episode before the chain is asked by number, instead of requesting episode 0.
+func TestSeasonMissingFromAPartialListAsksForTheEpisode(t *testing.T) {
+	hostileEnv(t)
+	playStreamHarness(t, &stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}})
+	fb := &recordingStreamProvider{result: partialSeasonsSelection, url: stubStreamServer(t)}
+	withFallbackChain(t, fb)
+	withTTY(t, true, false)
+	asked := withAnswers(t, map[string][]string{"Episode": {"4"}})
+
+	if err := resolveAndPlay(partialSeasonsPrimary(), partialSeasonsSelection, 5, 0); err != nil {
+		t.Fatalf("resolveAndPlay = %v (prompts: %v)", err, *asked)
+	}
+	if got := fb.episodeAsked(); got != "1403:5:4" {
+		t.Fatalf("fallback Watch asked for %q, want 1403:5:4", got)
+	}
+	if !equalStrings(*asked, []string{"Episode"}) {
+		t.Fatalf("prompts = %v, want [Episode]", *asked)
+	}
+}
+
+// TestSeasonMissingFromAPartialListRefusesEpisodeZeroWhereNobodyCanBeAsked checks that without a terminal the same request is refused with the typed error and no provider is asked for episode 0.
+func TestSeasonMissingFromAPartialListRefusesEpisodeZeroWhereNobodyCanBeAsked(t *testing.T) {
+	hostileEnv(t)
+	playStreamHarness(t, &stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}})
+	fb := &recordingStreamProvider{result: partialSeasonsSelection, url: stubStreamServer(t)}
+	withFallbackChain(t, fb)
+	withTTY(t, false, false)
+	asked := withAnswers(t, map[string][]string{"Episode": {"4"}})
+
+	err := resolveAndPlay(partialSeasonsPrimary(), partialSeasonsSelection, 5, 0)
+	if !errors.Is(err, resolver.ErrSeasonEpisodeRequired) {
+		t.Fatalf("err = %v, want ErrSeasonEpisodeRequired", err)
+	}
+	if fb.watchCallCnt != 0 || len(*asked) != 0 {
+		t.Fatalf("watch calls %d (episode %q), prompts %v; want none", fb.watchCallCnt, fb.episodeAsked(), *asked)
 	}
 }
