@@ -190,6 +190,15 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 		}
 	}
 
+	if _, ok := primary.(*provider.Vidrock); !ok {
+		v := provider.NewVidrock()
+		v.SetLogger(debugf)
+		if cfg != nil {
+			v.SetAudioLanguage(cfg.AudioLanguage)
+		}
+		fallbacks = append(fallbacks, v)
+	}
+
 	// YTS and 1337x, only when torrent_fallback is set; they race in the torrent tier.
 	//
 	// Be precise about what that setting does and does not decide. It is NOT
@@ -232,12 +241,16 @@ func tryFallbackStream(primary provider.Provider, content media.SearchResult, se
 }
 
 // streamChain is the fallback chain for resolving an episode's stream. A
-// primary without a Watch (FlixHQWS) is never asked for the stream by its
+// primary that cannot enumerate seasons (Vidrock) rejoins first, since the
+// user named it. A primary without a Watch (FlixHQWS) is never asked for the stream by its
 // caller, and fallbackProviders leaves it out of its own chain, so the one
 // source that listed the show would go unasked: it rejoins here, ahead of the
 // anime and torrent sources as in fallbackProviders' own order.
 func streamChain(primary provider.Provider) []provider.Provider {
 	chain := agentFallbackProviders(primary)
+	if _, ok := primary.(*provider.Vidrock); ok {
+		return append([]provider.Provider{primary}, chain...)
+	}
 	if _, ok := primary.(*provider.FlixHQWS); !ok {
 		return chain
 	}
@@ -347,22 +360,40 @@ func tryFallbackStreamAccepting(providers []provider.Provider, content media.Sea
 	ctx, cancel := context.WithTimeout(context.Background(), fallbackBudget)
 	defer cancel()
 
+	var failure *resolveFailure
+	var lastErr error
+	for _, tier := range streamTiers(providers) {
+		stream, err := resolveTier(ctx, tier, req, failure)
+		if err == nil || ctx.Err() != nil {
+			return stream, err
+		}
+		// A request the resolver refuses is the caller's mistake, not a provider
+		// failure; the later tiers would refuse it too and bury the reason.
+		if errors.Is(err, resolver.ErrSeasonEpisodeRequired) {
+			return nil, err
+		}
+		lastErr = err
+		errors.As(err, &failure)
+	}
+	return nil, lastErr
+}
+
+// streamTiers orders a chain into the sets that are raced one after another:
+// a Vidrock the user named alone, then the streaming providers, then the
+// torrent providers, so a magnet never beats a scraper still being checked.
+func streamTiers(providers []provider.Provider) [][]provider.Provider {
+	var tiers [][]provider.Provider
+	if len(providers) > 1 {
+		if _, ok := providers[0].(*provider.Vidrock); ok {
+			tiers = append(tiers, providers[:1])
+			providers = providers[1:]
+		}
+	}
 	plain, magnets := withoutMagnetSources(providers), onlyMagnetSources(providers)
 	if len(plain) == 0 || len(magnets) == 0 {
-		return resolveTier(ctx, providers, req, nil)
+		return append(tiers, providers)
 	}
-	stream, err := resolveTier(ctx, plain, req, nil)
-	if err == nil || ctx.Err() != nil {
-		return stream, err
-	}
-	// A request the resolver refuses is the caller's mistake, not a provider
-	// failure; the torrent tier would refuse it too and bury the reason.
-	if errors.Is(err, resolver.ErrSeasonEpisodeRequired) {
-		return nil, err
-	}
-	var first *resolveFailure
-	errors.As(err, &first)
-	return resolveTier(ctx, magnets, req, first)
+	return append(tiers, plain, magnets)
 }
 
 // resolveTier races providers for req. A failure is wrapped in a resolveFailure, which carries earlier's attempts too when a previous tier failed.

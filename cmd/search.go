@@ -454,6 +454,10 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				)
 				if !ok && alt.partial {
 					debugf("season %d is absent from a partial season list; trying the fallback chain by number", season)
+					var askErr error
+					if season, episode, askErr = askSeasonEpisode(chainPrimary, selected, season, episode); askErr != nil {
+						return askErr
+					}
 					fbStream, fbErr := tryFallbackStream(chainPrimary, selected, season, episode)
 					if fbErr != nil {
 						return fbErr
