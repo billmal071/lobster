@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -315,31 +316,31 @@ func TestProbeSeasonsPrefersACandidateListingTheWantedSeasons(t *testing.T) {
 		name       string
 		p          *scriptedLookup
 		wants      []int
-		wantID     string
+		wantIDs    []string
 		wantFailed bool
 		wantCalls  int
 	}{
-		{"a later candidate lists the wanted season", scripted(showResults("a", "b"), short, full), []int{4}, "b", false, 2},
-		{"no candidate lists it: the first listed is kept", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(1, 2, 3)}), []int{4}, "a", false, 2},
-		{"a later lookup that fails keeps the first listed and the failure", scripted(showResults("a", "b"), short, seasonOutcome{err: errBoom}), []int{4}, "a", true, 2},
-		{"a later candidate with no seasons keeps the first listed", scripted(showResults("a", "b"), short, seasonOutcome{}), []int{4}, "a", false, 2},
-		{"a later candidate that does not carry the show keeps the first listed", scripted(showResults("a", "b"), short, seasonOutcome{err: provider.ErrNotCarried}), []int{4}, "a", false, 2},
-		{"the first listed already has it: later candidates are not probed", scripted(showResults("a", "b"), short, full), []int{2}, "a", false, 1},
-		{"no wanted season takes the first listed", scripted(showResults("a", "b"), short, full), nil, "a", false, 1},
-		{"an unspecified season takes the first listed", scripted(showResults("a", "b"), short, full), []int{seasonUnspecified}, "a", false, 1},
-		{"every wanted season must be listed", scripted(showResults("a", "b", "c"), short, seasonOutcome{seasons: seasonsOf(4)}, full), []int{1, 4}, "c", false, 3},
-		{"a duplicated wanted season", scripted(showResults("a", "b"), short, full), []int{4, 4}, "b", false, 2},
-		{"season 0 is a season", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(0, 1)}), []int{0}, "b", false, 2},
-		{"a gapped later list that has it", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(4), err: gapErr()}), []int{4}, "b", false, 2},
-		{"a later list cut short that lacks it leaves the scan unsure", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(1), err: fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList)}), []int{4}, "a", true, 2},
-		{"a later gapped list that lacks it is an answer", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(1), err: gapErr()}), []int{4}, "a", false, 2},
-		{"a failure ahead of both is kept", scripted(showResults("z", "a", "b"), seasonOutcome{err: errBoom}, short, full), []int{4}, "b", true, 3},
+		{"a later candidate lists the wanted season", scripted(showResults("a", "b"), short, full), []int{4}, []string{"b", "a"}, false, 2},
+		{"no candidate lists it: the first listed is kept", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(1, 2, 3)}), []int{4}, []string{"a"}, false, 2},
+		{"a later lookup that fails keeps the first listed and the failure", scripted(showResults("a", "b"), short, seasonOutcome{err: errBoom}), []int{4}, []string{"a"}, true, 2},
+		{"a later candidate with no seasons keeps the first listed", scripted(showResults("a", "b"), short, seasonOutcome{}), []int{4}, []string{"a"}, false, 2},
+		{"a later candidate that does not carry the show keeps the first listed", scripted(showResults("a", "b"), short, seasonOutcome{err: provider.ErrNotCarried}), []int{4}, []string{"a"}, false, 2},
+		{"the first listed already has it: later candidates are not probed", scripted(showResults("a", "b"), short, full), []int{2}, []string{"a"}, false, 1},
+		{"no wanted season takes the first listed", scripted(showResults("a", "b"), short, full), nil, []string{"a"}, false, 1},
+		{"an unspecified season takes the first listed", scripted(showResults("a", "b"), short, full), []int{seasonUnspecified}, []string{"a"}, false, 1},
+		{"every wanted season must be listed", scripted(showResults("a", "b", "c"), short, seasonOutcome{seasons: seasonsOf(4)}, full), []int{1, 4}, []string{"c", "a", "b"}, false, 3},
+		{"a duplicated wanted season", scripted(showResults("a", "b"), short, full), []int{4, 4}, []string{"b", "a"}, false, 2},
+		{"season 0 is a season", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(0, 1)}), []int{0}, []string{"b", "a"}, false, 2},
+		{"a gapped later list that has it", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(4), err: gapErr()}), []int{4}, []string{"b", "a"}, false, 2},
+		{"a later list cut short that lacks it leaves the scan unsure", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(1), err: fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList)}), []int{4}, []string{"a", "b"}, true, 2},
+		{"a later gapped list that lacks it is an answer", scripted(showResults("a", "b"), short, seasonOutcome{seasons: seasonsOf(1), err: gapErr()}), []int{4}, []string{"a"}, false, 2},
+		{"a failure ahead of both is kept", scripted(showResults("z", "a", "b"), seasonOutcome{err: errBoom}, short, full), []int{4}, []string{"b", "a"}, true, 3},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			hits, failed := probeSeasons(context.Background(), c.p, req, c.wants)
-			if len(hits) != 1 || hits[0].id != c.wantID {
-				t.Fatalf("hits = %v, want only candidate %q", hitIDs(hits), c.wantID)
+			if got := hitIDs(hits); !reflect.DeepEqual(got, c.wantIDs) {
+				t.Fatalf("hits = %v, want %v", got, c.wantIDs)
 			}
 			if failed != c.wantFailed {
 				t.Errorf("failed = %v, want %v", failed, c.wantFailed)
