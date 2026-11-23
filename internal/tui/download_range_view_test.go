@@ -39,7 +39,7 @@ func TestRangeViewShowsConsecutiveEpisodesOfAPartialListAsARange(t *testing.T) {
 	if got := lipgloss.Height(view); got > 24 {
 		t.Fatalf("view is %d lines in a 24-line terminal, so its top is cut off:\n%s", got, view)
 	}
-	if text := unwrapped(view); !strings.Contains(text, "Partial list, only these exist: 2-201 ") {
+	if text := unwrapped(view); !strings.Contains(text, "Partial list, standalone releases: 2-201 ") {
 		t.Errorf("view does not sum up episodes 2 to 201 as one range:\n%s", view)
 	}
 }
@@ -50,7 +50,7 @@ func TestRangeViewKeepsALongPartialListWithinTheTerminal(t *testing.T) {
 		t.Fatalf("view is %d lines in a 24-line terminal, so the warning scrolls off the top:\n%s", got, view)
 	}
 	text := unwrapped(view)
-	if !strings.Contains(text, "Partial list, only these exist: 2, 4, 6, ") {
+	if !strings.Contains(text, "Partial list, standalone releases: 2, 4, 6, ") {
 		t.Errorf("view lost the warning or the first episode numbers:\n%s", view)
 	}
 	if !strings.Contains(text, " more ") || strings.Contains(text, "400") {
@@ -80,13 +80,13 @@ func TestPartialListLabel(t *testing.T) {
 		rows     int
 		want     string
 	}{
-		{"isolated numbers stay a plain list", episodesNumbered(2, 5), 3, "Partial list, only these exist: 2, 5"},
-		{"consecutive numbers become a range", episodesNumbered(1, 2, 3, 5, 8, 9), 3, "Partial list, only these exist: 1-3,\n5, 8-9"},
-		{"unsorted and repeated numbers are ordered and counted once", episodesNumbered(5, 3, 2, 3, 5), 3, "Partial list, only these exist: 2-3,\n5"},
-		{"what does not fit is counted, not listed", episodesNumbered(1, 3, 5, 6, 7, 9, 11, 13, 15, 17, 19, 21, 30, 31), 2, "Partial list, only these exist: 1,\n3, 5-7, 9, 11, 13, 15, 17 and 4 more"},
-		{"no room at all still names the first episode", episodesNumbered(4, 6, 8), 0, "Partial list, only these exist: 4\nand 2 more"},
-		{"an empty list is only the warning", nil, 3, "Partial list, only these exist:"},
-		{"an empty list with no room is still only the warning", nil, 0, "Partial list, only these exist:"},
+		{"isolated numbers stay a plain list", episodesNumbered(2, 5), 3, "Partial list, standalone releases:\n2, 5"},
+		{"consecutive numbers become a range", episodesNumbered(1, 2, 3, 5, 8, 9), 3, "Partial list, standalone releases:\n1-3, 5, 8-9"},
+		{"unsorted and repeated numbers are ordered and counted once", episodesNumbered(5, 3, 2, 3, 5), 3, "Partial list, standalone releases:\n2-3, 5"},
+		{"what does not fit is counted, not listed", episodesNumbered(1, 3, 5, 6, 7, 9, 11, 13, 15, 17, 19, 21, 30, 31), 2, "Partial list, standalone releases:\n1, 3, 5-7, 9, 11, 13, 15 and 5 more"},
+		{"no room at all still names the first episode", episodesNumbered(4, 6, 8), 0, "Partial list, standalone releases: 4\nand 2 more"},
+		{"an empty list is only the warning", nil, 3, "Partial list, standalone releases:"},
+		{"an empty list with no room is still only the warning", nil, 0, "Partial list, standalone releases:"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -102,7 +102,25 @@ func TestRangeViewFitsANarrowTerminalWhoseFooterWraps(t *testing.T) {
 	if got := lipgloss.Height(view); got > 16 {
 		t.Fatalf("view is %d lines in a 16-line terminal:\n%s", got, view)
 	}
-	if text := unwrapped(view); !strings.Contains(text, "Partial list, only these exist: 2, 4, ") || !strings.Contains(text, " more ") {
+	if text := unwrapped(view); !strings.Contains(text, "Partial list, standalone releases: 2, 4, ") || !strings.Contains(text, " more ") {
 		t.Errorf("view lost the warning, the first episode numbers or the count left out:\n%s", view)
+	}
+}
+
+func TestModePickerKeepsALongPartialListWithinTheTerminal(t *testing.T) {
+	eps := make([]media.Episode, 0, 200)
+	for _, n := range numbersFrom(2, 400, 2) {
+		eps = append(eps, media.Episode{Number: n})
+	}
+	d := newDownloadDialog()
+	d.active = true
+	d.seasons = []media.Season{{ID: "1", Number: 1}}
+	d.Update(dlEpisodesMsg{episodes: eps, partial: true})
+	view := d.View(80, 24)
+	if got := lipgloss.Height(view); got > 24 {
+		t.Fatalf("view is %d lines in a 24-line terminal, so the mode entries scroll off:\n%s", got, view)
+	}
+	if text := unwrapped(view); !strings.Contains(text, "Partial list, standalone releases: 2, 4, ") || !strings.Contains(text, " more ") || !strings.Contains(text, "Download all episodes") {
+		t.Errorf("view lost the notice, the count left out or the mode entries:\n%s", view)
 	}
 }

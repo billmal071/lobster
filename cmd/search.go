@@ -334,7 +334,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 			case gapShort:
 				warnf("%s could not list every season of %q, so the season list may be short: %v", providerLabel(p), title, err)
 			case gapCatalogue:
-				warnf("%s has no release for some seasons of %q: %v", providerLabel(p), title, err)
+				warnf("%s has no standalone release for some seasons of %q: %v", providerLabel(p), title, err)
 			}
 			err = nil
 		}

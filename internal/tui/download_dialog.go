@@ -483,14 +483,20 @@ func (d *downloadDialog) View(width, height int) string {
 		if d.seasonCursor < len(d.seasons) {
 			lines = append(lines, labelStyle.Render(fmt.Sprintf("Season %d - %d episodes", d.seasons[d.seasonCursor].Number, len(d.episodes))))
 		}
-		lines = append(lines, "")
+		var modes []string
 		for i, label := range modeLabels {
 			if i == d.modeCursor {
-				lines = append(lines, selectedStyle.Render("> "+label))
+				modes = append(modes, selectedStyle.Render("> "+label))
 			} else {
-				lines = append(lines, normalStyle.Render("  "+label))
+				modes = append(modes, normalStyle.Render("  "+label))
 			}
 		}
+		if d.partial {
+			rows := height - lipgloss.Height(frame(strings.Join(append(append(lines, ""), modes...), "\n")))
+			lines = append(lines, labelStyle.Render(partialListLabel(d.episodes, boxWidth-boxStyle.GetHorizontalPadding(), rows)))
+		}
+		lines = append(lines, "")
+		lines = append(lines, modes...)
 		content = strings.Join(lines, "\n")
 
 	case dlStepPickEpisode:
@@ -554,7 +560,7 @@ func (d *downloadDialog) View(width, height int) string {
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, frame(content))
 }
 
-const partialListPrefix = "Partial list, only these exist:"
+const partialListPrefix = "Partial list, standalone releases:"
 
 // partialListLabel names the episodes of a list with gaps as ranges ("2-4, 7")
 // on lines of at most width, leaving out trailing ranges to stay within rows lines.

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"lobster/internal/media"
+	"lobster/internal/player"
 	"lobster/internal/provider"
 )
 
@@ -30,7 +31,53 @@ func TestBatchListsASeasonWithGaps(t *testing.T) {
 	}
 }
 
-func TestValidateKeepsTheOldRefusalForAnEpisodeEZTVLacks(t *testing.T) {
+func TestBatchListerWarnsWhenASeasonListHasGaps(t *testing.T) {
+	hostileEnv(t)
+	warnings := captureWarnings(t)
+	primary := &stubProvider{
+		seasons:         []media.Season{{ID: "5", Number: 5}},
+		episodesWithErr: []media.Episode{{ID: "5x1", Number: 1}, {ID: "5x5", Number: 5}},
+		episodesErr:     gapErr(),
+	}
+	l := newSeasonLister(primary, media.SearchResult{ID: "eztv/1", Title: "Show", Type: media.TV})
+	if _, err := l.episodes(media.Season{ID: "5", Number: 5}); err != nil {
+		t.Fatalf("episodes: %v", err)
+	}
+	if len(*warnings) != 1 || !strings.Contains((*warnings)[0], "no standalone release for some episodes of season 5") {
+		t.Fatalf("warnings = %q, want one saying season 5 lacks standalone releases for some episodes", *warnings)
+	}
+}
+
+func TestBatchListerWarnsWhenAFallbackSeasonListHasGaps(t *testing.T) {
+	hostileEnv(t)
+	warnings := captureWarnings(t)
+	fb := scripted(showResults("a"), seasonOutcome{seasons: seasonsOf(2)})
+	fb.stubProvider.episodesWithErr = []media.Episode{{ID: "e1", Number: 1}, {ID: "e5", Number: 5}}
+	fb.stubProvider.episodesErr = gapErr()
+	chainOf(t, fb)
+	l := newSeasonLister(&stubProvider{episodesErr: errBoom}, media.SearchResult{ID: "x/1", Title: "Show", Type: media.TV}, seasonsOf(2)...)
+	if eps, err := l.episodes(media.Season{ID: "2", Number: 2}); err != nil || len(eps) != 2 {
+		t.Fatalf("episodes = %d, err = %v; want the fallback's 2 listed episodes", len(eps), err)
+	}
+	if len(*warnings) != 1 || !strings.Contains((*warnings)[0], "no standalone release for some episodes of season 2") {
+		t.Fatalf("warnings = %q, want one saying the fallback's season 2 lacks standalone releases for some episodes", *warnings)
+	}
+}
+
+func TestBatchListerDoesNotWarnForACompleteList(t *testing.T) {
+	hostileEnv(t)
+	warnings := captureWarnings(t)
+	primary := &stubProvider{seasons: []media.Season{{ID: "5", Number: 5}}, episodes: []media.Episode{{ID: "5x1", Number: 1}}}
+	l := newSeasonLister(primary, media.SearchResult{ID: "eztv/1", Title: "Show", Type: media.TV})
+	if _, err := l.episodes(media.Season{ID: "5", Number: 5}); err != nil {
+		t.Fatalf("episodes: %v", err)
+	}
+	if len(*warnings) != 0 {
+		t.Fatalf("warnings = %q, want none for a complete list", *warnings)
+	}
+}
+
+func TestValidateDefersAnEpisodeMissingFromAGappedList(t *testing.T) {
 	hostileEnv(t)
 	captureAgentOut(t)
 	primary := &stubProvider{
@@ -38,11 +85,45 @@ func TestValidateKeepsTheOldRefusalForAnEpisodeEZTVLacks(t *testing.T) {
 		episodesWithErr: []media.Episode{{ID: "5x1", Number: 1}, {ID: "5x5", Number: 5}},
 		episodesErr:     gapErr(),
 	}
-	err := validateSeasonEpisode(primary, playRef{ID: "eztv/1", Title: "South Park", Type: "tv"}, 5, 4)
+	if err := validateSeasonEpisode(primary, playRef{ID: "eztv/1", Title: "South Park", Type: "tv"}, 5, 4); err != nil {
+		t.Fatalf("err = %v, want nil: a season pack or another source may still hold episode 4, so the resolver is asked", err)
+	}
+}
+
+func TestValidateStillRefusesAnEpisodeMissingFromACompleteList(t *testing.T) {
+	hostileEnv(t)
+	captureAgentOut(t)
+	primary := &stubProvider{
+		seasons:  []media.Season{{ID: "5", Number: 5}},
+		episodes: []media.Episode{{ID: "5x1", Number: 1}, {ID: "5x5", Number: 5}},
+	}
+	err := validateSeasonEpisode(primary, playRef{ID: "x/1", Title: "South Park", Type: "tv"}, 5, 4)
 	var ee *exitError
 	if !errors.As(err, &ee) || ee.code != exitNoResults {
-		t.Fatalf("err = %v, want exit %d (no_results) for an episode missing from a list of what EZTV carries", err, exitNoResults)
+		t.Fatalf("err = %v, want exit %d (no_results) for an episode missing from a complete list", err, exitNoResults)
 	}
+}
+
+func TestResolveAndPlayWarnsThatAGappedSeasonListLacksOnlyStandaloneReleases(t *testing.T) {
+	hostileEnv(t)
+	warnings := captureWarnings(t)
+	playStreamHarness(t, &stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}})
+	withFallbackChain(t)
+	primary := &stubProvider{
+		seasons:    seasonsOf(1, 3),
+		seasonsErr: fmt.Errorf("%w: %w: eztv carries only some seasons; season 2 is not on EZTV", provider.ErrIncompleteEpisodeList, provider.ErrNotCarried),
+		episodes:   []media.Episode{{ID: "1x1", Number: 1}},
+	}
+	_ = resolveAndPlay(primary, media.SearchResult{ID: "eztv/1", Title: "Show", Type: media.TV}, 1, 1)
+	for _, w := range *warnings {
+		if strings.Contains(w, "some seasons") {
+			if !strings.Contains(w, "has no standalone release for some seasons") {
+				t.Fatalf("warning = %q, want it to claim no standalone release: a season pack may still hold a season", w)
+			}
+			return
+		}
+	}
+	t.Fatalf("warnings = %q, want one about the seasons EZTV lacks", *warnings)
 }
 
 func TestValidateDefersWhenThePartialListMayHideTheEpisode(t *testing.T) {
@@ -138,22 +219,6 @@ func TestEpisodesGapWordingIsNotTheEnumerationShortfall(t *testing.T) {
 	}
 	if strings.Contains(w[0].Message, "all it carries") || !strings.Contains(w[0].Message, "the 2 episodes above are the ones it has standalone releases for") {
 		t.Errorf("message = %q, want the listed count qualified as standalone releases: a season pack may hold the rest", w[0].Message)
-	}
-}
-
-func TestValidateNamesTheSourceWhenAGappedListLacksTheEpisode(t *testing.T) {
-	hostileEnv(t)
-	buf := captureAgentOut(t)
-	primary := &stubProvider{
-		seasons:         []media.Season{{ID: "5", Number: 5}},
-		episodesWithErr: []media.Episode{{ID: "5x1", Number: 1}, {ID: "5x5", Number: 5}},
-		episodesErr:     gapErr(),
-	}
-	withStubProviderBase(t, primary, "eztv")
-	_ = validateSeasonEpisode(primary, playRef{ID: "eztv/1", Title: "South Park", Type: "tv"}, 5, 4)
-	out := buf.String()
-	if !strings.Contains(out, "EZTV has no standalone release for episode 4 of season 5") || strings.Contains(out, "has no episode") {
-		t.Errorf("output = %s, want it to say EZTV has no standalone release for the episode, not that the show has none", out)
 	}
 }
 

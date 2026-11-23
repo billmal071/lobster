@@ -62,7 +62,31 @@ func TestRangeViewDisclosesAPartialList(t *testing.T) {
 		t.Errorf("view presents a contiguous 1-5 range for a list with gaps:\n%s", view)
 	}
 	if !strings.Contains(view, "Partial list") || !strings.Contains(view, "2, 5") {
-		t.Errorf("view does not say the list is partial and which episodes exist:\n%s", view)
+		t.Errorf("view does not say the list is partial and which episodes have standalone releases:\n%s", view)
+	}
+}
+
+func TestModePickerDisclosesAPartialList(t *testing.T) {
+	d := newDownloadDialog()
+	d.active = true
+	d.seasons = []media.Season{{ID: "2", Number: 2}}
+	d.Update(dlEpisodesMsg{episodes: []media.Episode{{ID: "2x2", Number: 2}, {ID: "2x5", Number: 5}}, partial: true})
+	if d.step != dlStepPickMode {
+		t.Fatalf("step = %v, want the mode picker", d.step)
+	}
+	view := d.View(120, 40)
+	if !strings.Contains(view, "Partial list") || !strings.Contains(view, "2, 5") {
+		t.Errorf("mode picker does not say the list is partial before \"Download all episodes\":\n%s", view)
+	}
+}
+
+func TestModePickerOfACompleteListSaysNothingAboutGaps(t *testing.T) {
+	d := newDownloadDialog()
+	d.active = true
+	d.seasons = []media.Season{{ID: "1", Number: 1}}
+	d.Update(dlEpisodesMsg{episodes: []media.Episode{{ID: "1x1", Number: 1}, {ID: "1x2", Number: 2}}})
+	if view := d.View(120, 40); strings.Contains(view, "Partial list") {
+		t.Errorf("mode picker flags a complete list as partial:\n%s", view)
 	}
 }
 

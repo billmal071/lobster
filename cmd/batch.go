@@ -447,6 +447,7 @@ func (l *seasonLister) forgetScan(unlisted []media.Season) {
 func (l *seasonLister) episodes(season media.Season) ([]media.Episode, error) {
 	episodes, err := l.primary.GetEpisodes(l.selected.ID, season.ID)
 	if len(episodes) > 0 && (err == nil || provider.ListedWithCatalogueGap(len(episodes), err)) {
+		warnShortList(shortfallFor(err), l.primary, season.Number, l.selected.Title)
 		return episodes, nil
 	}
 	if season.Number < 0 {
@@ -459,6 +460,7 @@ func (l *seasonLister) episodes(season media.Season) ([]media.Episode, error) {
 	a, refusal := confirmedEpisodeList(l.hits, l.scanFailed, season.Number, l.selected.Title)
 	if a != nil {
 		debugf("batch: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), season.Number)
+		warnShortList(a.shortfall, a.hit.provider, season.Number, l.selected.Title)
 		return a.episodes, nil
 	}
 	if err == nil {
