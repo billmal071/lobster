@@ -475,9 +475,10 @@ var episodesFallbackTimeout = multiSearchTimeout
 // pass. Documented in GUIDE.md's "Content sources" section so the failure is
 // at least findable.
 //
-// The re-search is by title, ranked by resolver.Candidates so the ref's
-// ID/Title/Year all count — the reason a ref carries more than an ID — and then
-// admitted only if resolver.SameWork says the candidate is the same work.
+// The re-search is by title, admitted only if resolver.SameWork says the
+// candidate is the same work, and then ranked and capped by
+// resolver.Candidates so the ref's ID/Title/Year all count — the reason a ref
+// carries more than an ID.
 // Ranking alone is not a gate: candidatesFor applies no score threshold, so
 // without SameWork the first fallback that returns any seasons for any show
 // wins, and the envelope echoes the ref's own title over it. The caller could
@@ -787,11 +788,15 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 		debugf("episodes: fallback %T search failed: %v", p, err)
 		return nil
 	}
-	for _, c := range resolver.Candidates(results, req) {
+	admitted := make([]media.SearchResult, 0, len(results))
+	for _, c := range results {
 		if !resolver.SameWork(c, req) {
 			debugf("episodes: fallback %T offered %q (%s), which is not %q (%s)", p, c.Title, c.Year, req.Title, req.Year)
 			continue
 		}
+		admitted = append(admitted, c)
+	}
+	for _, c := range resolver.Candidates(admitted, req) {
 		seasons, err := seasonsWithContext(ctx, p, c.ID)
 		partial := err != nil && len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList)
 		if (err != nil && !partial) || len(seasons) == 0 {
