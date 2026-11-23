@@ -148,6 +148,9 @@ func (m *MPV) Play(stream *media.Stream, title string, startPos float64, subFile
 		if exitErr, ok := waitErr.(*exec.ExitError); ok && exitErr.ExitCode() == 4 {
 			return result, nil
 		}
+		if !everProgressed.Load() {
+			result.PositionUnknown = true
+		}
 		return result, fmt.Errorf("mpv exited: %w", waitErr)
 	}
 

@@ -1007,7 +1007,7 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	// recorded, keeping whatever position history already holds. A tracked
 	// player that was never heard from says nothing about whether playback
 	// happened at all, so it writes nothing — even on a clean exit.
-	if cfg.History && (playErr == nil || result.Position > 0) &&
+	if cfg.History && (playErr == nil || !result.PositionUnknown) &&
 		(!result.PositionUnknown || result.PositionUntracked) {
 		entry := media.HistoryEntry{
 			ID:       selected.ID,
