@@ -329,6 +329,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		look := lookupPrimarySeasons(p, selected.ID)
 		stopSeasons()
 		seasons, err := look.seasons, look.err
+		seasonsPartial := look.kind == lookupListed && look.gap == gapShort
 		if look.kind == lookupListed {
 			switch look.gap {
 			case gapShort:
@@ -455,7 +456,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				}
 				alt, altSeasons, altSel := res.answer, res.answer.seasons, res.season
 				debugf("season %d recovered from %T", altSel.Number, alt.provider)
-				p, providerID, seasons = alt.provider, alt.id, altSeasons
+				p, providerID, seasons, seasonsPartial = alt.provider, alt.id, altSeasons, alt.gap == gapShort
 				// The season came out of this very list, so the lookup cannot
 				// miss; clamp anyway rather than index with -1.
 				if seasonIdx = seasonIndex(seasons, altSel.Number); seasonIdx < 0 {
@@ -587,6 +588,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				p = answer.hit.provider
 				providerID = answer.hit.id
 				seasons = answer.hit.seasons
+				seasonsPartial = answer.hit.gap == gapShort
 				// The season came out of this very list, so the lookup
 				// cannot miss; clamp anyway rather than index with -1.
 				if seasonIdx = seasonIndex(seasons, answer.season.Number); seasonIdx < 0 {
@@ -735,7 +737,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		debugf("episode: %d (ID: %s)", selectedEpisode.Number, selectedEpisode.ID)
 
 		// Create a playlist session for continuous playback
-		sess := playlist.NewWithProviderID(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx)
+		sess := newPlaybackSession(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx, listShortfall.mayBeTruncated(), seasonsPartial)
 		cachedServerName = ""
 		return runPlaybackLoop(sess)
 	}
@@ -1022,7 +1024,7 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	// recorded, keeping whatever position history already holds. A tracked
 	// player that was never heard from says nothing about whether playback
 	// happened at all, so it writes nothing — even on a clean exit.
-	if cfg.History && (playErr == nil || result.Position > 0) &&
+	if cfg.History && (playErr == nil || !result.PositionUnknown) &&
 		(!result.PositionUnknown || result.PositionUntracked) {
 		entry := media.HistoryEntry{
 			ID:       selected.ID,
@@ -1330,4 +1332,15 @@ func warnShortList(sf episodeShortfall, p provider.Provider, season int, title s
 		warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",
 			providerLabel(p), season, title, sf.reason)
 	}
+}
+
+func newPlaybackSession(p provider.Provider, selected media.SearchResult, providerID string, chainPrimary provider.Provider,
+	seasons []media.Season, episodes []media.Episode, seasonIdx, episodeIdx int, episodesPartial, seasonsPartial bool) *playlist.Session {
+	sess := playlist.NewWithProviderID(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx)
+	sess.EpisodesPartial = episodesPartial
+	sess.SeasonsPartial = seasonsPartial
+	sess.OnPartialSeason = func(season media.Season, err error) {
+		warnShortList(shortfallFor(err), sess.Provider, season.Number, selected.Title)
+	}
+	return sess
 }

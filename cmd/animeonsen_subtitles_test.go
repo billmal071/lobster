@@ -140,6 +140,39 @@ func TestResolveAndPlayKeepsAnEpisodeListTheProviderFlaggedAsShort(t *testing.T)
 	if !containsSubstring(*warnings, "as far as") {
 		t.Fatalf("warnings = %v; the warning must carry the provider's own reason", *warnings)
 	}
+	if !containsSubstring(*warnings, "stopping after its last measured episode") {
+		t.Fatalf("warnings = %v; a session built on a flagged list must say playback stopped at its end", *warnings)
+	}
+}
+
+func TestResolveAndPlayOnAFallbackFlaggedListStopsAtItsEnd(t *testing.T) {
+	hostileEnv(t)
+	playStreamHarness(t, &stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}})
+	flagNoSubs = true
+
+	sel := media.SearchResult{ID: "1403", Title: "Some Show", Type: media.TV}
+	fb := &shortListStreamProvider{stubProvider: &stubProvider{
+		results:         []media.SearchResult{sel},
+		seasons:         []media.Season{{ID: "1403", Number: 1}},
+		episodesWithErr: flaggedEpisodes(12),
+		episodesErr:     errFlaggedShortList,
+	}}
+	withFallbackChain(t, fb)
+	warnings := captureWarnings(t)
+
+	primary := &stubProvider{
+		seasons:     []media.Season{{ID: "p1", Number: 1}},
+		episodesErr: errors.New("no episode listing"),
+	}
+	if err := resolveAndPlay(primary, sel, 1, 12); err != nil {
+		t.Fatalf("resolveAndPlay = %v", err)
+	}
+	if !containsSubstring(*warnings, "may be short") {
+		t.Fatalf("warnings = %v; a fallback's flagged list must be reported as possibly short", *warnings)
+	}
+	if !containsSubstring(*warnings, "stopping after its last measured episode") {
+		t.Fatalf("warnings = %v; playback on a fallback's flagged list must stop at its end with a message", *warnings)
+	}
 }
 
 // The other half of the same rule: a flagged list is not evidence about what

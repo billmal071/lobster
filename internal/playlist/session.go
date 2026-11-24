@@ -45,6 +45,10 @@ type Session struct {
 	// reading this directly.
 	ChainPrimary provider.Provider
 
+	OnPartialSeason func(season media.Season, err error)
+	EpisodesPartial bool
+	SeasonsPartial  bool
+
 	Seasons      []media.Season
 	Episodes     []media.Episode // episodes for current season
 	SeasonIdx    int
@@ -61,7 +65,6 @@ type Session struct {
 	// watch is real but LastPosition is meaningless. The episode is recorded,
 	// keeping whatever position history already holds for it.
 	LastPositionUntracked bool
-	CrossingGap           error
 }
 
 // New creates a Session positioned at the given season and episode, whose
@@ -139,10 +142,24 @@ func (s *Session) Title() string {
 
 // HasNext returns true if there is a next episode in this season or a next season.
 func (s *Session) HasNext() bool {
-	if s.EpisodeIdx < len(s.Episodes)-1 {
+	if s.hasNextInSeason() {
 		return true
 	}
-	return s.SeasonIdx < len(s.Seasons)-1
+	return !s.EpisodesPartial && s.hasNextSeason()
+}
+
+func (s *Session) hasNextSeason() bool {
+	if s.SeasonIdx >= len(s.Seasons)-1 {
+		return false
+	}
+	return !s.SeasonsPartial || s.Seasons[s.SeasonIdx+1].Number == s.CurrentSeason().Number+1
+}
+
+func (s *Session) hasNextInSeason() bool {
+	if s.EpisodeIdx >= len(s.Episodes)-1 {
+		return false
+	}
+	return !s.EpisodesPartial || s.Episodes[s.EpisodeIdx+1].Number == s.Current().Number+1
 }
 
 // HasPrevious returns true if there is a previous episode in this season or a previous season.
@@ -157,10 +174,13 @@ func (s *Session) HasPrevious() bool {
 // next season's episodes from the provider. Returns an error if already at
 // the last episode of the last season.
 func (s *Session) Next() (media.Episode, error) {
-	s.CrossingGap = nil
-	if s.EpisodeIdx < len(s.Episodes)-1 {
+	if s.hasNextInSeason() {
 		s.EpisodeIdx++
 		return s.Current(), nil
+	}
+
+	if s.EpisodesPartial || (s.SeasonsPartial && !s.hasNextSeason()) {
+		return media.Episode{}, s.IncompleteListError()
 	}
 
 	if s.SeasonIdx >= len(s.Seasons)-1 {
@@ -171,7 +191,7 @@ func (s *Session) Next() (media.Episode, error) {
 	s.SeasonIdx++
 	nextSeason := s.Seasons[s.SeasonIdx]
 	episodes, err := s.Provider.GetEpisodes(s.ProviderKey(), nextSeason.ID)
-	if err != nil && !isShortList(episodes, err) {
+	if err != nil && !provider.PartialEpisodeList(episodes, err) {
 		s.SeasonIdx-- // rollback
 		return media.Episode{}, fmt.Errorf("loading season %d episodes: %w", nextSeason.Number, err)
 	}
@@ -180,20 +200,38 @@ func (s *Session) Next() (media.Episode, error) {
 		return media.Episode{}, fmt.Errorf("season %d has no episodes", nextSeason.Number)
 	}
 
+	gapped := provider.ListedWithCatalogueGap(len(episodes), err)
+	if err != nil && !gapped && episodes[0].Number != 1 {
+		s.SeasonIdx--
+		return media.Episode{}, fmt.Errorf("season %d episode list starts at episode %d, not 1: %w", nextSeason.Number, episodes[0].Number, err)
+	}
+
+	if err != nil && s.OnPartialSeason != nil {
+		s.OnPartialSeason(nextSeason, err)
+	}
+
 	s.Episodes = episodes
 	s.EpisodeIdx = 0
-	s.CrossingGap = err
+	s.EpisodesPartial = err != nil && !gapped
 	return s.Current(), nil
 }
 
-func isShortList(episodes []media.Episode, err error) bool {
-	return provider.ListedWithCatalogueGap(len(episodes), err)
+func (s *Session) IncompleteListError() error {
+	if s.SeasonsPartial && !s.EpisodesPartial {
+		if s.SeasonIdx < len(s.Seasons)-1 {
+			return fmt.Errorf("season list may be incomplete: stopping after season %d, before a gap in its numbering", s.CurrentSeason().Number)
+		}
+		return fmt.Errorf("season list may be incomplete: stopping after season %d, its last measured season", s.CurrentSeason().Number)
+	}
+	if s.EpisodeIdx < len(s.Episodes)-1 {
+		return fmt.Errorf("season %d episode list may be incomplete: stopping after episode %d, before a gap in its numbering", s.CurrentSeason().Number, s.Current().Number)
+	}
+	return fmt.Errorf("season %d episode list may be incomplete: stopping after its last measured episode", s.CurrentSeason().Number)
 }
 
 // Previous moves to the previous episode. If at the start of a season, loads
 // the previous season's episodes and positions at the last episode.
 func (s *Session) Previous() (media.Episode, error) {
-	s.CrossingGap = nil
 	if s.EpisodeIdx > 0 {
 		s.EpisodeIdx--
 		return s.Current(), nil
@@ -207,7 +245,7 @@ func (s *Session) Previous() (media.Episode, error) {
 	s.SeasonIdx--
 	prevSeason := s.Seasons[s.SeasonIdx]
 	episodes, err := s.Provider.GetEpisodes(s.ProviderKey(), prevSeason.ID)
-	if err != nil && !isShortList(episodes, err) {
+	if err != nil && !provider.ListedWithCatalogueGap(len(episodes), err) {
 		s.SeasonIdx++ // rollback
 		return media.Episode{}, fmt.Errorf("loading season %d episodes: %w", prevSeason.Number, err)
 	}
@@ -216,9 +254,13 @@ func (s *Session) Previous() (media.Episode, error) {
 		return media.Episode{}, fmt.Errorf("season %d has no episodes", prevSeason.Number)
 	}
 
+	if err != nil && s.OnPartialSeason != nil {
+		s.OnPartialSeason(prevSeason, err)
+	}
+
 	s.Episodes = episodes
+	s.EpisodesPartial = false
 	s.EpisodeIdx = len(s.Episodes) - 1
-	s.CrossingGap = err
 	return s.Current(), nil
 }
 

@@ -68,6 +68,7 @@ func init() {
 	playCmd.Flags().IntVar(&flagSeason, "season", 0, "Season number (required for TV)")
 	playCmd.Flags().IntVar(&flagEpisode, "episode", 0, "Episode number (required for TV)")
 	playCmd.Flags().BoolVar(&flagDetach, "detach", false, "Start playback in the background and return immediately")
+	playCmd.Flags().BoolVar(&flagAutoplay, "autoplay", false, "After a series episode plays to its end, play the next one (on by default for --detach on a series; pass --autoplay=false to stop after one episode; a title with no episode list plays one episode regardless)")
 	playCmd.Flags().BoolVar(&flagSupervised, "supervised", false, "Internal: marks the background supervisor process")
 	_ = playCmd.Flags().MarkHidden("supervised")
 }
@@ -325,7 +326,7 @@ func playRun(cmd *cobra.Command, args []string) error {
 			return emitErrDetail("providers_failed", exitProvidersFailed,
 				map[string]any{"providers": resolveErr.providerRows()},
 				"%sno source could stream %s: %d providers tried, none produced a playable stream (per-provider reasons in error.providers)",
-				lead, playTarget(r.Title, flagSeason, flagEpisode), resolveErr.providersTried())
+				lead, playTarget(r.Title, resolveErr.season, resolveErr.episode), resolveErr.providersTried())
 		}
 		return emitErr("providers_failed", exitProvidersFailed, "%v", err)
 	}
@@ -336,10 +337,10 @@ func playRun(cmd *cobra.Command, args []string) error {
 	})
 }
 
-// playTarget names what the run was trying to play, for a failure message.
-// Season and episode are included only when both were requested, which for
-// `play --ref` means exactly "this is a series" — the command refuses a TV ref
-// without both (playRun's season_episode_required gate).
+// playTarget names what a failed resolution was trying to play. Season and
+// episode are included only when both are positive, which for `play --ref`
+// means exactly "this is a series" — the command refuses a TV ref without both
+// (playRun's season_episode_required gate).
 func playTarget(title string, season, episode int) string {
 	if season > 0 && episode > 0 {
 		return fmt.Sprintf("season %d episode %d of %q", season, episode, title)

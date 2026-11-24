@@ -15,47 +15,48 @@ func gappedPlaybackSession(seasonIdx, episodeIdx int) *playlist.Session {
 	}
 	seasons := []media.Season{{ID: "1", Number: 1}, {ID: "2", Number: 2}}
 	eps := []media.Episode{{ID: "e1", Number: 1}, {ID: "e2", Number: 2}}
-	return playlist.New(p, media.SearchResult{ID: "eztv/1", Title: "Show", Type: media.TV}, seasons, eps, seasonIdx, episodeIdx)
+	sel := media.SearchResult{ID: "eztv/1", Title: "Show", Type: media.TV}
+	return newPlaybackSession(p, sel, sel.ID, nil, seasons, eps, seasonIdx, episodeIdx, false, false)
 }
 
-func TestStepEpisodeWarnsWhenNextCrossesIntoAGappedSeason(t *testing.T) {
+func TestPlaybackSessionWarnsWhenNextCrossesIntoAGappedSeason(t *testing.T) {
 	warnings := captureWarnings(t)
 	sess := gappedPlaybackSession(0, 1)
 
-	if err := stepEpisode(sess, actionNext); err != nil {
-		t.Fatalf("stepEpisode: %v", err)
+	if _, err := sess.Next(); err != nil {
+		t.Fatalf("crossing: %v", err)
 	}
 	if len(*warnings) != 1 || !strings.Contains((*warnings)[0], "no standalone release for some episodes of season 2") {
 		t.Fatalf("warnings = %q, want one saying season 2 lacks standalone releases for some episodes", *warnings)
 	}
 
-	if err := stepEpisode(sess, actionNext); err != nil {
-		t.Fatalf("stepEpisode within the season: %v", err)
+	if _, err := sess.Next(); err != nil {
+		t.Fatalf("Next within the season: %v", err)
 	}
 	if len(*warnings) != 1 {
 		t.Fatalf("warnings = %q, want no second warning for a step inside the same season", *warnings)
 	}
 }
 
-func TestStepEpisodeWarnsWhenPreviousCrossesIntoAGappedSeason(t *testing.T) {
+func TestPlaybackSessionWarnsWhenPreviousCrossesIntoAGappedSeason(t *testing.T) {
 	warnings := captureWarnings(t)
 	sess := gappedPlaybackSession(1, 0)
 
-	if err := stepEpisode(sess, actionPrevious); err != nil {
-		t.Fatalf("stepEpisode: %v", err)
+	if _, err := sess.Previous(); err != nil {
+		t.Fatalf("crossing: %v", err)
 	}
 	if len(*warnings) != 1 || !strings.Contains((*warnings)[0], "no standalone release for some episodes of season 1") {
 		t.Fatalf("warnings = %q, want one saying season 1 lacks standalone releases for some episodes", *warnings)
 	}
 }
 
-func TestStepEpisodeDoesNotWarnOnACleanCrossing(t *testing.T) {
+func TestPlaybackSessionDoesNotWarnOnACleanCrossing(t *testing.T) {
 	warnings := captureWarnings(t)
 	sess := gappedPlaybackSession(0, 1)
 	sess.Provider = &stubProvider{episodes: []media.Episode{{ID: "e1", Number: 1}}}
 
-	if err := stepEpisode(sess, actionNext); err != nil {
-		t.Fatalf("stepEpisode: %v", err)
+	if _, err := sess.Next(); err != nil {
+		t.Fatalf("crossing: %v", err)
 	}
 	if len(*warnings) != 0 {
 		t.Fatalf("warnings = %q, want none for a complete season list", *warnings)

@@ -1,6 +1,10 @@
 package provider
 
-import "errors"
+import (
+	"errors"
+
+	"lobster/internal/media"
+)
 
 // ErrNoResults reports that a provider was reached and answered, but its
 // catalog has nothing for the query.
@@ -94,3 +98,10 @@ var ErrUnconfirmedEpisodeList = errors.New("the end of the episode list was not 
 
 // ErrNoEpisodeIndex reports a source that never lists episodes, which is an answer about the source and not a lookup that failed.
 var ErrNoEpisodeIndex = errors.New("episode listing unavailable")
+
+// PartialEpisodeList reports whether a GetEpisodes result is a usable partial
+// list: a non-empty list returned alongside ErrIncompleteEpisodeList. EZTV's
+// can start after episode 1, when the page holding the earlier ones failed.
+func PartialEpisodeList(episodes []media.Episode, err error) bool {
+	return len(episodes) > 0 && errors.Is(err, ErrIncompleteEpisodeList)
+}

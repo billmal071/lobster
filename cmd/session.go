@@ -25,7 +25,7 @@ var cachedServerName string
 // countdown/menu for continuous playback.
 func runPlaybackLoop(sess *playlist.Session) error {
 	for {
-		if err := playCurrentEpisode(sess); err != nil {
+		if err := playEpisode(sess); err != nil {
 			return err
 		}
 
@@ -34,21 +34,45 @@ func runPlaybackLoop(sess *playlist.Session) error {
 
 		// If no next episode, we're done
 		if !sess.HasNext() {
+			if sess.EpisodesPartial || sess.SeasonsPartial {
+				warnf("%v", sess.IncompleteListError())
+				return nil
+			}
 			fmt.Fprintln(os.Stderr, "\n  End of series.")
 			return nil
 		}
 
-		// Build menu items
+		if flagAutoplay {
+			if !sessionFinished(sess) {
+				return nil
+			}
+			if _, err := sess.Next(); err != nil {
+				return fmt.Errorf("advancing to next episode: %w", err)
+			}
+			debugf("autoplay next: %s", sess.Title())
+			continue
+		}
+
+		if flagSupervised {
+			return nil
+		}
+
 		action, err := postPlayMenu(sess)
 		if err != nil {
 			return err
 		}
 
 		switch action {
-		case actionNext, actionPrevious:
-			if err := stepEpisode(sess, action); err != nil {
-				return err
+		case actionNext:
+			if _, err := sess.Next(); err != nil {
+				return fmt.Errorf("advancing to next episode: %w", err)
 			}
+			debugf("next: %s", sess.Title())
+		case actionPrevious:
+			if _, err := sess.Previous(); err != nil {
+				return fmt.Errorf("going to previous episode: %w", err)
+			}
+			debugf("previous: %s", sess.Title())
 		case actionReplay:
 			debugf("replaying: %s", sess.Title())
 			// EpisodeIdx stays the same, just loop
@@ -73,7 +97,9 @@ const (
 )
 
 // postPlayMenu shows the countdown or immediate menu based on config.
-func postPlayMenu(sess *playlist.Session) (postPlayAction, error) {
+var postPlayMenu = showPostPlayMenu
+
+func showPostPlayMenu(sess *playlist.Session) (postPlayAction, error) {
 	items := buildMenuItems(sess)
 	labels := make([]string, len(items))
 	for i, item := range items {
@@ -397,8 +423,8 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		}
 
 		// Playback failed — if user watched some of it, resume from there
-		if result.Position > 0 {
-			startPos = resumePosition(media.HistoryEntry{Position: result.Position, Duration: result.Duration})
+		if !result.PositionUnknown {
+			startPos = retryStartPos(startPos, result)
 			debugf("playback stopped at %.0fs, will resume from %.0fs", result.Position, startPos)
 		}
 
@@ -418,6 +444,13 @@ func playCurrentEpisode(sess *playlist.Session) error {
 		fmt.Fprintf(os.Stderr, "Playback stopped, trying another source...\n")
 		debugf("playback error: %v (server %s excluded)", playErr, serverName)
 	}
+}
+
+func retryStartPos(current float64, res player.PlayResult) float64 {
+	if res.PositionUnknown {
+		return current
+	}
+	return max(res.Position, 0)
 }
 
 // subtitleDownload is a seam so tests can exercise the staging-directory
@@ -536,22 +569,4 @@ func outputJSON(stream *media.Stream, title string) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
-}
-
-func stepEpisode(sess *playlist.Session, action postPlayAction) error {
-	if action == actionPrevious {
-		if _, err := sess.Previous(); err != nil {
-			return fmt.Errorf("going to previous episode: %w", err)
-		}
-		debugf("previous: %s", sess.Title())
-	} else {
-		if _, err := sess.Next(); err != nil {
-			return fmt.Errorf("advancing to next episode: %w", err)
-		}
-		debugf("next: %s", sess.Title())
-	}
-	if sess.CrossingGap != nil {
-		warnShortList(shortfallFor(sess.CrossingGap), sess.Provider, sess.CurrentSeason().Number, sess.Content.Title)
-	}
-	return nil
 }
