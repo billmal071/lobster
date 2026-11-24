@@ -181,31 +181,35 @@ func stripPNG(body []byte) []byte {
 	if !bytes.HasPrefix(body, pngSig) {
 		return body
 	}
+	if payload, ok := pngPayload(body[len(pngSig):]); ok {
+		return payload
+	}
 	if i := bytes.Index(body, []byte("IEND")); i >= 0 && i+8 < len(body) {
 		return body[i+8:]
-	}
-	if payload := pngDataChunks(body[len(pngSig):]); len(payload) > 0 {
-		return payload
 	}
 	return body
 }
 
-func pngDataChunks(chunks []byte) []byte {
-	var out []byte
+func pngPayload(chunks []byte) ([]byte, bool) {
+	var data []byte
 	for len(chunks) >= 12 {
 		n := uint64(binary.BigEndian.Uint32(chunks))
 		if 12+n > uint64(len(chunks)) {
-			return nil
+			return nil, false
 		}
-		if string(chunks[4:8]) == "tsDa" {
-			out = append(out, chunks[8:8+n]...)
-		}
+		typ, body := string(chunks[4:8]), chunks[8:8+n]
 		chunks = chunks[12+n:]
+		switch typ {
+		case "tsDa":
+			data = append(data, body...)
+		case "IEND":
+			if len(chunks) > 0 {
+				return chunks, true
+			}
+			return data, len(data) > 0
+		}
 	}
-	if len(chunks) != 0 {
-		return nil
-	}
-	return out
+	return nil, false
 }
 
 // rewritePlaylist resolves every child URI relative to the playlist's own URL

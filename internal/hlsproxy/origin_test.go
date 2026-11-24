@@ -110,13 +110,15 @@ func TestStripPNGEdgeCases(t *testing.T) {
 		in   []byte
 		want string
 	}{
-		"empty":                     {nil, ""},
-		"signature only":            {pngSig, string(pngSig)},
-		"image without data chunks": {vercettiSegment(), string(vercettiSegment())},
-		"payload after IEND wins":   {append(vercettiSegment(), ts...), string(ts)},
-		"truncated chunk":           {truncated, string(truncated)},
-		"oversized chunk length":    {oversized, string(oversized)},
-		"duplicated data chunks":    {vercettiSegment(ts, ts), string(ts) + string(ts)},
+		"empty":                          {nil, ""},
+		"signature only":                 {pngSig, string(pngSig)},
+		"image without data chunks":      {vercettiSegment(), string(vercettiSegment())},
+		"payload after IEND wins":        {append(vercettiSegment(), ts...), string(ts)},
+		"truncated chunk":                {truncated, string(truncated)},
+		"oversized chunk length":         {oversized, string(oversized)},
+		"duplicated data chunks":         {vercettiSegment(ts, ts), string(ts) + string(ts)},
+		"IEND bytes inside tsDa":         {vercettiSegment([]byte("\x47..IEND..")), "\x47..IEND.."},
+		"IEND bytes in trailing payload": {append(vercettiSegment(), []byte("\x47..IEND..")...), "\x47..IEND.."},
 	} {
 		if got := string(stripPNG(tc.in)); got != tc.want {
 			t.Errorf("%s: stripPNG = %q, want %q", name, got, tc.want)
