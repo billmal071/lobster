@@ -397,14 +397,14 @@ func TestResolveRowKeepsTheCatalogueIDAndNamesTheProvidersOwn(t *testing.T) {
 }
 
 func TestResolveRowMarksACatalogueRowTheProviderDoesNotHave(t *testing.T) {
-	inner := &showProvider{results: []media.SearchResult{{ID: "tv/x-1", Title: "X", Type: media.TV}}}
+	inner := &showProvider{results: []media.SearchResult{{ID: "tv/x-1", Title: "X", Type: media.TV, Year: "2020"}}}
 	p := Wrap(inner, okServer(t), General)
-	row := media.SearchResult{ID: "tv/404", Title: "Missing", Type: media.TV, FromCatalogue: true}
+	row := media.SearchResult{ID: "tv/404", Title: "Missing", Type: media.TV, Year: "2020", FromCatalogue: true}
 	got := p.ResolveRow(row)
 	want := row
 	want.Unresolved = true
-	if got != want {
-		t.Fatalf("ResolveRow = %+v, want %+v", got, want)
+	if got != want || len(inner.searches) != 1 {
+		t.Fatalf("ResolveRow = %+v after %d searches, want %+v after 1", got, len(inner.searches), want)
 	}
 }
 
