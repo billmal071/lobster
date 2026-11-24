@@ -98,7 +98,7 @@ func TestPlayStreamPersistsPositionOnAbnormalExit(t *testing.T) {
 // position from an earlier watch of the same title.
 func TestPlayStreamSkipsHistoryOnAbnormalExitWithoutPosition(t *testing.T) {
 	playStreamHarness(t, &stubPlayerImpl{
-		result: player.PlayResult{},
+		result: player.PlayResult{PositionUnknown: true},
 		err:    errors.New("stream failed to load"),
 	})
 
@@ -118,6 +118,40 @@ func TestPlayStreamSkipsHistoryOnAbnormalExitWithoutPosition(t *testing.T) {
 			t.Fatalf("history entry written for a failed play with position 0: %+v", e)
 		}
 	}
+}
+
+func TestPlayStreamSavesMeasuredZeroOnAbnormalExit(t *testing.T) {
+	playStreamHarness(t, &stubPlayerImpl{
+		result: player.PlayResult{Position: 0, Duration: 5400},
+		err:    errors.New("mpv exited: exit status 2"),
+	})
+
+	if err := history.Save(media.HistoryEntry{
+		ID: "movie/m", Title: "M", Type: media.Movie,
+		Position: 900, Duration: 5400,
+	}); err != nil {
+		t.Fatalf("seeding history: %v", err)
+	}
+
+	stream := &media.Stream{URL: "http://127.0.0.1:1/never-dialed.m3u8"}
+	sel := media.SearchResult{ID: "movie/m", Title: "M", Type: media.Movie}
+	if err := playStream(stream, "M", sel, 0, 0); err == nil {
+		t.Fatal("playStream returned nil, want the player error")
+	}
+
+	entries, loadErr := history.Load()
+	if loadErr != nil {
+		t.Fatalf("history.Load: %v", loadErr)
+	}
+	for _, e := range entries {
+		if e.ID == "movie/m" {
+			if e.Position != 0 {
+				t.Fatalf("history position = %g, want the measured 0 saved as the clean-exit path does", e.Position)
+			}
+			return
+		}
+	}
+	t.Fatalf("history entry for movie/m is gone; entries: %+v", entries)
 }
 
 // The incident this guards against: a watch whose mpv IPC socket never came

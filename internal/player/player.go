@@ -22,11 +22,13 @@ type PlayResult struct {
 	//
 	// It is set when a tracked player was never heard from — mpv's IPC socket
 	// never came up within the dial bound, or mpv never reported a time-pos
-	// over it — and always for players that cannot report a position at all,
-	// which additionally set PositionUntracked.
+	// over it, or mpv failed before playback ever got past 0 — and always for
+	// players that cannot report a position at all, which additionally set
+	// PositionUntracked.
 	//
-	// It is deliberately false for a session that genuinely sat at position 0,
-	// so "really 0" and "never found out" stay distinguishable.
+	// It is deliberately false for a session that genuinely sat at position 0
+	// on a clean exit, or returned to 0 after playing, so "really 0" and
+	// "never found out" stay distinguishable.
 	PositionUnknown bool
 
 	// PositionUntracked narrows PositionUnknown: the player has no position

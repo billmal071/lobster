@@ -208,8 +208,32 @@ reports playback position — only mpv does.
 
 Attached, playing an episode starts the same continuous-playback session
 described above: the countdown runs when it ends and the next episode follows.
-Detached there is no terminal for that menu, so playback stops after the episode
-you asked for.
+Detached there is no terminal for that menu, so a detached series play that has an episode list carries on
+by itself (`--autoplay` is on by default there). Pass `--autoplay=false` to stop
+after the episode you asked for. This changed: scripts and agents that call
+`play --detach` on a series used to get one episode and now get the whole run.
+
+`--autoplay` (off by default for attached play and for movies; on by default for
+`play --detach` on a series) makes `play` carry on by itself: when an episode
+plays to its end, the next one in the season starts, and after a season's last
+episode the next season's first. It stops at the end of the series (or of a season whose list may be incomplete), when an
+episode fails to resolve, and whenever you close the player before its last ten seconds (the last tenth of the runtime for an episode shorter than 100 seconds).
+It also stops when the player cannot report a position (only mpv does), because
+an early quit would be indistinguishable from an ending. An episode only counts
+as finished when the player reports both a position and a duration; a position
+without a duration never does, so the run stops there even if the episode played to its end. It does nothing for a
+movie, and does not read `auto_next`, which only controls the attached countdown.
+It needs a playlist session, which exists only when the play resolves a season and an episode list. When the primary lists
+seasons but not a season's episodes, a fallback provider's episode list is used
+instead, and the session moves to that fallback provider and its season list, so autoplay carries on through its episodes and into its following
+seasons, unless that fallback's list is itself marked possibly short, in which case it stops at the end of that list as described below. Moving into the next season asks only the provider the session
+holds, with no fallback: if it cannot list that season, or marks its list as possibly short and that list does not start at episode 1, autoplay stops with an error rather than skip the missing episodes. A possibly short list that does start at episode 1 is
+played as measured with a warning that it may be short, and playback ends cleanly after its last measured episode, or before the first gap in its episode numbers if it has one, with a warning that the season's list may be incomplete, rather than skipping the gap or moving on to the next season (even when later seasons exist). At that point the post-episode menu is not shown and no Next episode is offered. The same holds for the season list of the provider the session holds: when that list is marked possibly short, playback ends cleanly after a season's last episode, with a warning that the season list may be incomplete, if the next listed season's number does not directly follow it or if it is the last season listed, rather than skipping the gap or reporting the end of the series. When the primary cannot list seasons at
+all, when it lists a season you ask for only partially and the chain resolves a stream by number, or when no episode list
+can be found but a stream still resolves, lobster plays that single stream with no playlist
+session, so there is no autoplay: that play is the one episode you asked for, and
+so is a detached play with `--autoplay=false` (nothing can answer the
+post-episode menu there).
 
 `--download` is not supported by `play` — batch downloading is a prompt-driven
 path. Use the interactive CLI for that.

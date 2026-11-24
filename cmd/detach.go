@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"lobster/internal/media"
+
 	"github.com/spf13/cobra"
 )
 
@@ -53,6 +55,7 @@ var forwardedBoolFlags = []struct {
 	{"no-subs", &flagNoSubs},
 	{"debug", &flagDebug},
 	{"continue", &flagContinue},
+	{"autoplay", &flagAutoplay},
 }
 
 // forwardedArgs returns argv fragments for every persistent flag the caller
@@ -106,6 +109,15 @@ func supervisorArgs(exe, ref string, season, episode int, extra []string) []stri
 // against this function.
 func detachChildArgv(cmd *cobra.Command, exe string) []string {
 	return supervisorArgs(exe, flagRef, flagSeason, flagEpisode, forwardedArgs(cmd))
+}
+
+// detachArgv adds --autoplay=true for a detached series play unless --autoplay was passed explicitly.
+func detachArgv(cmd *cobra.Command, exe string, r playRef) []string {
+	argv := detachChildArgv(cmd, exe)
+	if r.Type == media.TV.String() && !cmd.Flags().Changed("autoplay") {
+		argv = append(argv, "--autoplay=true")
+	}
+	return argv
 }
 
 // lobsterCacheDir is the directory detached play artifacts (logs) live in.
@@ -254,17 +266,19 @@ func readDetachPlaybackMode(path string) string {
 	}
 }
 
+var detachExecutable = os.Executable
+
 // playDetached re-executes lobster as a background supervisor and returns as
 // soon as it looks alive. The child performs an ordinary attached play, so the
 // HLS proxy, torrent server, subtitle temp dir and mpv IPC all behave exactly
 // as they do interactively.
 func playDetached(cmd *cobra.Command, r playRef) error {
-	exe, err := os.Executable()
+	exe, err := detachExecutable()
 	if err != nil {
 		return emitErr("internal", 1, "locating lobster binary: %v", err)
 	}
 
-	argv := detachChildArgv(cmd, exe)
+	argv := detachArgv(cmd, exe, r)
 
 	c := exec.Command(argv[0], argv[1:]...)
 	c.SysProcAttr = detachSpawnAttr()
