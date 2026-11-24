@@ -583,11 +583,14 @@ func TestResolveRowDoesNotReuseACachedMatchForTheSameIDWithAnotherYear(t *testin
 
 func TestResolveRowDoesNotReuseACachedMatchForTheSameIDWithAnotherTitle(t *testing.T) {
 	inner := &showProvider{results: []media.SearchResult{
-		{ID: "tv/utopia", Title: "Utopia", Type: media.TV},
+		{ID: "tv/utopia", Title: "Utopia", Type: media.TV, Year: "2020"},
 	}}
 	p := Wrap(inner, okServer(t), General)
-	p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, FromCatalogue: true})
-	got := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Dystopia", Type: media.TV, FromCatalogue: true})
+	first := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, Year: "2020", FromCatalogue: true})
+	if first.ProviderID != "tv/utopia" {
+		t.Fatalf("first ResolveRow = %+v", first)
+	}
+	got := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Dystopia", Type: media.TV, Year: "2020", FromCatalogue: true})
 	if !got.Unresolved || got.ProviderID != "" {
 		t.Fatalf("ResolveRow = %+v, want Unresolved for a different title", got)
 	}
