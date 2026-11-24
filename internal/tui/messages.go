@@ -33,11 +33,13 @@ type noticeMsg struct {
 // detailFetchedMsg is sent when detailed metadata for an item is fetched.
 type detailFetchedMsg struct {
 	id     string
+	gen    int
 	detail *media.ContentDetail
 }
 
 type detailErrMsg struct {
 	id  string
+	gen int
 	err error
 }
 

@@ -3,6 +3,8 @@ package tui
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"lobster/internal/media"
 )
 
@@ -65,7 +67,7 @@ func TestDetailForTheCurrentSelectionIsShownAndClearsItsError(t *testing.T) {
 }
 
 func TestDetailFailureFromAnEarlierSelectionIsIgnored(t *testing.T) {
-	late := fetchDetailCmd(detailStub{err: assertErr("movies detail boom")}, "movie/1")()
+	late := fetchDetailCmd(detailStub{err: assertErr("movies detail boom")}, "movie/1", 0)()
 
 	t.Run("no selection on the open tab", func(t *testing.T) {
 		m := browseModel(tabMovies, stubProvider{})
@@ -93,7 +95,7 @@ func TestDetailFailureForTheCurrentSelectionIsShown(t *testing.T) {
 	m := browseModel(tabMovies, stubProvider{})
 	m.currentItem = &media.SearchResult{ID: "movie/1", Title: "Current"}
 
-	m = apply(t, m, fetchDetailCmd(detailStub{err: assertErr("detail boom")}, "movie/1")())
+	m = apply(t, m, fetchDetailCmd(detailStub{err: assertErr("detail boom")}, "movie/1", 0)())
 
 	if m.err == nil || m.err.Error() != "detail boom" {
 		t.Fatalf("err = %v, want the current selection's detail failure", m.err)
@@ -103,9 +105,56 @@ func TestDetailFailureForTheCurrentSelectionIsShown(t *testing.T) {
 func TestFetchedDetailIsStampedWithItsTitle(t *testing.T) {
 	detail := &media.ContentDetail{Description: "d"}
 
-	got, ok := fetchDetailCmd(detailStub{detail: detail}, "movie/1")().(detailFetchedMsg)
+	got, ok := fetchDetailCmd(detailStub{detail: detail}, "movie/1", 0)().(detailFetchedMsg)
 
 	if !ok || got.id != "movie/1" || got.detail != detail {
 		t.Fatalf("msg = %#v, want the detail stamped movie/1", got)
+	}
+}
+
+type failsFirstDetail struct {
+	stubProvider
+	calls *int
+}
+
+func (f failsFirstDetail) GetDetails(string) (*media.ContentDetail, error) {
+	*f.calls++
+	if *f.calls == 1 {
+		return nil, assertErr("first detail request failed")
+	}
+	return &media.ContentDetail{Description: "second"}, nil
+}
+
+func detailMsgsFromListing(t *testing.T, m AppModel) (AppModel, []tea.Msg) {
+	t.Helper()
+	updated, cmd := m.Update(resultsFetchedMsg{results: []media.SearchResult{{ID: "anime/1", Title: "Same"}}, tab: m.activeTab, gen: m.tabReqGen})
+	var out []tea.Msg
+	for _, msg := range flatten(cmd()) {
+		switch msg.(type) {
+		case detailErrMsg, detailFetchedMsg:
+			out = append(out, msg)
+		}
+	}
+	if len(out) != 1 {
+		t.Fatalf("listing produced %d detail messages, want 1", len(out))
+	}
+	return updated.(AppModel), out
+}
+
+func TestDetailFailureFromAnEarlierRequestForTheSameTitleIsIgnored(t *testing.T) {
+	m := browseModel(tabAnime, failsFirstDetail{calls: new(int)})
+	m, first := detailMsgsFromListing(t, m)
+	m.switchTab(tabMovies)
+	m.switchTab(tabAnime)
+	m, second := detailMsgsFromListing(t, m)
+
+	m = apply(t, m, second[0])
+	m = apply(t, m, first[0])
+
+	if m.err != nil {
+		t.Fatalf("err = %v; the first request's failure arrived after the second request's detail", m.err)
+	}
+	if m.currentDetail == nil || m.currentDetail.Description != "second" {
+		t.Fatalf("detail = %+v, want the second request's", m.currentDetail)
 	}
 }

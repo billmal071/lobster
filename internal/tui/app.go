@@ -86,6 +86,7 @@ type AppModel struct {
 	liveMaster     []liveRow // unfiltered rows for the current level
 	liveReqGen     int       // bumped per Live TV fetch; stale responses are ignored
 	tabReqGen      int       // bumped per tab switch and per search; listings, failures and notices from an earlier request are ignored
+	detailReqGen   int
 
 	// Download dialog for TV show batch downloads
 	dlDialog downloadDialog
@@ -431,7 +432,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.StopSpinner()
 		if len(msg.results) > 0 {
 			m.currentItem = &msg.results[0]
-			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), msg.results[0].ID))
+			cmds = append(cmds, m.detailCmd(msg.results[0].ID))
 			pw, ph := poster.BoxDims(m.width, 0, 0)
 			cmds = append(cmds, fetchPosterForItemCmd(msg.results[0], pw, ph, m.posterLookup()))
 		} else {
@@ -453,13 +454,13 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case detailFetchedMsg:
-		if m.isSelected(msg.id) {
+		if m.isCurrentDetail(msg.id, msg.gen) {
 			m.err = nil
 			m.currentDetail = msg.detail
 		}
 
 	case detailErrMsg:
-		if m.isSelected(msg.id) {
+		if m.isCurrentDetail(msg.id, msg.gen) {
 			m.err = msg.err
 		}
 
@@ -516,7 +517,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.posterReady = false
 			m.posterB64 = ""
 			m.err = nil
-			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), m.currentItem.ID))
+			cmds = append(cmds, m.detailCmd(m.currentItem.ID))
 			pw, ph := poster.BoxDims(m.width, 0, 0)
 			cmds = append(cmds, fetchPosterForItemCmd(*m.currentItem, pw, ph, m.posterLookup()))
 		}
@@ -726,6 +727,15 @@ func (m AppModel) supersededRequest(requested tab, gen int) bool {
 
 func (m AppModel) isSelected(id string) bool {
 	return m.currentItem != nil && m.currentItem.ID == id
+}
+
+func (m AppModel) isCurrentDetail(id string, gen int) bool {
+	return gen == m.detailReqGen && m.isSelected(id)
+}
+
+func (m *AppModel) detailCmd(id string) tea.Cmd {
+	m.detailReqGen++
+	return fetchDetailCmd(m.providerForActiveTab(), id, m.detailReqGen)
 }
 
 func (m AppModel) providerForActiveTab() provider.Provider {

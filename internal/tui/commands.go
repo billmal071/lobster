@@ -192,13 +192,13 @@ func posterURLForItem(item media.SearchResult, lookup func(title, year string, i
 }
 
 // fetchDetailCmd fetches detailed metadata for a specific item.
-func fetchDetailCmd(p provider.Provider, id string) tea.Cmd {
+func fetchDetailCmd(p provider.Provider, id string, gen int) tea.Cmd {
 	return func() tea.Msg {
 		detail, err := p.GetDetails(id)
 		if err != nil {
-			return detailErrMsg{id: id, err: err}
+			return detailErrMsg{id: id, gen: gen, err: err}
 		}
-		return detailFetchedMsg{id: id, detail: detail}
+		return detailFetchedMsg{id: id, gen: gen, detail: detail}
 	}
 }
 
