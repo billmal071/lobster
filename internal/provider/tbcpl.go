@@ -175,16 +175,20 @@ type tbcplEpisode struct {
 }
 
 type tbcplDirectServer struct {
-	Name string
-	Slug string // the s= query value
+	Name        string
+	Slug        string // the s= query value
+	Origin      bool
+	Deobfuscate bool
 }
 
 // tbcplDirectServers are Vidzee's language-neutral ("Auto" audio) servers.
-// Vidzee's own default, "peak", is absent: its CDN needs an Origin header
-// nothing in lobster sends.
+// Peak's CDN (vercetti.org) 403s every request without an Origin and wraps
+// segments in a PNG. It is the last neutral server, so whatever DCloud or Tik
+// serve resolves as before.
 var tbcplDirectServers = []tbcplDirectServer{
 	{Name: "DCloud", Slug: "dcloud"},
 	{Name: "Tik", Slug: "tik"},
+	{Name: "Peak", Slug: "peak", Origin: true, Deobfuscate: true},
 }
 
 // tbcplDubServerPrefix marks a per-language Vidzee server, e.g. "v6:Hindi".
@@ -530,7 +534,7 @@ func (t *TBCPL) serverCandidates(ctx context.Context, path string) []tbcplVidzee
 	// server Vidzee has ("v6:Tamil"), not one it does not ("v6:Ta").
 	addDub(lang.Canonical(pref))
 	for _, srv := range tbcplDirectServers {
-		srcs = append(srcs, tbcplVidzeeSource{Lang: "Auto", Link: srv.Slug, Name: srv.Name})
+		srcs = append(srcs, srv.source())
 	}
 	for _, lang := range t.fetchVidzeeLanguages(ctx, path) {
 		addDub(lang)
@@ -593,10 +597,14 @@ func (t *TBCPL) watchWithServer(ctx context.Context, path string, server tbcplVi
 	}
 
 	stream := &media.Stream{
-		URL:       resp.URL,
-		Quality:   quality,
-		Subtitles: t.fetchVidzeeSubtitles(ctx, path),
-		Referer:   t.vidzeeReferer(),
+		URL:         resp.URL,
+		Quality:     quality,
+		Subtitles:   t.fetchVidzeeSubtitles(ctx, path),
+		Referer:     t.vidzeeReferer(),
+		Deobfuscate: server.Deobfuscate,
+	}
+	if server.Origin {
+		stream.Origin = strings.TrimRight(t.vidzeeBaseURL, "/")
 	}
 	// The API's "headers" are what the CDN wants on playlist and segment
 	// requests. Referer and User-Agent are the two the players and hlsproxy
@@ -627,9 +635,15 @@ type tbcplVidzeeResponse struct {
 // query value and Lang the audio it serves ("Auto" for the neutral servers),
 // which is what preferAudioLang orders by.
 type tbcplVidzeeSource struct {
-	Lang string
-	Link string
-	Name string
+	Lang        string
+	Link        string
+	Name        string
+	Origin      bool
+	Deobfuscate bool
+}
+
+func (srv tbcplDirectServer) source() tbcplVidzeeSource {
+	return tbcplVidzeeSource{Lang: "Auto", Link: srv.Slug, Name: srv.Name, Origin: srv.Origin, Deobfuscate: srv.Deobfuscate}
 }
 
 type tbcplVidzeeSubtitle struct {
@@ -685,7 +699,7 @@ func (t *TBCPL) matchDirectServer(server string) (tbcplVidzeeSource, bool) {
 
 	for _, srv := range tbcplDirectServers {
 		if strings.EqualFold(server, srv.Name) || strings.EqualFold(server, srv.Slug) {
-			return tbcplVidzeeSource{Lang: "Auto", Link: srv.Slug, Name: srv.Name}, true
+			return srv.source(), true
 		}
 	}
 	if strings.HasPrefix(strings.ToLower(server), tbcplDubServerPrefix) {

@@ -224,7 +224,7 @@ func TestTBCPLWatchDefaultServerRotation(t *testing.T) {
 			s := r.URL.Query().Get("s")
 			seen = append(seen, s)
 			switch s {
-			case "dcloud":
+			case "dcloud", "peak":
 				http.Error(w, "error code: 502", http.StatusBadGateway)
 			case "tik", "v6:English":
 				w.WriteHeader(http.StatusNotFound)
@@ -245,7 +245,7 @@ func TestTBCPLWatchDefaultServerRotation(t *testing.T) {
 	if stream.URL != "https://cdn.example.test/v6:Hindi.m3u8" {
 		t.Errorf("stream.URL = %q", stream.URL)
 	}
-	want := []string{"v6:English", "dcloud", "tik", "v6:Hindi"}
+	want := []string{"v6:English", "dcloud", "tik", "peak", "v6:Hindi"}
 	if strings.Join(seen, ",") != strings.Join(want, ",") {
 		t.Errorf("servers tried = %v, want %v", seen, want)
 	}
@@ -283,7 +283,7 @@ func TestTBCPLGetServersListsAdvertisedDubs(t *testing.T) {
 	for _, s := range servers {
 		ids = append(ids, s.ID)
 	}
-	want := "vidzee:v6:English,vidzee:dcloud,vidzee:tik,vidzee:v6:Hindi"
+	want := "vidzee:v6:English,vidzee:dcloud,vidzee:tik,vidzee:peak,vidzee:v6:Hindi"
 	if strings.Join(ids, ",") != want {
 		t.Errorf("server IDs = %v, want %s", ids, want)
 	}
@@ -331,7 +331,7 @@ func TestTBCPLWatchTriesPreferredDubWhenNotAdvertised(t *testing.T) {
 	for _, s := range srcs {
 		links = append(links, s.Link)
 	}
-	want := "v6:Hindi,dcloud,tik,v6:English"
+	want := "v6:Hindi,dcloud,tik,peak,v6:English"
 	if strings.Join(links, ",") != want {
 		t.Errorf("candidates = %v, want %s", links, want)
 	}
@@ -344,7 +344,7 @@ func TestTBCPLWatchTriesPreferredDubWhenNotAdvertised(t *testing.T) {
 	for _, s := range p.serverCandidates(context.Background(), "movie/550") {
 		links = append(links, s.Link)
 	}
-	want = "v6:Tamil,dcloud,tik,v6:Hindi,v6:English"
+	want = "v6:Tamil,dcloud,tik,peak,v6:Hindi,v6:English"
 	if strings.Join(links, ",") != want {
 		t.Errorf("candidates for ta = %v, want %s", links, want)
 	}
@@ -412,6 +412,83 @@ func TestTBCPLDubLanguageCapitalisesTheFirstRune(t *testing.T) {
 	for in, want := range map[string]string{"english": "English", " ÉSPAÑOL ": "Éspañol", "élan": "Élan", "": ""} {
 		if got := tbcplDubLanguage(in); got != want {
 			t.Errorf("tbcplDubLanguage(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestTBCPLWatchTVFallsThroughUpstream502sToPeak(t *testing.T) {
+	var seen []string
+	p, _, cleanup := newTestTBCPL(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/streams/languages/tv/219/2/7":
+			fmt.Fprint(w, `{"languages":[]}`)
+		case "/subs/tv/219/2/7":
+			fmt.Fprint(w, `[]`)
+		case "/streams/tv/219/2/7":
+			s := r.URL.Query().Get("s")
+			seen = append(seen, s)
+			if s != "peak" {
+				http.Error(w, "error code: 502", http.StatusBadGateway)
+				return
+			}
+			fmt.Fprint(w, `{"language":"Auto","url":"https://vercetti.example.test/tv/x/master.m3u8","headers":{}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	defer cleanup()
+
+	stream, err := p.Watch("tv/219", "219:2:7", "", "1080")
+	if err != nil {
+		t.Fatalf("Watch error: %v", err)
+	}
+	if stream.URL != "https://vercetti.example.test/tv/x/master.m3u8" {
+		t.Errorf("stream.URL = %q", stream.URL)
+	}
+	if stream.Origin != p.vidzeeBaseURL {
+		t.Errorf("Origin = %q, want %q", stream.Origin, p.vidzeeBaseURL)
+	}
+	if stream.Referer != p.vidzeeBaseURL+"/" {
+		t.Errorf("Referer = %q", stream.Referer)
+	}
+	if !stream.Deobfuscate {
+		t.Error("peak stream not marked Deobfuscate: its segments are PNG-wrapped")
+	}
+	if want := "v6:English,dcloud,tik,peak"; strings.Join(seen, ",") != want {
+		t.Errorf("servers tried = %v, want %s", seen, want)
+	}
+}
+
+func TestTBCPLNonPeakStreamCarriesNoOriginOrProxy(t *testing.T) {
+	p, _, cleanup := newTestTBCPL(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/subs/movie/550":
+			fmt.Fprint(w, `[]`)
+		case "/streams/movie/550":
+			fmt.Fprint(w, `{"language":"Auto","url":"https://cdn.example.test/m.m3u8","headers":{}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	defer cleanup()
+
+	stream, err := p.Watch("movie/550", "", "DCloud", "1080")
+	if err != nil {
+		t.Fatalf("Watch error: %v", err)
+	}
+	if stream.Origin != "" || stream.Deobfuscate {
+		t.Errorf("dcloud stream: Origin=%q Deobfuscate=%v, want neither", stream.Origin, stream.Deobfuscate)
+	}
+}
+
+func TestTBCPLMatchDirectServerFindsPeak(t *testing.T) {
+	p := NewTBCPL("")
+	for _, in := range []string{"peak", "Peak", "vidzee:peak"} {
+		got, ok := p.matchDirectServer(in)
+		if !ok || got.Link != "peak" {
+			t.Errorf("matchDirectServer(%q) = %+v, %v; want peak", in, got, ok)
 		}
 	}
 }
