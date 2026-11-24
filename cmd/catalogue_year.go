@@ -18,14 +18,11 @@ func identifyCatalogueRow(p provider.Provider, r media.SearchResult) (media.Sear
 		return r, fmt.Errorf("cannot tell which %q to play: the TMDB catalogue gives no release year for %s", r.Title, r.ID)
 	}
 	r.Year = y
-	if r.ProviderID != "" {
-		r.ProviderID = ""
-		if w, ok := p.(*catalog.Provider); ok {
-			p = w.Unwrap()
-		}
-		r = resolveCatalogueRow(p, r)
+	r.ProviderID = ""
+	if w, ok := p.(*catalog.Provider); ok {
+		p = w.Unwrap()
 	}
-	return r, nil
+	return resolveCatalogueRow(p, r), nil
 }
 
 func catalogueYear(id string) string {

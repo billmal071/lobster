@@ -118,3 +118,25 @@ func TestDownloadDialogNeverListsASameTitledSeriesFromAnotherYearForAYearlessCat
 		t.Fatalf("tuiEpisodeListFallback = %d episodes of the 2020 series", len(eps))
 	}
 }
+
+func TestYearlessCatalogueRowLeftUnresolvedIsAskedOfThePrimaryOnceTheCatalogueNamesItsYear(t *testing.T) {
+	url := catalogueHarness(t)
+	tmdbDetails(t, http.StatusOK, `{"id":37854,"first_air_date":"2013-04-01"}`)
+	withFallbackChain(t, newListingChainProvider(url))
+	prov := &idRecordingProvider{stubProvider: &stubProvider{
+		results:          []media.SearchResult{{ID: "tv/original-2013", Title: "Some Show", Year: "2013", Type: media.TV}},
+		seasons:          []media.Season{{ID: "s1", Number: 1}},
+		episodesBySeason: map[string][]media.Episode{"s1": twentyTwoEpisodes()},
+	}}
+	sel := resolveCatalogueRow(prov, media.SearchResult{ID: "tv/37854", FromCatalogue: true, Title: "Some Show", Type: media.TV})
+	if !sel.Unresolved {
+		t.Fatalf("setup: a yearless row should start Unresolved, got %+v", sel)
+	}
+
+	if err := resolveAndPlay(prov, sel, 1, 22); err != nil {
+		t.Fatalf("resolveAndPlay = %v", err)
+	}
+	if len(prov.seasonIDs) == 0 || prov.seasonIDs[0] != "tv/original-2013" {
+		t.Fatalf("primary was asked for %v; want tv/original-2013", prov.seasonIDs)
+	}
+}
