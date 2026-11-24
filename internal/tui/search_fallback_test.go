@@ -23,11 +23,11 @@ func TestSearchCmdBroadensToFallbacksWhenPrimaryAnswersNoResults(t *testing.T) {
 
 	msg := searchCmd(primary, "show", fallback)()
 
-	got, ok := msg.(resultsFetchedMsg)
+	fetched, ok := msg.(resultsFetchedMsg)
 	if !ok {
 		t.Fatalf("got %T (%v), want resultsFetchedMsg from the fallback", msg, msg)
 	}
-	if len(got) != 1 || got[0].ID != "fb/1" {
+	if got := fetched.results; len(got) != 1 || got[0].ID != "fb/1" {
 		t.Fatalf("got %+v, want the fallback's result", got)
 	}
 }

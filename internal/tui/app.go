@@ -57,6 +57,7 @@ type AppModel struct {
 	height int
 
 	currentItem   *media.SearchResult
+	owners        []provider.Provider
 	currentDetail *media.ContentDetail
 	currentPoster string
 	posterReady   bool // an inline poster image is loaded and ready to overlay
@@ -329,7 +330,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.currentItem != nil {
 				m.selectedResult = m.currentItem
-				m.selectedProvider = m.providerForActiveTab()
+				m.selectedProvider = m.providerForCurrentItem()
 				return m, tea.Quit
 			}
 			return m, nil
@@ -345,7 +346,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.err = err
 						return m, nil
 					}
-					cmd := m.dlDialog.start(*m.currentItem, m.providerForActiveTab(), m.dlManager, outputDir)
+					cmd := m.dlDialog.start(*m.currentItem, m.providerForCurrentItem(), m.dlManager, outputDir)
 					m.drawnPosterKey = ""
 					return m, cmd
 				}
@@ -369,7 +370,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case resultsFetchedMsg:
 		m.err = nil
-		m.results = msg
+		m.results = msg.results
+		m.owners = msg.owners
 		// Clear all selection-derived state so the previous title's metadata and
 		// poster don't show under the new result until the fresh fetches land.
 		m.currentDetail = nil
@@ -379,17 +381,17 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.posterImgW = 0
 		m.posterImgH = 0
 		m.drawnPosterKey = ""
-		items := make([]list.Item, len(msg))
-		for i, v := range msg {
+		items := make([]list.Item, len(m.results))
+		for i, v := range m.results {
 			items[i] = listItem{result: v}
 		}
 		m.list.SetItems(items)
 		m.list.StopSpinner()
-		if len(msg) > 0 {
-			m.currentItem = &msg[0]
-			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), msg[0].ID))
+		if len(m.results) > 0 {
+			m.currentItem = &m.results[0]
+			cmds = append(cmds, fetchDetailCmd(m.providerForCurrentItem(), m.results[0].ID))
 			pw, ph := poster.BoxDims(m.width, 0, 0)
-			cmds = append(cmds, fetchPosterForItemCmd(msg[0], pw, ph, m.posterLookup()))
+			cmds = append(cmds, fetchPosterForItemCmd(m.results[0], pw, ph, m.posterLookup()))
 		} else {
 			m.currentItem = nil
 			m.currentDetail = nil
@@ -467,7 +469,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.posterReady = false
 			m.posterB64 = ""
 			m.err = nil
-			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), m.currentItem.ID))
+			cmds = append(cmds, fetchDetailCmd(m.providerForCurrentItem(), m.currentItem.ID))
 			pw, ph := poster.BoxDims(m.width, 0, 0)
 			cmds = append(cmds, fetchPosterForItemCmd(*m.currentItem, pw, ph, m.posterLookup()))
 		}
@@ -500,6 +502,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // index-aligned (selection reads m.results[m.list.Index()]).
 func (m *AppModel) setLiveRows(rows []liveRow) {
 	m.results = make([]media.SearchResult, len(rows))
+	m.owners = nil
 	items := make([]list.Item, len(rows))
 	for i, r := range rows {
 		m.results[i] = r.result
@@ -665,6 +668,15 @@ func (m AppModel) renderTabBar() string {
 	}
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
+}
+
+func (m AppModel) providerForCurrentItem() provider.Provider {
+	for i := range m.results {
+		if m.currentItem == &m.results[i] && i < len(m.owners) && m.owners[i] != nil {
+			return m.owners[i]
+		}
+	}
+	return m.providerForActiveTab()
 }
 
 func (m AppModel) providerForActiveTab() provider.Provider {

@@ -3,6 +3,7 @@ package tui
 import (
 	"lobster/internal/dlmanager"
 	"lobster/internal/media"
+	"lobster/internal/provider"
 )
 
 // errMsg indicates an error occurred during an async operation.
@@ -11,7 +12,11 @@ type errMsg struct{ err error }
 func (e errMsg) Error() string { return e.err.Error() }
 
 // resultsFetchedMsg is sent when a list of search/trending results is fetched.
-type resultsFetchedMsg []media.SearchResult
+// owners is index-aligned with results; nil means the active tab's provider.
+type resultsFetchedMsg struct {
+	results []media.SearchResult
+	owners  []provider.Provider
+}
 
 // detailFetchedMsg is sent when detailed metadata for an item is fetched.
 type detailFetchedMsg struct {
