@@ -360,6 +360,13 @@ func (t *TBCPL) Recent(mediaType media.MediaType) ([]media.SearchResult, error) 
 // call, languages lookup and subtitles included, finishes within
 // tbcplWatchBudget.
 func (t *TBCPL) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+	return t.WatchAccepting(mediaID, episodeID, server, quality, nil)
+}
+
+// WatchAccepting is Watch that skips a server whose stream accept refuses. When
+// no server yields an accepted stream, the first refused one is returned so the
+// caller can tell a refusal from a failure.
+func (t *TBCPL) WatchAccepting(mediaID, episodeID, server, quality string, accept func(*media.Stream) error) (*media.Stream, error) {
 	path, err := tbcplStreamPath(mediaID, episodeID)
 	if err != nil {
 		return nil, err
@@ -376,17 +383,27 @@ func (t *TBCPL) Watch(mediaID, episodeID, server, quality string) (*media.Stream
 	}
 
 	var lastErr error
+	var refused *media.Stream
 	for _, srv := range candidates {
 		if ctx.Err() != nil {
 			break
 		}
 		stream, err := t.watchWithServer(ctx, path, srv, quality)
-		if err == nil {
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if accept == nil || accept(stream) == nil {
 			return stream, nil
 		}
-		lastErr = err
+		if refused == nil {
+			refused = stream
+		}
 	}
 
+	if refused != nil {
+		return refused, nil
+	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("all servers timed out")
 	}

@@ -492,3 +492,73 @@ func TestTBCPLMatchDirectServerFindsPeak(t *testing.T) {
 		}
 	}
 }
+
+func TestTBCPLWatchAcceptingSkipsARefusedPeakForTheNextDub(t *testing.T) {
+	var seen []string
+	p, _, cleanup := newTestTBCPL(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/streams/languages/tv/219/2/7":
+			fmt.Fprint(w, `{"languages":["Hindi"]}`)
+		case "/subs/tv/219/2/7":
+			fmt.Fprint(w, `[]`)
+		case "/streams/tv/219/2/7":
+			s := r.URL.Query().Get("s")
+			seen = append(seen, s)
+			switch s {
+			case "peak":
+				fmt.Fprint(w, `{"language":"Auto","url":"https://vercetti.example.test/tv/x/master.m3u8","headers":{}}`)
+			case "v6:Hindi":
+				fmt.Fprint(w, `{"language":"Hindi","url":"https://hindi.example.test/tv/x/master.m3u8","headers":{}}`)
+			default:
+				http.Error(w, "error code: 502", http.StatusBadGateway)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	defer cleanup()
+
+	refuseDisguised := func(s *media.Stream) error {
+		if s.Deobfuscate {
+			return fmt.Errorf("needs the de-obfuscating proxy")
+		}
+		return nil
+	}
+	stream, err := p.WatchAccepting("tv/219", "219:2:7", "", "1080", refuseDisguised)
+	if err != nil {
+		t.Fatalf("WatchAccepting error: %v", err)
+	}
+	if stream.URL != "https://hindi.example.test/tv/x/master.m3u8" {
+		t.Errorf("stream.URL = %q, want the Hindi dub after the refused peak stream", stream.URL)
+	}
+	if want := "v6:English,dcloud,tik,peak,v6:Hindi"; strings.Join(seen, ",") != want {
+		t.Errorf("servers tried = %v, want %s", seen, want)
+	}
+}
+
+func TestTBCPLWatchAcceptingReturnsTheRefusedStreamWhenNothingElseServes(t *testing.T) {
+	p, _, cleanup := newTestTBCPL(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/streams/languages/tv/219/2/7":
+			fmt.Fprint(w, `{"languages":[]}`)
+		case "/subs/tv/219/2/7":
+			fmt.Fprint(w, `[]`)
+		case "/streams/tv/219/2/7":
+			if r.URL.Query().Get("s") != "peak" {
+				http.Error(w, "error code: 502", http.StatusBadGateway)
+				return
+			}
+			fmt.Fprint(w, `{"language":"Auto","url":"https://vercetti.example.test/tv/x/master.m3u8","headers":{}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	defer cleanup()
+
+	stream, err := p.WatchAccepting("tv/219", "219:2:7", "", "1080", func(*media.Stream) error { return fmt.Errorf("refused") })
+	if err != nil || stream == nil || !stream.Deobfuscate {
+		t.Fatalf("got %+v / %v, want the refused peak stream back so the caller can report the refusal", stream, err)
+	}
+}
