@@ -2,10 +2,13 @@ package provider
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"lobster/internal/media"
 )
 
 // Every provider whose Search signals an empty catalog with an *error* must
@@ -157,5 +160,27 @@ func TestSearchProvidersThatReportEmptyAsNilError(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Fatalf("YTS.Search = %+v, want no results", results)
+	}
+}
+
+func TestPartialEpisodeList(t *testing.T) {
+	eps := []media.Episode{{Number: 1}}
+	boom := errors.New("boom")
+	cases := []struct {
+		name string
+		eps  []media.Episode
+		err  error
+		want bool
+	}{
+		{"prefix with incomplete", eps, fmt.Errorf("probe: %w", ErrIncompleteEpisodeList), true},
+		{"prefix with unconfirmed", eps, fmt.Errorf("x: %w", errors.Join(ErrIncompleteEpisodeList, ErrUnconfirmedEpisodeList)), true},
+		{"empty with incomplete", nil, ErrIncompleteEpisodeList, false},
+		{"prefix with unrelated error", eps, boom, false},
+		{"no error", eps, nil, false},
+	}
+	for _, c := range cases {
+		if got := PartialEpisodeList(c.eps, c.err); got != c.want {
+			t.Errorf("%s: PartialEpisodeList = %v, want %v", c.name, got, c.want)
+		}
 	}
 }
