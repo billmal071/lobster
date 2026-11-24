@@ -61,6 +61,7 @@ type Session struct {
 	// watch is real but LastPosition is meaningless. The episode is recorded,
 	// keeping whatever position history already holds for it.
 	LastPositionUntracked bool
+	CrossingGap           error
 }
 
 // New creates a Session positioned at the given season and episode, whose
@@ -156,6 +157,7 @@ func (s *Session) HasPrevious() bool {
 // next season's episodes from the provider. Returns an error if already at
 // the last episode of the last season.
 func (s *Session) Next() (media.Episode, error) {
+	s.CrossingGap = nil
 	if s.EpisodeIdx < len(s.Episodes)-1 {
 		s.EpisodeIdx++
 		return s.Current(), nil
@@ -180,6 +182,7 @@ func (s *Session) Next() (media.Episode, error) {
 
 	s.Episodes = episodes
 	s.EpisodeIdx = 0
+	s.CrossingGap = err
 	return s.Current(), nil
 }
 
@@ -190,6 +193,7 @@ func isShortList(episodes []media.Episode, err error) bool {
 // Previous moves to the previous episode. If at the start of a season, loads
 // the previous season's episodes and positions at the last episode.
 func (s *Session) Previous() (media.Episode, error) {
+	s.CrossingGap = nil
 	if s.EpisodeIdx > 0 {
 		s.EpisodeIdx--
 		return s.Current(), nil
@@ -214,6 +218,7 @@ func (s *Session) Previous() (media.Episode, error) {
 
 	s.Episodes = episodes
 	s.EpisodeIdx = len(s.Episodes) - 1
+	s.CrossingGap = err
 	return s.Current(), nil
 }
 

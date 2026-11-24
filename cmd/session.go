@@ -45,16 +45,10 @@ func runPlaybackLoop(sess *playlist.Session) error {
 		}
 
 		switch action {
-		case actionNext:
-			if _, err := sess.Next(); err != nil {
-				return fmt.Errorf("advancing to next episode: %w", err)
+		case actionNext, actionPrevious:
+			if err := stepEpisode(sess, action); err != nil {
+				return err
 			}
-			debugf("next: %s", sess.Title())
-		case actionPrevious:
-			if _, err := sess.Previous(); err != nil {
-				return fmt.Errorf("going to previous episode: %w", err)
-			}
-			debugf("previous: %s", sess.Title())
 		case actionReplay:
 			debugf("replaying: %s", sess.Title())
 			// EpisodeIdx stays the same, just loop
@@ -542,4 +536,22 @@ func outputJSON(stream *media.Stream, title string) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+func stepEpisode(sess *playlist.Session, action postPlayAction) error {
+	if action == actionPrevious {
+		if _, err := sess.Previous(); err != nil {
+			return fmt.Errorf("going to previous episode: %w", err)
+		}
+		debugf("previous: %s", sess.Title())
+	} else {
+		if _, err := sess.Next(); err != nil {
+			return fmt.Errorf("advancing to next episode: %w", err)
+		}
+		debugf("next: %s", sess.Title())
+	}
+	if sess.CrossingGap != nil {
+		warnShortList(shortfallFor(sess.CrossingGap), sess.Provider, sess.CurrentSeason().Number, sess.Content.Title)
+	}
+	return nil
 }
