@@ -106,6 +106,14 @@ func (p *Provider) providerID(id string) (string, error) {
 	if !known {
 		return id, nil
 	}
+	if row.Year == "" {
+		row = p.Dated(row)
+		if row.Year != "" {
+			p.mu.Lock()
+			p.rows[id] = row
+			p.mu.Unlock()
+		}
+	}
 	return p.resolve(row)
 }
 

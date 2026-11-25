@@ -727,6 +727,31 @@ func TestSeasonsAndEpisodesOfAYearlessCatalogueRowUseTheProvidersWorkFromTheCata
 	}
 }
 
+func TestEpisodesOfAYearlessCatalogueRowKeepTheYearTheSeasonsLookupFound(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{{ID: "tv/utopia-2013", Title: "Utopia", Type: media.TV, Year: "2013"}}}
+	calls := 0
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls > 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		io.WriteString(w, `{"id":1,"first_air_date":"2013-01-15"}`)
+	})
+	p := Wrap(inner, c, General)
+	p.remember([]media.SearchResult{{ID: "tv/1", Title: "Utopia", Type: media.TV, FromCatalogue: true}})
+	if _, err := p.GetSeasons("tv/1"); err != nil {
+		t.Fatalf("GetSeasons: %v", err)
+	}
+	c.now = func() time.Time { return time.Now().Add(cacheTTL + time.Second) }
+	if _, err := p.GetEpisodes("tv/1", "s1"); err != nil {
+		t.Fatalf("GetEpisodes after the details expired and TMDB failed: %v", err)
+	}
+	if len(inner.episodeIDs) != 1 || inner.episodeIDs[0] != "tv/utopia-2013" {
+		t.Fatalf("episodes asked for %v; want tv/utopia-2013", inner.episodeIDs)
+	}
+}
+
 func TestSeasonsOfAYearlessCatalogueRowNeverReachTheProviderOnATitleMatch(t *testing.T) {
 	inner := &showProvider{results: []media.SearchResult{{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"}}}
 	p := Wrap(inner, okServer(t), General)
