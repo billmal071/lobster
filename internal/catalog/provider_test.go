@@ -706,6 +706,27 @@ func TestResolveRowWithoutAYearNeverTakesTheOnlySameTitledWork(t *testing.T) {
 	}
 }
 
+func TestSeasonsAndEpisodesOfAYearlessCatalogueRowUseTheProvidersWorkFromTheCatalogueYear(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"},
+		{ID: "tv/utopia-2013", Title: "Utopia", Type: media.TV, Year: "2013"},
+	}}
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"id":1,"first_air_date":"2013-01-15"}`)
+	})
+	p := Wrap(inner, c, General)
+	p.remember([]media.SearchResult{{ID: "tv/1", Title: "Utopia", Type: media.TV, FromCatalogue: true}})
+	if _, err := p.GetSeasons("tv/1"); err != nil {
+		t.Fatalf("GetSeasons: %v", err)
+	}
+	if _, err := p.GetEpisodes("tv/1", "s1"); err != nil {
+		t.Fatalf("GetEpisodes: %v", err)
+	}
+	if len(inner.seasonIDs) != 1 || inner.seasonIDs[0] != "tv/utopia-2013" || len(inner.episodeIDs) != 1 || inner.episodeIDs[0] != "tv/utopia-2013" {
+		t.Fatalf("seasons asked for %v, episodes for %v; want tv/utopia-2013 for both", inner.seasonIDs, inner.episodeIDs)
+	}
+}
+
 func TestSeasonsOfAYearlessCatalogueRowNeverReachTheProviderOnATitleMatch(t *testing.T) {
 	inner := &showProvider{results: []media.SearchResult{{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"}}}
 	p := Wrap(inner, okServer(t), General)

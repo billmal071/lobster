@@ -142,6 +142,7 @@ func (p *Provider) resolve(row media.SearchResult) (string, error) {
 	if MintsTMDBShapedIDs(p.Provider) {
 		return row.ID, nil
 	}
+	row = p.Dated(row)
 	key := resolveKey{row.ID, titlekey.Normalize(row.Title), row.Year, row.Type}
 	if key.title == "" {
 		return "", fmt.Errorf("%q has no title to match on this provider", row.Title)
@@ -195,6 +196,17 @@ func (p *Provider) resolve(row media.SearchResult) (string, error) {
 	p.resolved[key] = pick
 	p.mu.Unlock()
 	return pick, nil
+}
+
+// Dated fills an empty Year from TMDB's details for the row's ID.
+func (p *Provider) Dated(r media.SearchResult) media.SearchResult {
+	if r.Year != "" || p.client == nil || !IsID(r.ID) {
+		return r
+	}
+	if d, err := p.client.Details(r.ID); err == nil {
+		r.Year = d.Year
+	}
+	return r
 }
 
 func (p *Provider) GetSeasons(id string) ([]media.Season, error) {

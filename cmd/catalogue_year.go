@@ -13,26 +13,18 @@ func identifyCatalogueRow(p provider.Provider, r media.SearchResult) (media.Sear
 	if !r.FromCatalogue || r.Year != "" {
 		return r, nil
 	}
-	y := catalogueYear(r.ID)
-	if y == "" {
-		return r, fmt.Errorf("cannot tell which %q to play: the TMDB catalogue gives no release year for %s", r.Title, r.ID)
-	}
-	r.Year = y
-	r.ProviderID = ""
 	if w, ok := p.(*catalog.Provider); ok {
 		p = w.Unwrap()
 	}
-	return resolveCatalogueRow(p, r), nil
-}
-
-func catalogueYear(id string) string {
-	if cfg == nil || cfg.TMDBAPIKey == "" {
-		return ""
+	var client *catalog.Client
+	if cfg != nil {
+		client = newCatalogClient(cfg.TMDBAPIKey)
 	}
-	d, err := newCatalogClient(cfg.TMDBAPIKey).Details(id)
-	if err != nil {
-		debugf("catalogue year for %s: %v", id, err)
-		return ""
+	w := catalog.Wrap(p, client, catalog.General)
+	r = w.Dated(r)
+	if r.Year == "" {
+		return r, fmt.Errorf("cannot tell which %q to play: the TMDB catalogue gives no release year for %s", r.Title, r.ID)
 	}
-	return d.Year
+	r.ProviderID = ""
+	return w.ResolveRow(r), nil
 }
