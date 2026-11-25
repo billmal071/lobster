@@ -332,8 +332,8 @@ listing is the whole season:
   nothing.
 - `{"code": "season_list_incomplete", "provider": "eztv"}` — the source could
   not fetch its whole release list, or (for EZTV) holds only some of the show's
-  seasons, so `seasons` may be missing some. A season absent from it is not
-  proof the season does not exist. EZTV's `episode_list_incomplete` reason
+  seasons, so `seasons` may be missing some; the message says which of the two
+  it was. A season absent from it is not proof the season does not exist. EZTV's `episode_list_incomplete` reason
   names missing episode numbers only when its fully fetched release list has a
   numbering gap; when a page failed or a limit cut the fetch short it says only
   that the list could not be fully fetched.

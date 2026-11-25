@@ -213,12 +213,14 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	}
 	w := episodeSourceWarnings(asked, p, shortfall, len(out), askedLacks)
 	if seasonGap != gapNone {
+		message := fmt.Sprintf("%s flagged its season list as incomplete, so the seasons above may be missing some", providerLabel(p))
+		if seasonGap == gapCatalogue {
+			message = fmt.Sprintf("%s does not carry every season of %q, so the seasons above are the ones it has", providerLabel(p), r.Title)
+		}
 		w = append(w, map[string]any{
 			"code":     "season_list_incomplete",
 			"provider": providerLabel(p),
-			"message": fmt.Sprintf(
-				"%s flagged its season list as incomplete, so the seasons above may be missing some",
-				providerLabel(p)),
+			"message":  message,
 		})
 	}
 	if len(w) > 0 {

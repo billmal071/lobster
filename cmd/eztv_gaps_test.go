@@ -481,3 +481,58 @@ func TestBatchDoesNotSkipASeasonTheChainFailedToList(t *testing.T) {
 		})
 	}
 }
+
+func TestEpisodesSaysAGappedSeasonListIsAllTheProviderCarries(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+	withStubProvider(t, &stubProvider{
+		seasons:    []media.Season{{ID: "9", Number: 9}},
+		seasonsErr: gapErr(),
+		episodes:   []media.Episode{{ID: "9x1", Number: 1}},
+	})
+	chainOf(t)
+
+	withEpisodesFlags(t, tvRef(t, ""), 9)
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	msg := seasonListWarning(t, buf.Bytes())
+	if strings.Contains(msg, "may be missing") || !strings.Contains(msg, "does not carry every season") {
+		t.Fatalf("message = %q, want the confirmed catalogue gap stated, not hedged", msg)
+	}
+}
+
+func TestEpisodesHedgesASeasonListCutShort(t *testing.T) {
+	hostileEnv(t)
+	buf := captureAgentOut(t)
+	withStubProvider(t, partialSeasonsPrimary())
+	withFallbackChain(t)
+
+	withEpisodesFlags(t, tvRef(t, ""), 2)
+	if err := episodesRun(episodesCmd, nil); err != nil {
+		t.Fatalf("episodesRun: %v", err)
+	}
+	if msg := seasonListWarning(t, buf.Bytes()); !strings.Contains(msg, "may be missing") {
+		t.Fatalf("message = %q, want a list cut short described as possibly missing seasons", msg)
+	}
+}
+
+func seasonListWarning(t *testing.T, out []byte) string {
+	t.Helper()
+	var payload struct {
+		Warnings []struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"warnings"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	for _, w := range payload.Warnings {
+		if w.Code == "season_list_incomplete" {
+			return w.Message
+		}
+	}
+	t.Fatalf("no season_list_incomplete warning in %s", out)
+	return ""
+}
