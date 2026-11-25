@@ -181,7 +181,7 @@ func fetchDetailCmd(p provider.Provider, id string) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		return detailFetchedMsg{id: id, detail: detail}
+		return detailFetchedMsg{id: id, owner: p, detail: detail}
 	}
 }
 
@@ -216,21 +216,21 @@ func queueSeasonCmd(mgr *dlmanager.Manager, downloads []*store.Download) tea.Cmd
 // TMDB high-res poster when the caller's lookup policy allows) and renders it
 // for the detail pane. lookup is supplied per-tab so only the Movies/Series
 // (FlixHQ) views opt into TMDB enrichment; other tabs keep their own posters.
-func fetchPosterForItemCmd(item media.SearchResult, width, height int, lookup func(title, year string, isTV bool) string) tea.Cmd {
+func fetchPosterForItemCmd(item media.SearchResult, owner provider.Provider, width, height int, lookup func(title, year string, isTV bool) string) tea.Cmd {
 	return func() tea.Msg {
 		url := posterURLForItem(item, lookup)
 		if url == "" {
-			return posterFetchedMsg{id: item.ID, inline: poster.IsInlineImage()}
+			return posterFetchedMsg{id: item.ID, owner: owner, inline: poster.IsInlineImage()}
 		}
 		if poster.IsInlineImage() {
 			b64, w, h, err := poster.FetchInlineImage(url)
 			if err != nil {
-				return posterFetchedMsg{id: item.ID, inline: true} // empty -> placeholder box
+				return posterFetchedMsg{id: item.ID, owner: owner, inline: true} // empty -> placeholder box
 			}
-			return posterFetchedMsg{id: item.ID, inline: true, b64: b64, imgW: w, imgH: h}
+			return posterFetchedMsg{id: item.ID, owner: owner, inline: true, b64: b64, imgW: w, imgH: h}
 		}
 		rendered := poster.RenderTUI(url, width, height)
-		return posterFetchedMsg{id: item.ID, poster: rendered}
+		return posterFetchedMsg{id: item.ID, owner: owner, poster: rendered}
 	}
 }
 

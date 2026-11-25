@@ -149,3 +149,62 @@ func TestLiveRowsDoNotInheritAnEarlierSearchsOwners(t *testing.T) {
 		t.Fatal("a live row resolved to the fallback that produced the previous search's row at the same index")
 	}
 }
+
+func TestALateDetailFromAnotherProviderIsIgnored(t *testing.T) {
+	primary, fallback := noResultsPrimary(), fallbackWithShow()
+	m, _ := searchedModel(t, primary, fallback)
+
+	next, _ := m.Update(detailFetchedMsg{id: "fb/1", owner: primary, detail: &media.ContentDetail{}})
+
+	if got := next.(AppModel).currentDetail; got != nil {
+		t.Fatalf("currentDetail = %+v, want the primary's answer for the same ID ignored on a fallback row", got)
+	}
+}
+
+func TestALatePosterFromAnotherProviderIsIgnored(t *testing.T) {
+	primary, fallback := noResultsPrimary(), fallbackWithShow()
+	m, _ := searchedModel(t, primary, fallback)
+
+	next, _ := m.Update(posterFetchedMsg{id: "fb/1", owner: primary, poster: "art"})
+
+	if got := next.(AppModel).currentPoster; got != "" {
+		t.Fatalf("currentPoster = %q, want the primary's poster for the same ID ignored on a fallback row", got)
+	}
+}
+
+func TestTheOwnersDetailIsShown(t *testing.T) {
+	primary, fallback := noResultsPrimary(), fallbackWithShow()
+	m, cmd := searchedModel(t, primary, fallback)
+
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("cmd returned %T, want a batch led by the detail fetch", cmd())
+	}
+	next, _ := m.Update(batch[0]())
+
+	if next.(AppModel).currentDetail == nil {
+		t.Fatal("the fallback's own detail for its row was not shown")
+	}
+}
+
+func TestTheOwnersPosterIsShown(t *testing.T) {
+	primary, fallback := noResultsPrimary(), fallbackWithShow()
+	m, _ := searchedModel(t, primary, fallback)
+
+	next, _ := m.Update(posterFetchedMsg{id: "fb/1", owner: fallback, poster: "art"})
+
+	if got := next.(AppModel).currentPoster; got != "art" {
+		t.Fatalf("currentPoster = %q, want the owner's poster shown", got)
+	}
+}
+
+func TestPosterFetchCarriesItsOwner(t *testing.T) {
+	owner := fallbackWithShow()
+	noLookup := func(string, string, bool) string { return "" }
+
+	msg := fetchPosterForItemCmd(media.SearchResult{ID: "fb/1"}, owner, 10, 10, noLookup)()
+
+	if got := msg.(posterFetchedMsg).owner; got != provider.Provider(owner) {
+		t.Fatalf("owner = %v, want the provider the poster was fetched for", got)
+	}
+}

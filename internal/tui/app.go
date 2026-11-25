@@ -391,7 +391,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentItem = &m.results[0]
 			cmds = append(cmds, fetchDetailCmd(m.providerForCurrentItem(), m.results[0].ID))
 			pw, ph := poster.BoxDims(m.width, 0, 0)
-			cmds = append(cmds, fetchPosterForItemCmd(m.results[0], pw, ph, m.posterLookup()))
+			cmds = append(cmds, fetchPosterForItemCmd(m.results[0], m.providerForCurrentItem(), pw, ph, m.posterLookup()))
 		} else {
 			m.currentItem = nil
 			m.currentDetail = nil
@@ -412,12 +412,12 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case detailFetchedMsg:
 		m.err = nil
-		if m.currentItem != nil && m.currentItem.ID == msg.id {
+		if m.currentItem != nil && m.currentItem.ID == msg.id && msg.owner == m.providerForCurrentItem() {
 			m.currentDetail = msg.detail
 		}
 
 	case posterFetchedMsg:
-		if m.currentItem != nil && m.currentItem.ID == msg.id {
+		if m.currentItem != nil && m.currentItem.ID == msg.id && msg.owner == m.providerForCurrentItem() {
 			if msg.inline {
 				m.posterB64 = msg.b64
 				m.posterImgW = msg.imgW
@@ -471,7 +471,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = nil
 			cmds = append(cmds, fetchDetailCmd(m.providerForCurrentItem(), m.currentItem.ID))
 			pw, ph := poster.BoxDims(m.width, 0, 0)
-			cmds = append(cmds, fetchPosterForItemCmd(*m.currentItem, pw, ph, m.posterLookup()))
+			cmds = append(cmds, fetchPosterForItemCmd(*m.currentItem, m.providerForCurrentItem(), pw, ph, m.posterLookup()))
 		}
 		cmds = append(cmds, listCmd)
 	}

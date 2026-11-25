@@ -21,6 +21,7 @@ type resultsFetchedMsg struct {
 // detailFetchedMsg is sent when detailed metadata for an item is fetched.
 type detailFetchedMsg struct {
 	id     string
+	owner  provider.Provider
 	detail *media.ContentDetail
 }
 
@@ -72,6 +73,7 @@ type liveItemsFetchedMsg struct {
 // For inline terminals, `inline` is true and `b64`/`imgW`/`imgH` hold the image.
 type posterFetchedMsg struct {
 	id     string
+	owner  provider.Provider
 	poster string
 	b64    string
 	imgW   int
