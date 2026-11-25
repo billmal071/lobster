@@ -51,16 +51,11 @@ func Download(stream *media.Stream, title string, outputDir string, subFile stri
 
 	// Route fake-PNG-obfuscated HLS through the local proxy so ffmpeg receives
 	// clean MPEG-TS (it cannot demux the PNG-wrapped segments either).
-	if stream.Deobfuscate {
-		p, perr := hlsproxy.New(stream.Referer, stream.UserAgent)
-		if perr != nil {
-			return "", fmt.Errorf("starting de-obfuscation proxy: %w", perr)
-		}
-		defer p.Close()
-		clone := *stream
-		clone.URL = p.PlaylistURL(stream.URL)
-		stream = &clone
+	stream, closeProxy, err := hlsproxy.Wrap(stream)
+	if err != nil {
+		return "", fmt.Errorf("starting de-obfuscation proxy: %w", err)
 	}
+	defer closeProxy()
 
 	// Skip if file already exists and appears complete.
 	if info, err := os.Stat(outputPath); err == nil && info.Size() > 0 {
