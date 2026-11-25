@@ -293,12 +293,14 @@ type detailBody struct {
 	} `json:"external_ids"`
 }
 
-func checkDetail(body []byte) error {
-	var d detailBody
-	if err := json.Unmarshal(body, &d); err != nil || d.StatusCode != 0 || d.ID <= 0 {
-		return errors.New("decoding TMDB details failed")
+func checkDetail(want int) func([]byte) error {
+	return func(body []byte) error {
+		var d detailBody
+		if err := json.Unmarshal(body, &d); err != nil || d.StatusCode != 0 || d.ID <= 0 || d.ID != want {
+			return errors.New("decoding TMDB details failed")
+		}
+		return nil
 	}
-	return nil
 }
 
 // Details fetches metadata for a movie/<n> or tv/<n> id.
@@ -309,7 +311,11 @@ func (c *Client) Details(id string) (*Detail, error) {
 	}
 	q := url.Values{}
 	q.Set("append_to_response", "external_ids")
-	body, err := c.get("/"+k+"/"+n, q, checkDetail)
+	want, err := strconv.Atoi(n)
+	if err != nil {
+		return nil, err
+	}
+	body, err := c.get("/"+k+"/"+n, q, checkDetail(want))
 	if err != nil {
 		return nil, err
 	}

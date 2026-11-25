@@ -283,6 +283,25 @@ func TestDetailsUseExternalIDs(t *testing.T) {
 	}
 }
 
+func TestDetailsRefuseAndNeverCacheAResponseForAnotherTitle(t *testing.T) {
+	calls := 0
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			io.WriteString(w, `{"id":604,"overview":"Another film.","release_date":"2003-05-15"}`)
+			return
+		}
+		io.WriteString(w, `{"id":603,"overview":"A hacker.","release_date":"1999-03-30"}`)
+	})
+	if d, err := c.Details("movie/603"); err == nil {
+		t.Fatalf("Details(movie/603) = %+v, nil; the response was for TMDB id 604", d)
+	}
+	d, err := c.Details("movie/603")
+	if err != nil || d.Year != "1999" || calls != 2 {
+		t.Fatalf("second Details = %+v, %v after %d calls; want 1999 fetched afresh", d, err, calls)
+	}
+}
+
 func TestDetailsRejectBadIDs(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Error("no request expected for a malformed id")
