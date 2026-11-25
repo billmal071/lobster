@@ -9,6 +9,7 @@ package hlsproxy
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -19,12 +20,14 @@ import (
 	"time"
 
 	"lobster/internal/httputil"
+	"lobster/internal/media"
 )
 
 // Proxy is a running localhost HLS de-obfuscating proxy.
 type Proxy struct {
 	referer   string
 	userAgent string
+	origin    string
 	base      string // http://127.0.0.1:PORT/p
 	srv       *http.Server
 	ln        net.Listener
@@ -58,8 +61,35 @@ func New(referer, userAgent string) (*Proxy, error) {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/p", p.handle)
+	mux.HandleFunc("/p.ts", p.handle)
 	p.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go p.srv.Serve(ln)
+	return p, nil
+}
+
+// Wrap routes a fake-PNG-obfuscated HLS stream through a new proxy that sends
+// the stream's Referer, User-Agent and Origin upstream, so a player or ffmpeg
+// receives clean MPEG-TS. Any other stream is returned as is. The cleanup func
+// shuts the proxy down and is always safe to call.
+func Wrap(stream *media.Stream) (*media.Stream, func(), error) {
+	if stream == nil || !stream.Deobfuscate {
+		return stream, func() {}, nil
+	}
+	p, err := forStream(stream)
+	if err != nil {
+		return stream, func() {}, err
+	}
+	clone := *stream
+	clone.URL = p.PlaylistURL(stream.URL)
+	return &clone, func() { _ = p.Close() }, nil
+}
+
+func forStream(s *media.Stream) (*Proxy, error) {
+	p, err := New(s.Referer, s.UserAgent)
+	if err != nil {
+		return nil, err
+	}
+	p.origin = s.Origin
 	return p, nil
 }
 
@@ -67,6 +97,12 @@ func New(referer, userAgent string) (*Proxy, error) {
 // through this proxy.
 func (p *Proxy) PlaylistURL(upstream string) string {
 	return p.base + "?u=" + base64.RawURLEncoding.EncodeToString([]byte(upstream))
+}
+
+// segmentURL is PlaylistURL on a .ts path: ffmpeg 7.1+ refuses an HLS segment
+// whose URL lacks an allowed_segment_extensions extension.
+func (p *Proxy) segmentURL(upstream string) string {
+	return p.base + ".ts?u=" + base64.RawURLEncoding.EncodeToString([]byte(upstream))
 }
 
 // Close shuts the proxy down.
@@ -95,6 +131,9 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.userAgent != "" {
 		req.Header.Set("User-Agent", p.userAgent)
+	}
+	if p.origin != "" {
+		req.Header.Set("Origin", p.origin)
 	}
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -134,16 +173,43 @@ func isPlaylist(body []byte) bool {
 	return bytes.HasPrefix(bytes.TrimSpace(body), []byte("#EXTM3U"))
 }
 
-// stripPNG removes a fake-PNG wrapper (…IEND<crc><payload>) so the real
-// MPEG-TS payload underneath is served. Clean payloads pass through untouched.
+// stripPNG removes a fake-PNG wrapper so the real MPEG-TS payload underneath
+// is served: either the bytes after IEND<crc> (megaplay/ibyteimg) or, when
+// nothing follows IEND, the concatenated tsDa chunks (vercetti.org). Clean
+// payloads and wrappers it cannot parse pass through untouched.
 func stripPNG(body []byte) []byte {
 	if !bytes.HasPrefix(body, pngSig) {
 		return body
 	}
-	if i := bytes.Index(body, []byte("IEND")); i >= 0 && i+8 <= len(body) {
+	if payload, ok := pngPayload(body[len(pngSig):]); ok {
+		return payload
+	}
+	if i := bytes.Index(body, []byte("IEND")); i >= 0 && i+8 < len(body) {
 		return body[i+8:]
 	}
 	return body
+}
+
+func pngPayload(chunks []byte) ([]byte, bool) {
+	var data []byte
+	for len(chunks) >= 12 {
+		n := uint64(binary.BigEndian.Uint32(chunks))
+		if 12+n > uint64(len(chunks)) {
+			return nil, false
+		}
+		typ, body := string(chunks[4:8]), chunks[8:8+n]
+		chunks = chunks[12+n:]
+		switch typ {
+		case "tsDa":
+			data = append(data, body...)
+		case "IEND":
+			if len(chunks) > 0 {
+				return chunks, true
+			}
+			return data, len(data) > 0
+		}
+	}
+	return nil, false
 }
 
 // rewritePlaylist resolves every child URI relative to the playlist's own URL
@@ -154,15 +220,16 @@ func (p *Proxy) rewritePlaylist(body []byte, playlistURL string) []byte {
 	if err != nil {
 		return body
 	}
-	resolve := func(ref string) string {
+	resolve := func(ref string, proxied func(string) string) string {
 		u, err := url.Parse(strings.TrimSpace(ref))
 		if err != nil {
 			return ref
 		}
-		return p.PlaylistURL(base.ResolveReference(u).String())
+		return proxied(base.ResolveReference(u).String())
 	}
 
 	var out strings.Builder
+	nextIsVariant := false
 	for _, line := range strings.Split(string(body), "\n") {
 		trimmed := strings.TrimSpace(line)
 		switch {
@@ -172,10 +239,16 @@ func (p *Proxy) rewritePlaylist(body []byte, playlistURL string) []byte {
 			// Rewrite any URI="..." attribute (keys, media, maps).
 			out.WriteString(uriAttrRe.ReplaceAllStringFunc(line, func(m string) string {
 				inner := uriAttrRe.FindStringSubmatch(m)[1]
-				return `URI="` + resolve(inner) + `"`
+				return `URI="` + resolve(inner, p.PlaylistURL) + `"`
 			}))
+			if strings.HasPrefix(trimmed, "#EXT-X-STREAM-INF") {
+				nextIsVariant = true
+			}
+		case nextIsVariant:
+			out.WriteString(resolve(line, p.PlaylistURL))
+			nextIsVariant = false
 		default:
-			out.WriteString(resolve(line))
+			out.WriteString(resolve(line, p.segmentURL))
 		}
 		out.WriteByte('\n')
 	}
