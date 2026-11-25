@@ -14,7 +14,7 @@ import (
 const validateTimeout = 4 * time.Second
 
 // validateStream does a cheap reachability check on the resolved URL: a 1-byte
-// Range GET replaying the stream's Referer and User-Agent (a browser one when
+// Range GET replaying the stream's Referer, Origin and User-Agent (a browser one when
 // the stream names none). It is deliberately a playlist-level check
 // (status < 400), not a segment-level playability guarantee. Returns nil if
 // reachable.
@@ -45,6 +45,9 @@ func validateStream(client *http.Client, s *media.Stream) error {
 	req.Header.Set("Range", "bytes=0-0")
 	if s.Referer != "" {
 		req.Header.Set("Referer", s.Referer)
+	}
+	if s.Origin != "" {
+		req.Header.Set("Origin", s.Origin)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

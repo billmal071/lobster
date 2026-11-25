@@ -134,3 +134,19 @@ func TestMagnetHasInfoHashRejectsSeveralDistinctHashes(t *testing.T) {
 		t.Fatal("a magnet repeating one info hash was rejected")
 	}
 }
+
+func TestValidateStreamReplaysOrigin(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Origin") != "https://player.example" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusPartialContent)
+	}))
+	defer srv.Close()
+
+	s := &media.Stream{URL: srv.URL + "/master.m3u8", Origin: "https://player.example"}
+	if err := validateStream(srv.Client(), s); err != nil {
+		t.Fatalf("stream needing Origin rejected: %v", err)
+	}
+}

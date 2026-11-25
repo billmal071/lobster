@@ -135,7 +135,7 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 
 		var stream *media.Stream
 		if sp, ok := p.(provider.StreamProvider); ok {
-			stream, err = tryStreamProviderFallback(sp, match, req.MediaType, sequelSeason(req.Title, match.ID, req.Season), req.Episode, quality, log)
+			stream, err = tryStreamProviderFallback(sp, match, req.MediaType, sequelSeason(req.Title, match.ID, req.Season), req.Episode, quality, req.Accept, log)
 		} else {
 			stream, err = tryEmbedProviderFallback(p, match, req.MediaType, req.Season, req.Episode, quality, req.Accept, log)
 		}
@@ -550,10 +550,22 @@ func titleSeasonNumber(title string, m []int) int {
 	return 0
 }
 
-// tryStreamProviderFallback resolves a stream via StreamProvider.Watch().
-func tryStreamProviderFallback(sp provider.StreamProvider, match *media.SearchResult, mediaType media.MediaType, season, episode int, quality string, log func(string, ...any)) (*media.Stream, error) {
+type acceptingStreamProvider interface {
+	provider.StreamProvider
+	WatchAccepting(mediaID, episodeID, server, quality string, accept func(*media.Stream) error) (*media.Stream, error)
+}
+
+// tryStreamProviderFallback resolves a stream via StreamProvider.Watch, or via
+// WatchAccepting when the provider has it and accept is set.
+func tryStreamProviderFallback(sp provider.StreamProvider, match *media.SearchResult, mediaType media.MediaType, season, episode int, quality string, accept func(*media.Stream) error, log func(string, ...any)) (*media.Stream, error) {
+	watch := sp.Watch
+	if ap, ok := sp.(acceptingStreamProvider); ok && accept != nil {
+		watch = func(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+			return ap.WatchAccepting(mediaID, episodeID, server, quality, accept)
+		}
+	}
 	if mediaType == media.Movie {
-		return sp.Watch(match.ID, "", "Default", quality)
+		return watch(match.ID, "", "Default", quality)
 	}
 	// TV: construct the episode ID
 	tmdbID := match.ID
@@ -565,7 +577,7 @@ func tryStreamProviderFallback(sp provider.StreamProvider, match *media.SearchRe
 
 	episodeID := fmt.Sprintf("%s:%d:%d", tmdbID, season, episode)
 	log("fallback episode ID: %s", episodeID)
-	return sp.Watch(match.ID, episodeID, "Default", quality)
+	return watch(match.ID, episodeID, "Default", quality)
 }
 
 // tryEmbedProviderFallback resolves a stream via GetServers + GetEmbedURL + Extract.
