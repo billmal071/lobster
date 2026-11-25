@@ -829,7 +829,9 @@ type seasonHit struct {
 // context expires mid-call. Of several matching candidates the first whose list
 // holds every season in wants is returned first, followed by those kept before
 // it; otherwise the first that lists any, followed by each later one that lists
-// a season in wants the ones kept so far lack or whose list was cut short.
+// a season in wants the ones kept so far lack or whose list was cut short. Once
+// one is kept, a later candidate is considered only when resolver.ConfidentMatch
+// takes it for the same work, judged by the first kept candidate's year.
 // failed is true when any lookup errored or timed out rather than answering,
 // whichever candidates were kept, and when a list that lacks a season in wants
 // was cut short.
@@ -842,9 +844,14 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 		debugf("episodes: fallback %T search failed: %v", p, err)
 		return nil, true
 	}
+	sameWork := req
 	for _, c := range resolver.Candidates(results, req) {
 		if !resolver.Matches(c, req) {
 			debugf("episodes: fallback %T candidate %q (ID: %s) is not the requested work, skipping", p, c.Title, c.ID)
+			continue
+		}
+		if len(hits) > 0 && !resolver.ConfidentMatch(c, sameWork) {
+			debugf("episodes: fallback %T candidate %q (%s, ID: %s) is not the work already kept, skipping", p, c.Title, c.Year, c.ID)
 			continue
 		}
 		seasons, err := seasonsWithContext(ctx, p, c.ID)
@@ -855,6 +862,9 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 		case lookupListed:
 			look.provider, look.id = p, c.ID
 			listed := &seasonHit{seasonLookup: look, title: c.Title}
+			if len(hits) == 0 && c.Year != "" {
+				sameWork.Year = c.Year
+			}
 			if listsEverySeason(seasons, wants) {
 				return append([]*seasonHit{listed}, hits...), failed
 			}

@@ -140,3 +140,31 @@ func TestBatchListerRescansASplitShowAfterARetryForgetsTheScan(t *testing.T) {
 		t.Fatalf("GetSeasons calls after a retry = %d, want 2: one rescan of both candidates", fb.calls)
 	}
 }
+
+func TestProbeSeasonsKeepsCoverageToTheWorkItFirstKept(t *testing.T) {
+	work := func(id, year string) media.SearchResult {
+		return media.SearchResult{ID: id, Title: "Show", Year: year, Type: media.TV}
+	}
+	only := func(nums ...int) seasonOutcome { return seasonOutcome{seasons: seasonsOf(nums...)} }
+	cases := []struct {
+		name    string
+		reqYear string
+		results []media.SearchResult
+		wants   []int
+		wantIDs []string
+	}{
+		{"a same-title remake does not supply a season the ref's year lacks", "2015", []media.SearchResult{work("orig", "2015"), work("remake", "2024")}, []int{2}, []string{"orig"}},
+		{"a same-title remake listing every wanted season is not promoted", "2015", []media.SearchResult{work("orig", "2015"), work("remake", "2024")}, []int{1, 2}, []string{"orig"}},
+		{"without a ref year the first kept candidate's year decides", "", []media.SearchResult{work("orig", "2015"), work("remake", "2024")}, []int{1, 2}, []string{"orig"}},
+		{"a same-work candidate a year apart still supplies a season", "2015", []media.SearchResult{work("a", "2015"), work("b", "2016")}, []int{1, 2}, []string{"b", "a"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			req := resolver.Request{ID: "x/1", Title: "Show", Year: c.reqYear, MediaType: media.TV}
+			hits, _ := probeSeasons(context.Background(), scripted(c.results, only(1), only(1, 2)), req, c.wants)
+			if got := hitIDs(hits); !reflect.DeepEqual(got, c.wantIDs) {
+				t.Fatalf("candidates kept = %v, want %v", got, c.wantIDs)
+			}
+		})
+	}
+}

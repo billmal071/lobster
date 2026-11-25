@@ -127,7 +127,7 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 	var lastErr, refusal error
 	for i := range candidates {
 		match := &candidates[i]
-		if refusal != nil && !confidentMatch(*match, req) {
+		if refusal != nil && !ConfidentMatch(*match, req) {
 			log("fallback candidate %s skipped: not a confident match after a refused stream", match.Title)
 			continue
 		}
@@ -181,9 +181,9 @@ func admittedCandidates(candidates []media.SearchResult, req Request, log func(s
 	return out
 }
 
-// confidentMatch reports whether c is the work req identifies: the same ID, or
+// ConfidentMatch reports whether c is the work req identifies: the same ID, or
 // a title Matches accepts with release years that are unknown or within one.
-func confidentMatch(c media.SearchResult, req Request) bool {
+func ConfidentMatch(c media.SearchResult, req Request) bool {
 	if req.ID != "" && c.ID == req.ID {
 		return true
 	}
