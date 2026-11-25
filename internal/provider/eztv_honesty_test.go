@@ -183,11 +183,16 @@ func TestEZTVProbeTimesOutAndFailsOpen(t *testing.T) {
 	eztvProbeTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { eztvProbeTimeout = old })
 	var inflight, peak int32
-	p, _ := eztvFiveShowServer(t, 0, true, &inflight, &peak)
+	p, perID := eztvFiveShowServer(t, 0, true, &inflight, &peak)
 	start := time.Now()
 	ids := eztvResultIDs(t, p)
 	if len(ids) != 5 {
 		t.Fatalf("ids = %v, want all 5 kept when every probe times out", ids)
+	}
+	for _, id := range ids {
+		if got := eztvHitsFor(perID, strings.TrimPrefix(id, "eztv/")); got != 1 {
+			t.Fatalf("probes for %s = %d, want 1: each candidate must be probed before it is kept", id, got)
+		}
 	}
 	if took := time.Since(start); took > 2*time.Second {
 		t.Fatalf("search took %s, want it bounded by the probe timeout", took)

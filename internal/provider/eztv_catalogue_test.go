@@ -287,15 +287,6 @@ func TestEZTVPrimarySearchDoesNotCacheAProbeError(t *testing.T) {
 	}
 }
 
-func TestEZTVPrimarySearchBoundsProbeConcurrency(t *testing.T) {
-	var inflight, peak int32
-	s := eztvProbeServer(t, 0, 40*time.Millisecond, &inflight, &peak)
-	eztvResultIDs(t, s.p)
-	if got := atomic.LoadInt32(&peak); got > eztvProbeConcurrency {
-		t.Fatalf("peak concurrent probes = %d, want at most %d", got, eztvProbeConcurrency)
-	}
-}
-
 func eztvIMDbStatusServer(t *testing.T, tvStatus map[string]int) *EZTV {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

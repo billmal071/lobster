@@ -26,6 +26,8 @@ func TestEZTVNegativeProbeYieldsToReleasesALaterWalkFetched(t *testing.T) {
 }
 
 func TestEZTVNegativeProbeOutlivesAnExpiredPartialWalk(t *testing.T) {
+	var hits int32
+	eztvPagedServer(t, &hits, false, 1, 1)
 	e := NewEZTV().AsPrimary()
 	now := time.Now()
 	e.now = func() time.Time { return now }
@@ -37,6 +39,9 @@ func TestEZTVNegativeProbeOutlivesAnExpiredPartialWalk(t *testing.T) {
 
 	if e.hasTorrents("1") {
 		t.Fatal("a prefix older than the cache TTL overrode a fresh empty probe")
+	}
+	if got := atomic.LoadInt32(&hits); got != 0 {
+		t.Fatalf("API calls = %d, want the fresh empty probe to answer without a request", got)
 	}
 }
 
