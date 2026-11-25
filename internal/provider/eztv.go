@@ -291,12 +291,13 @@ func (e *EZTV) Search(query string) ([]media.SearchResult, error) {
 	// Resolve IMDb ids concurrently: each is a full TMDB page fetch, and the
 	// search should not take five times as long as one.
 	ids := make([]string, len(hits))
+	lookupErrs := make([]error, len(hits))
 	var wg sync.WaitGroup
 	for i := range hits {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			ids[i] = e.imdbFor(hits[i].ID)
+			ids[i], lookupErrs[i] = e.imdbFor(hits[i].ID)
 		}(i)
 	}
 	wg.Wait()
@@ -316,6 +317,9 @@ func (e *EZTV) Search(query string) ([]media.SearchResult, error) {
 		})
 	}
 	if len(results) == 0 {
+		if err := errors.Join(lookupErrs...); err != nil {
+			return nil, fmt.Errorf("eztv search: resolving IMDb ids: %w", err)
+		}
 		return nil, fmt.Errorf("%w for %q", ErrNoResults, query)
 	}
 	return results, nil
@@ -450,17 +454,18 @@ func (e *EZTV) tmdbTVSearch(query string) ([]tmdbSearchResult, error) {
 // tmdbIMDBLink matches the IMDb link on a TMDB show page; the keyless site has no external_ids endpoint.
 var tmdbIMDBLink = regexp.MustCompile(`imdb\.com/title/tt(\d+)`)
 
-// imdbFor resolves a TMDB TV id to IMDb digits ("" when none), memoised per instance.
-func (e *EZTV) imdbFor(tmdbID int) string {
+// imdbFor resolves a TMDB TV id to IMDb digits ("" when none), memoised per
+// instance. A failed fetch is returned and not memoised, so the next search retries.
+func (e *EZTV) imdbFor(tmdbID int) (string, error) {
 	e.mu.Lock()
 	v, ok := e.imdb[tmdbID]
 	e.mu.Unlock()
 	if ok {
-		return v
+		return v, nil
 	}
 	body, err := e.tmdbGet(fmt.Sprintf("%s/tv/%d", strings.TrimRight(e.tmdbBaseURL, "/"), tmdbID))
 	if err != nil {
-		return "" // transient: not memoised, so the next search retries
+		return "", err
 	}
 	id := ""
 	if m := tmdbIMDBLink.FindSubmatch(body); m != nil {
@@ -469,7 +474,7 @@ func (e *EZTV) imdbFor(tmdbID int) string {
 	e.mu.Lock()
 	e.imdb[tmdbID] = id
 	e.mu.Unlock()
-	return id
+	return id, nil
 }
 
 // --- Seasons and episodes ---

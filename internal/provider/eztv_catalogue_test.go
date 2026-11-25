@@ -295,3 +295,40 @@ func TestEZTVPrimarySearchBoundsProbeConcurrency(t *testing.T) {
 		t.Fatalf("peak concurrent probes = %d, want at most %d", got, eztvProbeConcurrency)
 	}
 }
+
+func eztvIMDbStatusServer(t *testing.T, tvStatus map[string]int) *EZTV {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/search/multi":
+			fmt.Fprint(w, `{"results":[{"id":1,"name":"Kyle XY","media_type":"tv"},{"id":2,"name":"Kyle XY Recap","media_type":"tv"}]}`)
+		case strings.HasPrefix(r.URL.Path, "/tv/"):
+			if status := tvStatus[r.URL.Path]; status != 0 {
+				w.WriteHeader(status)
+				return
+			}
+			fmt.Fprint(w, `no imdb link on this page`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	p := NewEZTV()
+	p.tmdbBaseURL = srv.URL
+	return p
+}
+
+func TestEZTVSearchReportsAFailedIMDbLookupAsAFailure(t *testing.T) {
+	p := eztvIMDbStatusServer(t, map[string]int{"/tv/1": http.StatusBadGateway})
+	_, err := p.Search("kyle xy")
+	if err == nil || errors.Is(err, ErrNoResults) {
+		t.Fatalf("err = %v, want a lookup failure: a hit whose IMDb id could not be fetched is not a confirmed absence", err)
+	}
+}
+
+func TestEZTVSearchWithNoIMDbIDAnywhereIsNoResults(t *testing.T) {
+	p := eztvIMDbStatusServer(t, nil)
+	if _, err := p.Search("kyle xy"); !errors.Is(err, ErrNoResults) {
+		t.Fatalf("err = %v, want ErrNoResults when every TMDB page answered without an IMDb id", err)
+	}
+}
