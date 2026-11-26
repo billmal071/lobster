@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -81,20 +82,23 @@ func TestEZTVEmptyProbeYieldsToAWalkThatFinishedWhileItWasInFlight(t *testing.T)
 				c.walkPage(w, page)
 			}))
 			t.Cleanup(srv.Close)
+			var release sync.Once
+			letProbeAnswer := func() { release.Do(func() { close(releaseProbe) }) }
+			t.Cleanup(letProbeAnswer)
 			e := NewEZTV().AsPrimary()
 			e.SetBaseURLs("", srv.URL)
 			var clock atomic.Int64
 			start := time.Now()
 			e.now = func() time.Time { return start.Add(time.Duration(clock.Load())) }
 
-			probed := make(chan bool)
+			probed := make(chan bool, 1)
 			go func() { probed <- e.hasTorrents("1") }()
 			<-probeArrived
 			if _, err := e.torrents("eztv/1"); err != nil {
 				t.Fatalf("walk: %v", err)
 			}
 			clock.Store(int64(time.Second))
-			close(releaseProbe)
+			letProbeAnswer()
 			if !<-probed {
 				t.Fatal("search would hide a show whose releases a walk fetched while the empty probe was in flight")
 			}
