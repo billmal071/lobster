@@ -1,6 +1,10 @@
 package provider
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -43,6 +47,108 @@ func TestEZTVNegativeProbeOutlivesAnExpiredPartialWalk(t *testing.T) {
 	if got := atomic.LoadInt32(&hits); got != 0 {
 		t.Fatalf("API calls = %d, want the fresh empty probe to answer without a request", got)
 	}
+}
+
+func TestEZTVEmptyProbeYieldsToAWalkThatFinishedWhileItWasInFlight(t *testing.T) {
+	cases := []struct {
+		name     string
+		walkPage func(w http.ResponseWriter, page int)
+	}{
+		{"complete walk", func(w http.ResponseWriter, page int) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"torrents": eztvTestTorrents(1)})
+		}},
+		{"walk that ended short", func(w http.ResponseWriter, page int) {
+			if page > 1 {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"torrents": eztvTestTorrents(eztvPageSize)})
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var calls int32
+			probeArrived, releaseProbe := make(chan struct{}), make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if atomic.AddInt32(&calls, 1) == 1 {
+					close(probeArrived)
+					<-releaseProbe
+					fmt.Fprint(w, `{"torrents_count":0}`)
+					return
+				}
+				var page int
+				_, _ = fmt.Sscan(r.URL.Query().Get("page"), &page)
+				c.walkPage(w, page)
+			}))
+			t.Cleanup(srv.Close)
+			e := NewEZTV().AsPrimary()
+			e.SetBaseURLs("", srv.URL)
+			var clock atomic.Int64
+			start := time.Now()
+			e.now = func() time.Time { return start.Add(time.Duration(clock.Load())) }
+
+			probed := make(chan bool)
+			go func() { probed <- e.hasTorrents("1") }()
+			<-probeArrived
+			if _, err := e.torrents("eztv/1"); err != nil {
+				t.Fatalf("walk: %v", err)
+			}
+			clock.Store(int64(time.Second))
+			close(releaseProbe)
+			if !<-probed {
+				t.Fatal("search would hide a show whose releases a walk fetched while the empty probe was in flight")
+			}
+
+			clock.Store(int64(eztvCacheTTL + time.Second/2))
+			before := atomic.LoadInt32(&calls)
+			if !e.hasTorrents("1") || atomic.LoadInt32(&calls) == before {
+				t.Error("an empty probe that lost the race outlived the walk that beat it")
+			}
+		})
+	}
+}
+
+func TestEZTVEmptyProbeIsKeptWhenOnlyAnExpiredWalkHeldReleases(t *testing.T) {
+	for _, name := range []string{"complete walk", "walk that ended short"} {
+		t.Run(name, func(t *testing.T) {
+			var calls int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&calls, 1)
+				fmt.Fprint(w, `{"torrents_count":0}`)
+			}))
+			t.Cleanup(srv.Close)
+			e := NewEZTV().AsPrimary()
+			e.SetBaseURLs("", srv.URL)
+			now := time.Now()
+			e.now = func() time.Time { return now }
+			stale := now.Add(-eztvCacheTTL - time.Second)
+			held := []eztvTorrent{{Season: 1, Episode: 1, MagnetURL: "magnet:?xt=urn:btih:x"}}
+			if name == "complete walk" {
+				e.shows["1"] = eztvCachedShow{torrents: held, fetched: stale}
+			} else {
+				e.partial["1"] = eztvPartial{torrents: held, at: stale}
+			}
+
+			if e.hasTorrents("1") {
+				t.Fatal("releases older than the cache TTL overrode a fresh empty probe")
+			}
+			e.hasTorrents("1")
+			if got := atomic.LoadInt32(&calls); got != 1 {
+				t.Errorf("API calls = %d, want the empty probe cached and reused", got)
+			}
+		})
+	}
+}
+
+func eztvTestTorrents(n int) []map[string]any {
+	torrents := make([]map[string]any, n)
+	for i := range torrents {
+		torrents[i] = map[string]any{
+			"id": i, "filename": "S.S01E01.720p.mkv", "magnet_url": "magnet:?xt=urn:btih:x",
+			"season": "1", "episode": "1", "seeds": 1, "size_bytes": 1,
+		}
+	}
+	return torrents
 }
 
 func TestEZTVGetSeasonsCountsASeasonPackAsCarried(t *testing.T) {

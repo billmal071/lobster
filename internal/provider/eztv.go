@@ -379,9 +379,20 @@ func (e *EZTV) hasTorrents(imdb string) bool {
 	}
 	has := len(resp.Torrents) > 0
 	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !has && e.heldFreshLocked(imdb) {
+		return true
+	}
 	e.probes[imdb] = eztvProbe{has: has, at: e.now()}
-	e.mu.Unlock()
 	return has
+}
+
+func (e *EZTV) heldFreshLocked(imdb string) bool {
+	if c, ok := e.shows[imdb]; ok && e.now().Sub(c.fetched) < eztvCacheTTL {
+		return true
+	}
+	p, ok := e.partial[imdb]
+	return ok && e.now().Sub(p.at) < eztvCacheTTL
 }
 
 // CarriesEpisode returns nil when EZTV has a release for the episode and an
