@@ -763,3 +763,81 @@ func TestSeasonsOfAYearlessCatalogueRowNeverReachTheProviderOnATitleMatch(t *tes
 		}
 	}
 }
+
+func TestResolveRowOfAYearlessRowCarriesTheCatalogueYearItMatchedOn(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"},
+		{ID: "tv/utopia-2013", Title: "Utopia", Type: media.TV, Year: "2013"},
+	}}
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"id":1,"first_air_date":"2013-01-15"}`)
+	})
+	p := Wrap(inner, c, General)
+	row := media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, FromCatalogue: true}
+	for i := range 2 {
+		got := p.ResolveRow(row)
+		if got.Unresolved || got.ProviderID != "tv/utopia-2013" || got.Year != "2013" {
+			t.Fatalf("ResolveRow call %d = %+v, want tv/utopia-2013 with Year 2013", i+1, got)
+		}
+	}
+	if len(inner.searches) != 1 {
+		t.Fatalf("searches = %d, want 1: the second call is a cache hit", len(inner.searches))
+	}
+}
+
+func TestResolveRowKeepsTheYearARowAlreadyHas(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{{ID: "tv/utopia", Title: "Utopia", Type: media.TV}}}
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"id":1,"first_air_date":"2013-01-15"}`)
+	})
+	p := Wrap(inner, c, General)
+	got := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, Year: "2020", FromCatalogue: true})
+	if got.ProviderID != "tv/utopia" || got.Year != "2020" {
+		t.Fatalf("ResolveRow = %+v, want tv/utopia with its own Year 2020", got)
+	}
+}
+
+func TestAYearlessListingRowKeepsTheYearAlreadyKnownForItsID(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"},
+		{ID: "tv/utopia-2013", Title: "Utopia", Type: media.TV, Year: "2013"},
+	}}
+	p := Wrap(inner, failingClient(t, 500), General)
+	p.remember([]media.SearchResult{{ID: "tv/1", Title: "Utopia", Type: media.TV, Year: "2013", FromCatalogue: true}})
+	p.remember([]media.SearchResult{{ID: "tv/1", Title: "Utopia", Type: media.TV, FromCatalogue: true}})
+	if _, err := p.GetSeasons("tv/1"); err != nil {
+		t.Fatalf("GetSeasons after a yearless refresh with TMDB down: %v", err)
+	}
+	if len(inner.seasonIDs) != 1 || inner.seasonIDs[0] != "tv/utopia-2013" {
+		t.Fatalf("seasons asked for %v; want tv/utopia-2013", inner.seasonIDs)
+	}
+}
+
+func TestADatedListingRowReplacesTheYearKnownForItsID(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"},
+		{ID: "tv/utopia-2013", Title: "Utopia", Type: media.TV, Year: "2013"},
+	}}
+	p := Wrap(inner, failingClient(t, 500), General)
+	p.remember([]media.SearchResult{{ID: "tv/1", Title: "Utopia", Type: media.TV, Year: "2013", FromCatalogue: true}})
+	p.remember([]media.SearchResult{{ID: "tv/1", Title: "Utopia", Type: media.TV, Year: "2020", FromCatalogue: true}})
+	if _, err := p.GetSeasons("tv/1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(inner.seasonIDs) != 1 || inner.seasonIDs[0] != "tv/utopia-2020" {
+		t.Fatalf("seasons asked for %v; want tv/utopia-2020", inner.seasonIDs)
+	}
+}
+
+func TestResolveRowOfAYearlessRowUsesTheYearAlreadyKnownForItsID(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"},
+		{ID: "tv/utopia-2013", Title: "Utopia", Type: media.TV, Year: "2013"},
+	}}
+	p := Wrap(inner, failingClient(t, 500), General)
+	p.remember([]media.SearchResult{{ID: "tv/1", Title: "Utopia", Type: media.TV, Year: "2013", FromCatalogue: true}})
+	got := p.ResolveRow(media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, FromCatalogue: true})
+	if got.Unresolved || got.ProviderID != "tv/utopia-2013" || got.Year != "2013" {
+		t.Fatalf("ResolveRow with TMDB down = %+v, want tv/utopia-2013 from the year already known", got)
+	}
+}

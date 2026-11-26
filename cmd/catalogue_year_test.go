@@ -140,3 +140,25 @@ func TestYearlessCatalogueRowLeftUnresolvedIsAskedOfThePrimaryOnceTheCatalogueNa
 		t.Fatalf("primary was asked for %v; want tv/original-2013", prov.seasonIDs)
 	}
 }
+
+func TestARowTheTUIResolvedIsNotDatedAgainBeforePlayback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		io.WriteString(rw, `{"id":37854,"first_air_date":"2013-04-01"}`)
+	}))
+	t.Cleanup(srv.Close)
+	inner := &stubProvider{results: []media.SearchResult{
+		{ID: "tv/some-show-2013", Title: "Some Show", Type: media.TV, Year: "2013"},
+		{ID: "tv/some-show-2020", Title: "Some Show", Type: media.TV, Year: "2020"},
+	}}
+	w := catalog.Wrap(inner, catalog.NewWithBase("k", srv.URL, srv.Client()), catalog.General)
+	row := w.ResolveRow(media.SearchResult{ID: "tv/37854", Title: "Some Show", Type: media.TV, FromCatalogue: true})
+
+	calls := tmdbDetails(t, http.StatusInternalServerError, `{}`)
+	got, err := identifyCatalogueRow(w, row)
+	if err != nil || got.ProviderID != "tv/some-show-2013" {
+		t.Fatalf("identifyCatalogueRow = %+v, %v; want tv/some-show-2013", got, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("TMDB details asked %d times for a row the TUI already dated", *calls)
+	}
+}

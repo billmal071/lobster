@@ -91,6 +91,9 @@ func (p *Provider) remember(rows []media.SearchResult) {
 	}
 	for _, r := range rows {
 		if IsID(r.ID) {
+			if old, ok := p.rows[r.ID]; ok && r.Year == "" {
+				r.Year = old.Year
+			}
 			p.rows[r.ID] = r
 		}
 	}
@@ -114,23 +117,26 @@ func (p *Provider) providerID(id string) (string, error) {
 			p.mu.Unlock()
 		}
 	}
-	return p.resolve(row)
+	_, pid, err := p.resolve(row)
+	return pid, err
 }
 
 // ResolveRow names the wrapped provider's own ID for a catalogue row in
 // ProviderID and leaves ID, the catalogue identity, alone. A catalogue row
 // the provider has no match for is marked Unresolved, and a later call on
 // that row clears it once the provider answers. A row the catalogue did not
-// produce is returned unchanged.
+// produce is returned unchanged. A yearless row comes back with the catalogue
+// year the match was made on.
 func (p *Provider) ResolveRow(r media.SearchResult) media.SearchResult {
 	if !r.FromCatalogue || !IsID(r.ID) || r.ProviderID != "" {
 		return r
 	}
-	id, err := p.resolve(r)
+	dated, id, err := p.resolve(r)
 	if err != nil {
 		r.Unresolved = true
 		return r
 	}
+	r = dated
 	r.ProviderID = id
 	r.Unresolved = false
 	return r
@@ -146,27 +152,27 @@ func MintsTMDBShapedIDs(p provider.Provider) bool {
 	return ok && m.MintsTMDBShapedIDs()
 }
 
-func (p *Provider) resolve(row media.SearchResult) (string, error) {
+func (p *Provider) resolve(row media.SearchResult) (media.SearchResult, string, error) {
 	if MintsTMDBShapedIDs(p.Provider) {
-		return row.ID, nil
+		return row, row.ID, nil
 	}
 	row = p.Dated(row)
 	key := resolveKey{row.ID, titlekey.Normalize(row.Title), row.Year, row.Type}
 	if key.title == "" {
-		return "", fmt.Errorf("%q has no title to match on this provider", row.Title)
+		return row, "", fmt.Errorf("%q has no title to match on this provider", row.Title)
 	}
 	if row.Year == "" {
-		return "", fmt.Errorf("%q has no release year to tell it from a same-titled work on this provider", row.Title)
+		return row, "", fmt.Errorf("%q has no release year to tell it from a same-titled work on this provider", row.Title)
 	}
 	p.mu.Lock()
 	if r, ok := p.resolved[key]; ok {
 		p.mu.Unlock()
-		return r, nil
+		return row, r, nil
 	}
 	p.mu.Unlock()
 	results, err := p.Provider.Search(row.Title)
 	if err != nil {
-		return "", err
+		return row, "", err
 	}
 	exact := map[string]bool{}
 	loose := map[string]bool{}
@@ -188,10 +194,10 @@ func (p *Provider) resolve(row media.SearchResult) (string, error) {
 		candidates = exact
 	}
 	if len(candidates) == 0 {
-		return "", fmt.Errorf("%q was not found on this provider", row.Title)
+		return row, "", fmt.Errorf("%q was not found on this provider", row.Title)
 	}
 	if len(candidates) > 1 {
-		return "", fmt.Errorf("%q matches more than one work on this provider", row.Title)
+		return row, "", fmt.Errorf("%q matches more than one work on this provider", row.Title)
 	}
 	pick := ""
 	for id := range candidates {
@@ -203,12 +209,23 @@ func (p *Provider) resolve(row media.SearchResult) (string, error) {
 	}
 	p.resolved[key] = pick
 	p.mu.Unlock()
-	return pick, nil
+	return row, pick, nil
 }
 
-// Dated fills an empty Year from TMDB's details for the row's ID.
+// Dated fills an empty Year from the year already known for the row's ID,
+// else from TMDB's details for it.
 func (p *Provider) Dated(r media.SearchResult) media.SearchResult {
-	if r.Year != "" || p.client == nil || !IsID(r.ID) {
+	if r.Year != "" || !IsID(r.ID) {
+		return r
+	}
+	p.mu.Lock()
+	known := p.rows[r.ID].Year
+	p.mu.Unlock()
+	if known != "" {
+		r.Year = known
+		return r
+	}
+	if p.client == nil {
 		return r
 	}
 	if d, err := p.client.Details(r.ID); err == nil {
