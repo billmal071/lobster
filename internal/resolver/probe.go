@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -100,6 +101,9 @@ type Request struct {
 	// this race (the next provider is tried) without being recorded in the
 	// health store, whatever else went wrong for it.
 	Accept func(*media.Stream) error
+	// Owner is the provider ID belongs to. It is asked for ID directly instead
+	// of searching by Title, so it can serve an episode it cannot list.
+	Owner provider.Provider
 }
 
 // resolveWithProvider tries to resolve a stream using the given provider and
@@ -108,7 +112,7 @@ type Request struct {
 // req.Accept), and any error. The log function receives debug
 // messages in the same format as fmt.Sprintf.
 func resolveWithProvider(p provider.Provider, req Request, log func(string, ...any)) (*media.Stream, string, error) {
-	results, err := p.Search(req.Title)
+	results, err := searchUnlessOwner(p, req)
 	if err != nil {
 		log("search failed on %s: %v", ProviderName(p), err)
 		return nil, "search", fmt.Errorf("search failed: %w", err)
@@ -162,6 +166,15 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 		return nil, StageAccept, fmt.Errorf("stream refused: %w", refusal)
 	}
 	return nil, "resolve", fmt.Errorf("all %d candidates failed: %w", len(candidates), lastErr)
+}
+
+// searchUnlessOwner returns req's own work as the only result when p owns
+// req.ID, and p's search results for req.Title otherwise.
+func searchUnlessOwner(p provider.Provider, req Request) ([]media.SearchResult, error) {
+	if req.Owner != nil && req.ID != "" && reflect.TypeOf(p).Comparable() && p == req.Owner {
+		return []media.SearchResult{{ID: req.ID, Title: req.Title, Year: req.Year, Type: req.MediaType}}, nil
+	}
+	return p.Search(req.Title)
 }
 
 // admittedCandidates keeps the candidates that are the work req identifies. A
