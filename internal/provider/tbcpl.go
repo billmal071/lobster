@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -479,6 +480,9 @@ func (t *TBCPL) fetchSeason(tmdbID string, season int) (*tbcplSeasonResponse, er
 	body, err := t.fetch(apiURL, t.baseURL()+"/", "application/json, */*")
 	if err != nil {
 		return nil, err
+	}
+	if trimmed := bytes.TrimSpace(body); len(trimmed) > 0 && trimmed[0] == '<' {
+		return nil, fmt.Errorf("season %d of tv/%s: 1Shows answered with an HTML page, not season data", season, tmdbID)
 	}
 
 	var resp tbcplSeasonResponse

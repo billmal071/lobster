@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"lobster/internal/config"
 	"lobster/internal/media"
 )
 
@@ -139,5 +140,5 @@ func (r playRef) searchResult() (media.SearchResult, error) {
 	if r.Type == media.TV.String() {
 		t = media.TV
 	}
-	return media.SearchResult{ID: r.ID, Title: r.Title, Year: r.Year, Type: t}, nil
+	return media.SearchResult{ID: r.ID, Title: r.Title, Year: r.Year, Type: t, Provider: config.NormalizeBase(r.Base)}, nil
 }
