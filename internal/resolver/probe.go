@@ -102,7 +102,7 @@ type Request struct {
 	// health store, whatever else went wrong for it.
 	Accept func(*media.Stream) error
 	// Owner is the provider ID belongs to. It is asked for ID directly instead
-	// of searching by Title, so it can serve an episode it cannot list.
+	// of searching by Title.
 	Owner provider.Provider
 }
 
