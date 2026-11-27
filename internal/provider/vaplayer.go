@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -51,27 +52,9 @@ type vaplayerResponse struct {
 	} `json:"data"`
 }
 
-// Search uses TMDB's keyless multi-search endpoint (same as Soap2Day/VidNest).
+// Search uses TMDB multi-search (tmdbSearchMulti).
 func (vp *VaPlayer) Search(query string) ([]media.SearchResult, error) {
-	req, err := http.NewRequest(http.MethodGet, tmdbMultiSearchURL(tmdbBaseURL, query), nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/121.0")
-	req.Header.Set("Accept", "application/json, text/html, */*")
-	req.Header.Set("Referer", tmdbBaseURL+"/")
-
-	resp, err := vp.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("vaplayer search: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("vaplayer search: status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+	body, err := tmdbSearchMulti(context.Background(), tmdbBaseURL, query, vp.fetchTMDBSearch)
 	if err != nil {
 		return nil, fmt.Errorf("vaplayer search: %w", err)
 	}
@@ -84,6 +67,27 @@ func (vp *VaPlayer) Search(query string) ([]media.SearchResult, error) {
 		return nil, fmt.Errorf("%w for %q", ErrNoResults, query)
 	}
 	return results, nil
+}
+
+func (vp *VaPlayer) fetchTMDBSearch(rawURL string) ([]byte, error) {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/121.0")
+	req.Header.Set("Accept", "application/json, text/html, */*")
+	req.Header.Set("Referer", tmdbBaseURL+"/")
+
+	resp, err := vp.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 }
 
 // GetDetails returns minimal metadata.
