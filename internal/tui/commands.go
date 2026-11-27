@@ -297,3 +297,21 @@ func listenProgressCmd(mgr *dlmanager.Manager) tea.Cmd {
 		return downloadProgressMsg(update)
 	}
 }
+
+// stampResults tags the result list (or error) cmd yields with the results
+// generation current when it was issued, so Update drops an answer the user
+// has moved past by switching tabs or starting another search.
+func (m AppModel) stampResults(cmd tea.Cmd) tea.Cmd {
+	gen := m.resultsGen
+	return func() tea.Msg {
+		switch msg := cmd().(type) {
+		case resultsFetchedMsg:
+			msg.gen = gen
+			return msg
+		case errMsg:
+			return resultsErrMsg{err: msg.err, gen: gen}
+		default:
+			return msg
+		}
+	}
+}

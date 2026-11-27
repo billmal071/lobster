@@ -84,6 +84,7 @@ type AppModel struct {
 	liveCategory   string    // current category at level 1
 	liveMaster     []liveRow // unfiltered rows for the current level
 	liveReqGen     int       // bumped per Live TV fetch; stale responses are ignored
+	resultsGen     int       // bumped per search and tab switch; stale result lists are ignored
 
 	// Download dialog for TV show batch downloads
 	dlDialog downloadDialog
@@ -171,7 +172,7 @@ func StartApp(p provider.Provider, cfg *config.Config, liveSources []string, mgr
 
 func (m AppModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		fetchTabCmd(m.providerForActiveTab(), m.activeTab),
+		m.stampResults(fetchTabCmd(m.providerForActiveTab(), m.activeTab)),
 		textinput.Blink,
 		m.loader.Tick,
 		m.list.StartSpinner(),
@@ -245,7 +246,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.activeTab == tabAnime {
 					fallbacks = nil
 				}
-				return m, tea.Batch(searchCmd(m.providerForActiveTab(), m.searchInput.Value(), fallbacks...), m.list.StartSpinner())
+				m.resultsGen++
+				return m, tea.Batch(m.stampResults(searchCmd(m.providerForActiveTab(), m.searchInput.Value(), fallbacks...)), m.list.StartSpinner())
 			case tea.KeyEsc:
 				m.isSearching = false
 				m.searchInput.Blur()
@@ -368,7 +370,18 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		m.list.StopSpinner()
 
+	case resultsErrMsg:
+		if msg.gen != m.resultsGen {
+			return m, nil
+		}
+		m.err = msg.err
+		m.list.StopSpinner()
+
 	case resultsFetchedMsg:
+		// Ignore a list the user has moved past: another tab or a newer search.
+		if msg.gen != m.resultsGen {
+			return m, nil
+		}
 		m.err = nil
 		m.results = msg.results
 		m.owners = msg.owners
@@ -729,6 +742,7 @@ func (m *AppModel) switchTab(next tab) tea.Cmd {
 	}
 
 	m.activeTab = next
+	m.resultsGen++
 	m.isSearching = false
 	m.searchInput.Blur()
 	m.currentItem = nil
@@ -750,7 +764,7 @@ func (m *AppModel) switchTab(next tab) tea.Cmd {
 		m.liveReqGen++
 		return tea.Batch(fetchCategoriesCmd(m.liveTVProvider, m.liveReqGen), m.list.StartSpinner(), tea.ClearScreen)
 	}
-	return tea.Batch(fetchTabCmd(m.providerForActiveTab(), next), m.list.StartSpinner(), tea.ClearScreen)
+	return tea.Batch(m.stampResults(fetchTabCmd(m.providerForActiveTab(), next)), m.list.StartSpinner(), tea.ClearScreen)
 }
 
 func (m AppModel) tabTitle(t tab) string {

@@ -13,9 +13,17 @@ func (e errMsg) Error() string { return e.err.Error() }
 
 // resultsFetchedMsg is sent when a list of search/trending results is fetched.
 // owners is index-aligned with results; nil means the active tab's provider.
+// gen is the results generation the request was issued under (stampResults).
 type resultsFetchedMsg struct {
 	results []media.SearchResult
 	owners  []provider.Provider
+	gen     int
+}
+
+// resultsErrMsg is a stamped search or tab listing that failed.
+type resultsErrMsg struct {
+	err error
+	gen int
 }
 
 // detailFetchedMsg is sent when detailed metadata for an item is fetched.
