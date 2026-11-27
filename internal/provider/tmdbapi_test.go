@@ -356,3 +356,93 @@ func TestEZTVUsesKeyedAPIForSearchAndIMDbIDs(t *testing.T) {
 		t.Errorf("scrape hit %d times with a key set, want 0", scrapeHits.Load())
 	}
 }
+
+// eztvKeyedStub serves keyed TMDB search plus external_ids answered by ids,
+// and points the EZTV scrape path at a server that refuses every request.
+func eztvKeyedStub(t *testing.T, ids func(w http.ResponseWriter, r *http.Request)) *EZTV {
+	t.Helper()
+	t.Setenv(config.TMDBKeyEnv, fakeTMDBKey)
+	newTMDBAPIStub(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/3/search/multi" {
+			fmt.Fprint(w, eztvTMDBFixture)
+			return
+		}
+		ids(w, r)
+	})
+	scrapeBase, _ := refuseScrape(t)
+	p := NewEZTV()
+	p.tmdbBaseURL = scrapeBase
+	return p
+}
+
+func TestEZTVKeyedIMDbLookupRateLimitIsReported(t *testing.T) {
+	var limited atomic.Bool
+	limited.Store(true)
+	p := eztvKeyedStub(t, func(w http.ResponseWriter, r *http.Request) {
+		if limited.Load() {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		fmt.Fprint(w, `{"imdb_id":"tt11280740"}`)
+	})
+	_, err := p.Search("severance")
+	if err == nil || !errors.Is(err, errTMDBRateLimited) || errors.Is(err, ErrNoResults) {
+		t.Fatalf("err = %v, want the rate-limit error, not ErrNoResults", err)
+	}
+	limited.Store(false)
+	res, err := p.Search("severance")
+	if err != nil || len(res) == 0 {
+		t.Fatalf("after the limit lifts: res=%v err=%v, want results (a 429 must not be memoised)", res, err)
+	}
+}
+
+func TestEZTVKeyedIMDbLookupRejectedKeyIsReported(t *testing.T) {
+	p := eztvKeyedStub(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	_, err := p.Search("severance")
+	if err == nil || !errors.Is(err, errTMDBKeyRejected) || errors.Is(err, ErrNoResults) {
+		t.Fatalf("err = %v, want the rejected-key error, not ErrNoResults", err)
+	}
+}
+
+func TestEZTVKeyedIMDbLookupPartialFailureKeepsTheHitsFound(t *testing.T) {
+	p := eztvKeyedStub(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/3/tv/95396/external_ids" {
+			fmt.Fprint(w, `{"imdb_id":"tt11280740"}`)
+			return
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	res, err := p.Search("severance")
+	if err != nil || len(res) != 1 || res[0].ID != "eztv/11280740" {
+		t.Fatalf("res=%+v err=%v, want the one resolved hit and no error", res, err)
+	}
+}
+
+func TestEZTVKeyedIMDbLookupOtherFailureIsNoResults(t *testing.T) {
+	p := eztvKeyedStub(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	_, err := p.Search("severance")
+	if !errors.Is(err, ErrNoResults) {
+		t.Fatalf("err = %v, want ErrNoResults for a non-key, non-limit failure", err)
+	}
+}
+
+func TestEZTVScrapeIMDbLookupFailureStaysNoResults(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/search") {
+			fmt.Fprint(w, eztvTMDBFixture)
+			return
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+	p := NewEZTV()
+	p.tmdbBaseURL = srv.URL
+	_, err := p.Search("severance")
+	if !errors.Is(err, ErrNoResults) {
+		t.Fatalf("err = %v, want ErrNoResults on the keyless path", err)
+	}
+}

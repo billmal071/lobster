@@ -21,6 +21,7 @@ const tmdbAPIMaxBody = 4 << 20
 var (
 	tmdbAPIBase        = "https://api.themoviedb.org/3"
 	errTMDBKeyRejected = errors.New("TMDB API rejected the key in " + config.TMDBKeyEnv)
+	errTMDBRateLimited = errors.New("TMDB API rate limit reached")
 	tmdbAPIClient      = newTMDBAPIClient()
 
 	tmdbIMDBLink   = regexp.MustCompile(`imdb\.com/title/tt(\d+)`)
@@ -96,7 +97,7 @@ func tmdbAPIGet(ctx context.Context, key, path string, q url.Values) ([]byte, er
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return nil, fmt.Errorf("%w (HTTP %d)", errTMDBKeyRejected, resp.StatusCode)
 	case http.StatusTooManyRequests:
-		return nil, errors.New("TMDB API rate limit reached (HTTP 429)")
+		return nil, fmt.Errorf("%w (HTTP %d)", errTMDBRateLimited, resp.StatusCode)
 	default:
 		return nil, fmt.Errorf("TMDB API returned HTTP %d", resp.StatusCode)
 	}

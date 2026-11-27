@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -215,12 +216,13 @@ func (e *EZTV) Search(query string) ([]media.SearchResult, error) {
 	// Resolve IMDb ids concurrently: each is a full TMDB page fetch, and the
 	// search should not take five times as long as one.
 	ids := make([]string, len(hits))
+	errs := make([]error, len(hits))
 	var wg sync.WaitGroup
 	for i := range hits {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			ids[i] = e.imdbFor(hits[i].ID)
+			ids[i], errs[i] = e.imdbFor(hits[i].ID)
 		}(i)
 	}
 	wg.Wait()
@@ -239,6 +241,14 @@ func (e *EZTV) Search(query string) ([]media.SearchResult, error) {
 		})
 	}
 	if len(results) == 0 {
+		// A rejected key or a rate limit on the IMDb lookups is reported as
+		// itself, not as "no results". When some hits resolved, they are
+		// returned and the failed lookups are dropped.
+		for _, err := range errs {
+			if errors.Is(err, errTMDBKeyRejected) || errors.Is(err, errTMDBRateLimited) {
+				return nil, fmt.Errorf("eztv search: %w", err)
+			}
+		}
 		return nil, fmt.Errorf("%w for %q", ErrNoResults, query)
 	}
 	return results, nil
@@ -289,22 +299,24 @@ func (e *EZTV) tmdbTVSearch(query string) ([]tmdbSearchResult, error) {
 	return hits, nil
 }
 
-// imdbFor resolves a TMDB TV id to IMDb digits ("" when none), memoised per instance.
-func (e *EZTV) imdbFor(tmdbID int) string {
+// imdbFor resolves a TMDB TV id to IMDb digits ("" when none), memoised per
+// instance. A failed lookup returns its error and is not memoised, so the next
+// search retries it.
+func (e *EZTV) imdbFor(tmdbID int) (string, error) {
 	e.mu.Lock()
 	v, ok := e.imdb[tmdbID]
 	e.mu.Unlock()
 	if ok {
-		return v
+		return v, nil
 	}
 	id, err := tmdbTVIMDBID(context.Background(), e.tmdbBaseURL, tmdbID, e.tmdbGet)
 	if err != nil {
-		return "" // transient: not memoised, so the next search retries
+		return "", err
 	}
 	e.mu.Lock()
 	e.imdb[tmdbID] = id
 	e.mu.Unlock()
-	return id
+	return id, nil
 }
 
 // --- Seasons and episodes ---
