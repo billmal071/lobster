@@ -357,3 +357,21 @@ func TestNativeTMDBShapedHistoryEntryNeverTakesTheCataloguePicker(t *testing.T) 
 		t.Fatalf("picker=%d flow=%d, want the catalogue picker only", picker, flow)
 	}
 }
+
+// Every provider whose own Search and Trending mint movie/<n> and tv/<n> IDs
+// plays them directly, so its history entries are its own, not the catalogue's.
+func TestTMDBShapedProvidersHistoryEntriesAreNotCatalogueEntries(t *testing.T) {
+	entry := media.HistoryEntry{ID: "movie/550", Title: "Fight Club", Type: media.Movie}
+	for name, p := range map[string]provider.Provider{
+		"tbcpl":      provider.NewTBCPL(""),
+		"tbcplembed": provider.NewTBCPLEmbed(nil),
+		"vaplayer":   provider.NewVaPlayer(),
+		"vidrock":    provider.NewVidrock(),
+		"soap2day":   provider.NewSoap2Day(),
+		"vidnest":    provider.NewVidNest(),
+	} {
+		if catalogueEntry(p, entry) {
+			t.Errorf("%s: %s classed as a catalogue entry, but %s mints and plays that ID itself", name, entry.ID, name)
+		}
+	}
+}

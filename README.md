@@ -486,15 +486,16 @@ key or a v4 read access token works.
 - The key is sent only to `api.themoviedb.org`, is never written to logs or
   printed by `lobster doctor`, and is not shipped with lobster.
 - Playback is unchanged: picking a catalogue title searches the usual sources
-  by title and year. The catalogue supplies lists and details, never streams.
+  by title and year (`tbcpl`, `1shows.org` and `vidrock` take its TMDB ID
+  as their own). The catalogue supplies lists and details, never streams.
   A catalogue title TMDB gives no release year for is not played, since a
   title alone cannot tell it from a same-titled remake. Resuming a catalogue title
   from history, which stores no year, opens the usual picker when the source
   lists that title, so you confirm which work it is. If the source lists none,
   lobster asks TMDB for the title's release year and tries the usual fallback
   sources with it. Under
-  `--base tbcpl` or `1shows.org`, whose own IDs look like TMDB's, history
-  entries are treated as the source's own and resume as before.
+  `--base tbcpl`, `1shows.org` or `vidrock`, whose own IDs look like TMDB's,
+  history entries are treated as the source's own and resume as before.
 - Without a key nothing changes, except one line saying the key enables richer
   lists. If TMDB rejects the key, rate-limits you or cannot be reached, lobster
   says so in one line and shows the source's own list instead.

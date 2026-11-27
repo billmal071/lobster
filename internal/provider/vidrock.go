@@ -73,6 +73,10 @@ type Vidrock struct {
 	logf      func(string, ...any)
 }
 
+// MintsTMDBShapedIDs reports that Vidrock's own rows carry movie/<n> and tv/<n>
+// IDs that it plays directly.
+func (*Vidrock) MintsTMDBShapedIDs() bool { return true }
+
 func NewVidrock() *Vidrock {
 	return &Vidrock{
 		base:      vidrockBase,

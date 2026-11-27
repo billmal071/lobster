@@ -841,3 +841,89 @@ func TestResolveRowOfAYearlessRowUsesTheYearAlreadyKnownForItsID(t *testing.T) {
 		t.Fatalf("ResolveRow with TMDB down = %+v, want tv/utopia-2013 from the year already known", got)
 	}
 }
+
+func TestSeasonsOfARowResolveRowDatedUseTheCachedMatchWhenTMDBLaterFails(t *testing.T) {
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"},
+		{ID: "tv/utopia-2013", Title: "Utopia", Type: media.TV, Year: "2013"},
+	}}
+	calls := 0
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls > 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		io.WriteString(w, `{"id":1,"first_air_date":"2013-01-15"}`)
+	})
+	p := Wrap(inner, c, General)
+	row := media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, FromCatalogue: true}
+	p.remember([]media.SearchResult{row})
+	if got := p.ResolveRow(row); got.ProviderID != "tv/utopia-2013" {
+		t.Fatalf("ResolveRow = %+v, want tv/utopia-2013", got)
+	}
+	c.now = func() time.Time { return time.Now().Add(cacheTTL + time.Second) }
+	if _, err := p.GetSeasons("tv/1"); err != nil {
+		t.Fatalf("GetSeasons after the details expired and TMDB failed: %v", err)
+	}
+	if len(inner.seasonIDs) != 1 || inner.seasonIDs[0] != "tv/utopia-2013" {
+		t.Fatalf("seasons asked for %v; want tv/utopia-2013", inner.seasonIDs)
+	}
+	if len(inner.searches) != 1 {
+		t.Fatalf("searches = %d, want 1: seasons reuse the cached match", len(inner.searches))
+	}
+}
+
+// yearHydrationRace has TMDB's details answer 2013 while a listing that dates
+// the same ID 2020 is remembered mid-request.
+func yearHydrationRace(t *testing.T) (*Provider, *showProvider, media.SearchResult) {
+	t.Helper()
+	inner := &showProvider{results: []media.SearchResult{
+		{ID: "tv/utopia-2020", Title: "Utopia", Type: media.TV, Year: "2020"},
+		{ID: "tv/utopia-2013", Title: "Utopia", Type: media.TV, Year: "2013"},
+	}}
+	var p *Provider
+	row := media.SearchResult{ID: "tv/1", Title: "Utopia", Type: media.TV, FromCatalogue: true}
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		dated := row
+		dated.Year = "2020"
+		p.remember([]media.SearchResult{dated})
+		io.WriteString(w, `{"id":1,"first_air_date":"2013-01-15"}`)
+	})
+	p = Wrap(inner, c, General)
+	p.remember([]media.SearchResult{row})
+	return p, inner, row
+}
+
+func TestSeasonsYearHydrationKeepsANewerYearRememberedMeanwhile(t *testing.T) {
+	p, inner, _ := yearHydrationRace(t)
+	if _, err := p.GetSeasons("tv/1"); err != nil {
+		t.Fatalf("GetSeasons: %v", err)
+	}
+	if _, err := p.GetEpisodes("tv/1", "s1"); err != nil {
+		t.Fatalf("GetEpisodes: %v", err)
+	}
+	p.mu.Lock()
+	got := p.rows["tv/1"].Year
+	p.mu.Unlock()
+	if got != "2020" {
+		t.Fatalf("stored year = %q, want 2020 from the listing remembered during hydration", got)
+	}
+	if len(inner.seasonIDs) != 1 || inner.seasonIDs[0] != "tv/utopia-2020" || len(inner.episodeIDs) != 1 || inner.episodeIDs[0] != "tv/utopia-2020" {
+		t.Fatalf("seasons asked for %v, episodes for %v; want tv/utopia-2020 for both", inner.seasonIDs, inner.episodeIDs)
+	}
+}
+
+func TestResolveRowYearHydrationKeepsANewerYearRememberedMeanwhile(t *testing.T) {
+	p, _, row := yearHydrationRace(t)
+	resolved := p.ResolveRow(row)
+	p.mu.Lock()
+	got := p.rows["tv/1"].Year
+	p.mu.Unlock()
+	if got != "2020" {
+		t.Fatalf("stored year = %q, want 2020 from the listing remembered during hydration", got)
+	}
+	if resolved.ProviderID != "tv/utopia-2020" || resolved.Year != "2020" {
+		t.Fatalf("ResolveRow = %+v, want tv/utopia-2020 from the year now stored", resolved)
+	}
+}

@@ -111,14 +111,30 @@ func (p *Provider) providerID(id string) (string, error) {
 	}
 	if row.Year == "" {
 		row = p.Dated(row)
-		if row.Year != "" {
-			p.mu.Lock()
-			p.rows[id] = row
-			p.mu.Unlock()
-		}
+		row.Year = p.keepYear(id, row.Year)
 	}
 	_, pid, err := p.resolve(row)
 	return pid, err
+}
+
+// keepYear stores a year recovered for a remembered catalogue ID and returns
+// the year to resolve with. A row that gained a year meanwhile, from a newer
+// listing, keeps its own, and that year is returned instead.
+func (p *Provider) keepYear(id, year string) string {
+	if year == "" {
+		return ""
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	cur, ok := p.rows[id]
+	if !ok {
+		return year
+	}
+	if cur.Year == "" {
+		cur.Year = year
+		p.rows[id] = cur
+	}
+	return cur.Year
 }
 
 // ResolveRow names the wrapped provider's own ID for a catalogue row in
@@ -156,7 +172,10 @@ func (p *Provider) resolve(row media.SearchResult) (media.SearchResult, string, 
 	if MintsTMDBShapedIDs(p.Provider) {
 		return row, row.ID, nil
 	}
-	row = p.Dated(row)
+	if row.Year == "" {
+		row = p.Dated(row)
+		row.Year = p.keepYear(row.ID, row.Year)
+	}
 	key := resolveKey{row.ID, titlekey.Normalize(row.Title), row.Year, row.Type}
 	if key.title == "" {
 		return row, "", fmt.Errorf("%q has no title to match on this provider", row.Title)

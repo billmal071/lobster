@@ -46,6 +46,10 @@ type TBCPLEmbed struct {
 	resolve func(ctx context.Context, embed, referer string) (*media.Stream, error)
 }
 
+// MintsTMDBShapedIDs reports that TBCPLEmbed's own rows carry movie/<n> and tv/<n>
+// IDs that it plays directly.
+func (*TBCPLEmbed) MintsTMDBShapedIDs() bool { return true }
+
 // NewTBCPLEmbed keeps only movie/anime sites from the supplied catalog slice.
 func NewTBCPLEmbed(sites []tbcpl.Site) *TBCPLEmbed {
 	var kept []tbcpl.Site
