@@ -51,9 +51,9 @@ func NewVidNest() *VidNest {
 	}
 }
 
-// Search uses TMDB's keyless multi-search endpoint (same as Soap2Day).
+// Search uses TMDB multi-search (tmdbSearchMulti).
 func (v *VidNest) Search(query string) ([]media.SearchResult, error) {
-	body, err := v.fetchTMDB(tmdbMultiSearchURL(tmdbBaseURL, query))
+	body, err := tmdbSearchMulti(context.Background(), tmdbBaseURL, query, v.fetchTMDB)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}

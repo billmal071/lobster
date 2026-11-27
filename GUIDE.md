@@ -564,6 +564,14 @@ tbcpl_include_untrusted = false
 - `tbcpl_region` — set to one of the values above to overlay that country's sites on top of the global list. Leave blank for the global list only.
 - `tbcpl_include_untrusted` — by default only sites TBCPL flags as "trusted" participate in the generic TMDB-id embed fallback and the live-TV/IPTV feed. Set to `true` to widen that pool to all listed sites (lower confidence, more coverage).
 
+### TMDB key for title search
+
+`tbcpl`, `vidrock`, `eztv` and the TBCPL embed fallback look titles up on TMDB. Without a key they use the keyless `www.themoviedb.org` search, which TMDB now answers with HTTP 403, so their search fails. Set your own key (a v3 API key or a v4 read access token, free from a themoviedb.org account) in the `LOBSTER_TMDB_KEY` environment variable; there is no config-file setting for it.
+
+- With the key set, search uses `api.themoviedb.org/3/search/multi`, and `eztv` reads IMDb ids from `/tv/{id}/external_ids` instead of the TMDB show page. A v4 token (it starts with `eyJ`) is sent as a `Bearer` header, a v3 key as the `api_key` parameter.
+- A refused key (HTTP 401 or 403) fails the search with `TMDB API rejected the key in LOBSTER_TMDB_KEY`, and HTTP 429 with a rate-limit error. Lobster does not fall back to the keyless search when a key is set, so a bad key shows up instead of being masked. `eztv` also reports either error from its IMDb id lookups when no show resolved; shows that did resolve are returned and the failed lookups dropped.
+- The key is sent only to `api.themoviedb.org`; redirects from it are not followed, and error messages never include the key or the request URL.
+
 ## All Flags
 
 ```

@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -52,8 +53,8 @@ func (r *tmdbSearchResult) year() string {
 	return ""
 }
 
-// tmdbMultiSearchURL builds TMDB's keyless multi-search URL. Use this for every
-// user-facing search: /search/multi returns up to 20 complete result objects.
+// tmdbMultiSearchURL builds TMDB's keyless multi-search URL, the scrape path of
+// tmdbSearchMulti: /search/multi returns up to 20 complete result objects.
 // The /search/trending endpoint is a typeahead — it returns only the top two or
 // three objects followed by HTML <span> name suggestions that every parser here
 // discards, which made a query like "spiderman" surface a single film.
@@ -191,24 +192,7 @@ func TMDBPoster(title, year string, isTV bool) string {
 // and whether the outcome is cacheable. A network/parse error returns ("", false)
 // so the caller retries on the next selection instead of caching the failure.
 func tmdbPosterLookup(title, year string, isTV bool) (string, bool) {
-	endpoint := tmdbMultiSearchURL(tmdbBaseURL, title)
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		return "", false
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/121.0")
-	req.Header.Set("Accept", "application/json, text/html, */*")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
-	req.Header.Set("Referer", strings.TrimRight(tmdbBaseURL, "/")+"/")
-	resp, err := tmdbClient.Do(req)
-	if err != nil {
-		return "", false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", false // non-2xx (rate-limit/proxy error): transient, don't cache
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	data, err := tmdbSearchMulti(context.Background(), tmdbBaseURL, title, scrapeTMDBPosterSearch)
 	if err != nil {
 		return "", false
 	}
@@ -227,4 +211,24 @@ func tmdbPosterLookup(title, year string, isTV bool) (string, bool) {
 		}
 	}
 	return pickPoster(objs, title, year, isTV), true
+}
+
+func scrapeTMDBPosterSearch(rawURL string) ([]byte, error) {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/121.0")
+	req.Header.Set("Accept", "application/json, text/html, */*")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+	req.Header.Set("Referer", strings.TrimRight(tmdbBaseURL, "/")+"/")
+	resp, err := tmdbClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 }
