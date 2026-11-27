@@ -98,8 +98,6 @@ func TestPlayDoesNotAskAPrimaryByAnIDItDoesNotOwn(t *testing.T) {
 	}
 }
 
-// A ref minted before find recorded that its base issued the ID carries the
-// configured base, which says nothing about where the ID came from.
 func TestPlayDoesNotAskAPrimaryByALegacyRefsID(t *testing.T) {
 	primary := newUnlistedOwner(t)
 	err := playRefAgainst(t, primary, playRef{ID: "tv/219", Title: "Kyle XY", Year: "2006", Type: "tv", Base: "owner"})

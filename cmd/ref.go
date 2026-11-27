@@ -149,10 +149,6 @@ func (r playRef) searchResult() (media.SearchResult, error) {
 	if r.Type == media.TV.String() {
 		t = media.TV
 	}
-	// Provider claims the ID was issued by that source, which lets a primary
-	// that cannot list the show be asked for it by ID (idOwner,
-	// cmd/fallback.go). Only IDFromBase supports that claim: a legacy ref's
-	// Base is the configured base, not the ID's producer.
 	sr := media.SearchResult{ID: r.ID, Title: r.Title, Year: r.Year, Type: t}
 	if r.IDFromBase {
 		sr.Provider = config.NormalizeBase(r.Base)
