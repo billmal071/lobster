@@ -25,6 +25,11 @@ func newUnlistedOwner(t *testing.T) unlistedOwner {
 
 func playOwnedRef(t *testing.T, primary provider.Provider, base string) error {
 	t.Helper()
+	return playRefAgainst(t, primary, playRef{ID: "tv/219", Title: "Kyle XY", Year: "2006", Type: "tv", Base: base, IDFromBase: true})
+}
+
+func playRefAgainst(t *testing.T, primary provider.Provider, r playRef) error {
+	t.Helper()
 	hostileEnv(t)
 	playStreamHarness(t, &stubPlayerImpl{result: player.PlayResult{Position: 10, Duration: 100}})
 	captureAgentOut(t)
@@ -38,7 +43,7 @@ func playOwnedRef(t *testing.T, primary provider.Provider, base string) error {
 	agentProvider = func() provider.Provider { return primary }
 	t.Cleanup(func() { agentProvider = prevProv })
 
-	ref, err := encodeRef(playRef{ID: "tv/219", Title: "Kyle XY", Year: "2006", Type: "tv", Base: base})
+	ref, err := encodeRef(r)
 	if err != nil {
 		t.Fatalf("encodeRef: %v", err)
 	}
@@ -90,5 +95,18 @@ func TestPlayDoesNotAskAPrimaryByAnIDItDoesNotOwn(t *testing.T) {
 	}
 	if primary.watchCalled {
 		t.Fatalf("primary Watch was asked for %q under an ID another source issued", primary.episodeAsked())
+	}
+}
+
+// A ref minted before find recorded that its base issued the ID carries the
+// configured base, which says nothing about where the ID came from.
+func TestPlayDoesNotAskAPrimaryByALegacyRefsID(t *testing.T) {
+	primary := newUnlistedOwner(t)
+	err := playRefAgainst(t, primary, playRef{ID: "tv/219", Title: "Kyle XY", Year: "2006", Type: "tv", Base: "owner"})
+	if err == nil {
+		t.Fatal("playRun succeeded although only the primary could stream and the legacy ref does not say the ID is its own")
+	}
+	if primary.watchCalled {
+		t.Fatalf("primary Watch was asked for %q under a legacy ref's ID", primary.episodeAsked())
 	}
 }

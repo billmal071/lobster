@@ -116,12 +116,14 @@ func findRun(cmd *cobra.Command, args []string) error {
 
 	out := make([]map[string]any, 0, len(results))
 	for i, r := range results {
+		base := refBaseFor(r, primaryBase, configured)
 		ref, err := encodeRef(playRef{
-			ID:    r.ID,
-			Title: r.Title,
-			Year:  r.Year,
-			Type:  r.Type.String(),
-			Base:  refBaseFor(r, primaryBase, configured),
+			ID:         r.ID,
+			Title:      r.Title,
+			Year:       r.Year,
+			Type:       r.Type.String(),
+			Base:       base,
+			IDFromBase: base != "",
 		})
 		if err != nil {
 			return emitErr("internal", 1, "encoding ref: %v", err)
