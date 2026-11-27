@@ -196,12 +196,12 @@ var tbcplDirectServers = []tbcplDirectServer{
 // tbcplDubServerPrefix marks a per-language Vidzee server, e.g. "v6:Hindi".
 const tbcplDubServerPrefix = "v6:"
 
-// Search uses TMDB's keyless multi-search endpoint for reliable title lookup.
+// Search uses TMDB multi-search (tmdbSearchMulti) for reliable title lookup.
 // The returned TMDB IDs are then used by 1Shows/Vidzee.
 func (t *TBCPL) Search(query string) ([]media.SearchResult, error) {
-	searchURL := tmdbMultiSearchURL(t.tmdbBaseURL, query)
-
-	body, err := t.fetch(searchURL, strings.TrimRight(t.tmdbBaseURL, "/")+"/", "application/json, text/html, */*")
+	body, err := tmdbSearchMulti(context.Background(), t.tmdbBaseURL, query, func(rawURL string) ([]byte, error) {
+		return t.fetch(rawURL, strings.TrimRight(t.tmdbBaseURL, "/")+"/", "application/json, text/html, */*")
+	})
 	if err != nil {
 		return nil, fmt.Errorf("tbcpl search: %w", err)
 	}

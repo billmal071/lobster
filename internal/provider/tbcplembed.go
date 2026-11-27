@@ -72,9 +72,9 @@ func (p *TBCPLEmbed) SetLogger(fn func(string, ...any)) {
 	}
 }
 
-// Search uses TMDB's keyless multi-search endpoint (same as VidNest/Soap2Day).
+// Search uses TMDB multi-search (tmdbSearchMulti).
 func (p *TBCPLEmbed) Search(query string) ([]media.SearchResult, error) {
-	body, err := p.fetchTMDB(tmdbMultiSearchURL(tmdbBaseURL, query))
+	body, err := tmdbSearchMulti(context.Background(), tmdbBaseURL, query, p.fetchTMDB)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}

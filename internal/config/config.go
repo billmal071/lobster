@@ -111,9 +111,6 @@ type Config struct {
 	TMDBAPIKey string `toml:"tmdb_api_key"`
 }
 
-// TMDBKeyEnv is the environment variable that overrides tmdb_api_key.
-const TMDBKeyEnv = "LOBSTER_TMDB_KEY"
-
 // String and GoString keep the secrets in Config out of any %v, %+v or %#v.
 func (c Config) String() string   { return "lobster config (fields not printed)" }
 func (c Config) GoString() string { return c.String() }
@@ -284,7 +281,7 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if k := strings.TrimSpace(os.Getenv(TMDBKeyEnv)); k != "" {
+	if k := TMDBKeyFromEnv(); k != "" {
 		cfg.TMDBAPIKey = k
 	}
 	cfg.TMDBAPIKey = strings.TrimSpace(cfg.TMDBAPIKey)

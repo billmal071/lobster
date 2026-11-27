@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/hex"
@@ -67,9 +68,11 @@ type flixcdnDecrypted struct {
 
 // --- Provider interface ---
 
-// Search uses TMDB's keyless multi-search endpoint.
+// Search uses TMDB multi-search (tmdbSearchMulti).
 func (s *Soap2Day) Search(query string) ([]media.SearchResult, error) {
-	body, err := s.fetchWithReferer(tmdbMultiSearchURL(tmdbBaseURL, query), tmdbBaseURL+"/")
+	body, err := tmdbSearchMulti(context.Background(), tmdbBaseURL, query, func(rawURL string) ([]byte, error) {
+		return s.fetchWithReferer(rawURL, tmdbBaseURL+"/")
+	})
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}

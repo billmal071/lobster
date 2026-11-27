@@ -481,7 +481,8 @@ streaming source. This is the only way the Anime tab shows anything, and
 `recent` works where the source's own list is gone. Get a free key from your
 own account at themoviedb.org, then set `tmdb_api_key` in `config.toml` or the
 `LOBSTER_TMDB_KEY` environment variable (the variable wins). Either a v3 API
-key or a v4 read access token works.
+key or a v4 read access token works. A key in `config.toml` feeds only these
+lists; title search needs the environment variable (see below).
 
 - The key is sent only to `api.themoviedb.org`, is never written to logs or
   printed by `lobster doctor`, and is not shipped with lobster.
@@ -507,6 +508,25 @@ This product uses TMDB and the TMDB APIs but is not endorsed, certified, or
 otherwise approved by TMDB. TMDB's terms allow non-commercial use only and
 require you to use your own key; read them at
 https://www.themoviedb.org/api-terms-of-use before enabling this.
+
+### TMDB key for title search
+
+`tbcpl`, `vidrock`, `eztv` and the TBCPL embed fallback find titles through
+TMDB. Without a key they use the keyless `www.themoviedb.org` search, which
+TMDB now answers with HTTP 403, so their title search fails. Get a free key
+from a themoviedb.org account and export it:
+
+```sh
+export LOBSTER_TMDB_KEY="..."   # v3 API key or v4 read access token
+```
+
+With it set, search goes to `api.themoviedb.org/3/search/multi`, and `eztv`
+reads IMDb ids from `/tv/{id}/external_ids`. A key TMDB refuses (HTTP 401 or
+403) fails the search with `TMDB API rejected the key in LOBSTER_TMDB_KEY`;
+lobster does not fall back to the keyless search, so a bad key is not hidden.
+Title search reads the key from the environment only, not from `tmdb_api_key`
+in `config.toml`. The key is sent only to `api.themoviedb.org` (redirects are
+not followed) and kept out of error messages.
 
 ---
 

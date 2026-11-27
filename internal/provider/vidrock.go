@@ -109,7 +109,9 @@ func (v *Vidrock) log(format string, args ...any) {
 func (v *Vidrock) Search(query string) ([]media.SearchResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), vidrockWatchBudget)
 	defer cancel()
-	body, err := v.get(ctx, tmdbMultiSearchURL(tmdbBaseURL, query), strings.TrimRight(tmdbBaseURL, "/")+"/", "application/json, text/html, */*", 10<<20)
+	body, err := tmdbSearchMulti(ctx, tmdbBaseURL, query, func(rawURL string) ([]byte, error) {
+		return v.get(ctx, rawURL, strings.TrimRight(tmdbBaseURL, "/")+"/", "application/json, text/html, */*", 10<<20)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("vidrock search: %w", err)
 	}
