@@ -161,3 +161,22 @@ func TestEpisodesListsFromAFallbackBesideOneThatFailed(t *testing.T) {
 		t.Fatalf("episodesRun = %v, want the listing fallback's episodes\n%s", err, buf.String())
 	}
 }
+
+func TestEpisodesNamesTheSourcesMissingEpisodeIndexInsteadOfAFailedLookup(t *testing.T) {
+	absent := &scriptedLookup{stubProvider: &stubProvider{}, searchErr: provider.ErrNoResults}
+	code, message := episodesErrEnvelope(t, &stubProvider{seasons: seasonsOf(1, 2), episodesErr: noEpisodeIndex()}, absent)
+	if code != "providers_failed" {
+		t.Fatalf("code = %q, want providers_failed", code)
+	}
+	want := `stubprovider cannot list the episodes of season 2 of "Some Show" (it has no episode index), and no fallback provider listed them, so the season may still have episodes`
+	if message != want {
+		t.Fatalf("message = %q, want %q", message, want)
+	}
+}
+
+func TestEpisodesMissingEpisodeIndexMessageAddsAFailedFallbackLookup(t *testing.T) {
+	_, message := episodesErrEnvelope(t, &stubProvider{seasons: seasonsOf(1, 2), episodesErr: noEpisodeIndex()}, chainListing(nil, errBoom))
+	if !strings.Contains(message, "has no episode index") || !strings.Contains(message, "a fallback provider's lookup failed") {
+		t.Fatalf("message = %q, want the missing index and the failed fallback lookup both named", message)
+	}
+}

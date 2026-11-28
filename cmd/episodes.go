@@ -167,6 +167,15 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	if !src.fromPrimary && epsKind == lookupAbsent && len(eps) == 0 {
 		err = nil
 	}
+	if err != nil && len(eps) == 0 && errors.Is(err, provider.ErrNoEpisodeIndex) {
+		listed := "no fallback provider listed them"
+		if fallbackFailed {
+			listed += " (a fallback provider's lookup failed)"
+		}
+		return emitErr("providers_failed", exitProvidersFailed,
+			"%s cannot list the episodes of season %d of %q (it has no episode index), and %s, so the season may still have episodes",
+			providerLabel(p), sel.Number, r.Title, listed)
+	}
 	if err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "getting episodes: %v", err)
 	}
