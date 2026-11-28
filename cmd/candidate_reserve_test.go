@@ -192,3 +192,16 @@ func TestDownloadDialogFallbackRejectsATruncatedPrefixFromTheReserve(t *testing.
 		t.Fatalf("episodes = %d, err = nil; want the reserve's truncated prefix refused", len(eps))
 	}
 }
+
+func TestAReserveSeasonListCutShortBeforeTheSeasonIsAFailedLookup(t *testing.T) {
+	p := &byIDLookup{
+		stubProvider: &stubProvider{},
+		results:      showResults("a", "b"),
+		seasons:      map[string][]media.Season{"a": seasonsOf(1, 2), "b": seasonsOf(1)},
+		errs:         map[string]error{"seasons:b": fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList)},
+	}
+	hits, failed := scanFor(t, p, []int{2})
+	if a, err := confirmedEpisodeList(hits, failed, 2, "Show"); a != nil || err == nil {
+		t.Fatalf("answer = %+v, err = %v; want a failed-lookup error, since b's season list stopped before season 2", a, err)
+	}
+}

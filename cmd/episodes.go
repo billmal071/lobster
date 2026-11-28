@@ -861,6 +861,7 @@ func (r *candidateReserve) episodeLists(ctx context.Context, wantSeason int) ([]
 		}
 		sel, ok := pickSeason(c.look.seasons, wantSeason)
 		if !ok {
+			failed = failed || c.look.gap == gapShort
 			continue
 		}
 		eps, err := episodesWithContext(ctx, r.provider, c.id, sel.ID)
