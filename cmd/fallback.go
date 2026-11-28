@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"lobster/internal/catalog"
 	"lobster/internal/config"
 	"lobster/internal/dlmanager"
 	"lobster/internal/media"
@@ -556,7 +557,11 @@ func makeStreamResolver(primary provider.Provider) dlmanager.StreamResolver {
 		// torrent sources are left out of the race: the queue cannot open a
 		// magnet (streamToResultChecked), so one winning would fail the
 		// download while a scraper that could have served it was abandoned.
-		content := media.SearchResult{ID: req.MediaID, Title: req.Title, Year: req.Year, Type: mt}
+		content, err := datedCatalogueRow(catalog.Wrap(primary, configuredCatalogClient(), catalog.General),
+			media.SearchResult{ID: req.MediaID, Title: req.Title, Year: req.Year, Type: mt, FromCatalogue: req.FromCatalogue})
+		if err != nil {
+			return nil, err
+		}
 		chain := append([]provider.Provider{primary}, withoutProvider(agentFallbackProviders(primary), primary)...)
 		fbStream, err := tryFallbackStreamAccepting(withoutMagnetSources(chain), content, req.Season, req.Episode, queueAccepts)
 		if err != nil {

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"lobster/internal/catalog"
 	"os"
 	"strings"
 
@@ -76,6 +77,7 @@ type AppModel struct {
 	downloadsModel downloads.Model
 	dlManager      *dlmanager.Manager
 	toast          string // transient notification
+	notice         string // catalogue fallback or hint line; cleared on tab switch and on search
 
 	// Live TV state
 	liveTVProvider *provider.LiveTV
@@ -83,6 +85,8 @@ type AppModel struct {
 	liveCategory   string    // current category at level 1
 	liveMaster     []liveRow // unfiltered rows for the current level
 	liveReqGen     int       // bumped per Live TV fetch; stale responses are ignored
+	tabReqGen      int       // bumped per tab switch and per search; listings, failures and notices from an earlier request are ignored
+	detailReqGen   int
 
 	// Download dialog for TV show batch downloads
 	dlDialog downloadDialog
@@ -103,7 +107,7 @@ func (i listItem) Description() string {
 		return i.desc
 	}
 	desc := fmt.Sprintf("%s \u2022 %s", i.result.Type.String(), i.result.Year)
-	if i.result.Type == media.TV {
+	if i.result.Type == media.TV && i.result.Seasons > 0 {
 		desc = fmt.Sprintf("%s \u2022 %d Seasons", desc, i.result.Seasons)
 	}
 	return desc
@@ -135,11 +139,11 @@ func StartApp(p provider.Provider, cfg *config.Config, liveSources []string, mgr
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4C4C"))
 
+	general, anime := wrapProviders(p, provider.NewAnimeOnsen(), cfg)
 	m := AppModel{
-		state:    stateTrending,
-		provider: p,
-		// AnimeOnsen is the one anime source still standing (config.retiredBases).
-		animeProvider:     provider.NewAnimeOnsen(),
+		state:             stateTrending,
+		provider:          general,
+		animeProvider:     anime,
 		liveTVProvider:    provider.NewLiveTV(liveSources),
 		fallbackProviders: fallbacks,
 		config:            cfg,
@@ -165,12 +169,45 @@ func StartApp(p provider.Provider, cfg *config.Config, liveSources []string, mgr
 	if appModel.selectedProvider == nil {
 		appModel.selectedProvider = p
 	}
-	return appModel.selectedResult, appModel.selectedLineup, appModel.selectedIndex, appModel.selectedProvider, nil
+	res, prov := finishSelection(appModel.selectedResult, appModel.selectedProvider)
+	return res, appModel.selectedLineup, appModel.selectedIndex, prov, nil
+}
+
+func wrapProviders(p, animeBase provider.Provider, cfg *config.Config) (provider.Provider, provider.Provider) {
+	var client *catalog.Client
+	if cfg != nil {
+		client = catalog.New(cfg.TMDBAPIKey)
+	}
+	return catalog.Wrap(p, client, catalog.General), catalog.Wrap(animeBase, client, catalog.Anime)
+}
+
+func finishSelection(r *media.SearchResult, p provider.Provider) (*media.SearchResult, provider.Provider) {
+	if w, ok := p.(*catalog.Provider); ok && r != nil {
+		resolved := w.ResolveRow(*r)
+		r = &resolved
+	}
+	return r, unwrapProvider(p)
+}
+
+func showsCatalogueRows(rows []media.SearchResult) bool {
+	for _, r := range rows {
+		if r.FromCatalogue {
+			return true
+		}
+	}
+	return false
+}
+
+func unwrapProvider(p provider.Provider) provider.Provider {
+	if w, ok := p.(*catalog.Provider); ok {
+		return w.Unwrap()
+	}
+	return p
 }
 
 func (m AppModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		fetchTabCmd(m.providerForActiveTab(), m.activeTab),
+		fetchTabCmd(m.providerForActiveTab(), m.activeTab, m.tabReqGen),
 		textinput.Blink,
 		m.loader.Tick,
 		m.list.StartSpinner(),
@@ -234,6 +271,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.list.Title = "Search: " + m.searchInput.Value()
 				m.results = nil // Clear current results to show loader
 				m.currentItem = nil
+				m.notice = ""
+				m.tabReqGen++
 				cmds = append(cmds, m.list.StartSpinner())
 				// Only the Movies/Series tabs fan out to the movies fallback
 				// providers. Anime has its own dedicated provider, so searching
@@ -244,7 +283,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.activeTab == tabAnime {
 					fallbacks = nil
 				}
-				return m, tea.Batch(searchCmd(m.providerForActiveTab(), m.searchInput.Value(), fallbacks...), m.list.StartSpinner())
+				return m, tea.Batch(searchCmd(m.providerForActiveTab(), m.searchInput.Value(), m.activeTab, m.tabReqGen, fallbacks...), m.list.StartSpinner())
 			case tea.KeyEsc:
 				m.isSearching = false
 				m.searchInput.Blur()
@@ -367,9 +406,24 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		m.list.StopSpinner()
 
+	case noticeMsg:
+		if !m.supersededRequest(msg.tab, msg.gen) {
+			m.notice = msg.text
+		}
+
+	case fetchErrMsg:
+		if m.supersededRequest(msg.tab, msg.gen) {
+			return m, nil
+		}
+		m.err = msg.err
+		m.list.StopSpinner()
+
 	case resultsFetchedMsg:
+		if m.supersededRequest(msg.tab, msg.gen) {
+			return m, nil
+		}
 		m.err = nil
-		m.results = msg
+		m.results = msg.results
 		// Clear all selection-derived state so the previous title's metadata and
 		// poster don't show under the new result until the fresh fetches land.
 		m.currentDetail = nil
@@ -379,17 +433,17 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.posterImgW = 0
 		m.posterImgH = 0
 		m.drawnPosterKey = ""
-		items := make([]list.Item, len(msg))
-		for i, v := range msg {
+		items := make([]list.Item, len(msg.results))
+		for i, v := range msg.results {
 			items[i] = listItem{result: v}
 		}
 		m.list.SetItems(items)
 		m.list.StopSpinner()
-		if len(msg) > 0 {
-			m.currentItem = &msg[0]
-			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), msg[0].ID))
+		if len(msg.results) > 0 {
+			m.currentItem = &msg.results[0]
+			cmds = append(cmds, m.detailCmd(msg.results[0].ID))
 			pw, ph := poster.BoxDims(m.width, 0, 0)
-			cmds = append(cmds, fetchPosterForItemCmd(msg[0], pw, ph, m.posterLookup()))
+			cmds = append(cmds, fetchPosterForItemCmd(msg.results[0], pw, ph, m.posterLookup()))
 		} else {
 			m.currentItem = nil
 			m.currentDetail = nil
@@ -409,13 +463,20 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case detailFetchedMsg:
-		m.err = nil
-		if m.currentItem != nil && m.currentItem.ID == msg.id {
+		if m.isCurrentDetail(msg.id, msg.gen) {
+			if _, ok := m.err.(detailError); ok {
+				m.err = nil
+			}
 			m.currentDetail = msg.detail
 		}
 
+	case detailErrMsg:
+		if m.isCurrentDetail(msg.id, msg.gen) {
+			m.err = detailError{msg.err}
+		}
+
 	case posterFetchedMsg:
-		if m.currentItem != nil && m.currentItem.ID == msg.id {
+		if m.isSelected(msg.id) {
 			if msg.inline {
 				m.posterB64 = msg.b64
 				m.posterImgW = msg.imgW
@@ -467,7 +528,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.posterReady = false
 			m.posterB64 = ""
 			m.err = nil
-			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), m.currentItem.ID))
+			cmds = append(cmds, m.detailCmd(m.currentItem.ID))
 			pw, ph := poster.BoxDims(m.width, 0, 0)
 			cmds = append(cmds, fetchPosterForItemCmd(*m.currentItem, pw, ph, m.posterLookup()))
 		}
@@ -535,14 +596,15 @@ func (m *AppModel) queueCurrentDownload() tea.Cmd {
 
 		// For now, queue with metadata. Stream resolution happens at download time.
 		d := &store.Download{
-			Title:      item.Title,
-			MediaTitle: item.Title,
-			MediaType:  item.Type.String(),
-			Year:       item.Year,
-			MediaID:    item.ID,
-			OutputPath: outputDir + "/" + item.Title + ".mkv",
-			Status:     "queued",
-			StreamType: "hls", // Default; will be resolved by worker.
+			Title:         item.Title,
+			MediaTitle:    item.Title,
+			MediaType:     item.Type.String(),
+			Year:          item.Year,
+			MediaID:       item.ID,
+			FromCatalogue: item.FromCatalogue,
+			OutputPath:    outputDir + "/" + item.Title + ".mkv",
+			Status:        "queued",
+			StreamType:    "hls", // Default; will be resolved by worker.
 		}
 
 		id, err := mgr.Queue(d)
@@ -608,7 +670,15 @@ func (m AppModel) View() string {
 		if m.dlManager != nil && m.activeTab != tabLiveTV {
 			dlHint = "  [D] Download  "
 		}
-		footer = footerStyle.Render("[ENTER] Play" + dlHint + "[S] Search  " + tabRange + " Categories  [TAB] Next Tab  [Q] Quit")
+		if m.notice != "" {
+			footerStyle = footerStyle.MarginTop(0)
+			footer = lipgloss.NewStyle().Foreground(lipgloss.Color("#F1FA8C")).Render(m.notice) + "\n"
+		}
+		if showsCatalogueRows(m.results) {
+			footerStyle = footerStyle.MarginTop(0)
+			footer += lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render(catalog.Attribution) + "\n"
+		}
+		footer += footerStyle.Render("[ENTER] Play" + dlHint + "[S] Search  " + tabRange + " Categories  [TAB] Next Tab  [Q] Quit")
 	}
 
 	base := docStyle.Render(lipgloss.JoinVertical(lipgloss.Left,
@@ -667,6 +737,23 @@ func (m AppModel) renderTabBar() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
 }
 
+func (m AppModel) supersededRequest(requested tab, gen int) bool {
+	return requested != m.activeTab || gen != m.tabReqGen
+}
+
+func (m AppModel) isSelected(id string) bool {
+	return m.currentItem != nil && m.currentItem.ID == id
+}
+
+func (m AppModel) isCurrentDetail(id string, gen int) bool {
+	return gen == m.detailReqGen && m.isSelected(id)
+}
+
+func (m *AppModel) detailCmd(id string) tea.Cmd {
+	m.detailReqGen++
+	return fetchDetailCmd(m.providerForActiveTab(), id, m.detailReqGen)
+}
+
 func (m AppModel) providerForActiveTab() provider.Provider {
 	switch m.activeTab {
 	case tabAnime:
@@ -722,6 +809,8 @@ func (m *AppModel) switchTab(next tab) tea.Cmd {
 	m.currentItem = nil
 	m.currentDetail = nil
 	m.err = nil
+	m.notice = ""
+	m.tabReqGen++
 
 	if next == tabDownloads {
 		m.downloadsModel.SetFocused(true)
@@ -738,7 +827,7 @@ func (m *AppModel) switchTab(next tab) tea.Cmd {
 		m.liveReqGen++
 		return tea.Batch(fetchCategoriesCmd(m.liveTVProvider, m.liveReqGen), m.list.StartSpinner(), tea.ClearScreen)
 	}
-	return tea.Batch(fetchTabCmd(m.providerForActiveTab(), next), m.list.StartSpinner(), tea.ClearScreen)
+	return tea.Batch(fetchTabCmd(m.providerForActiveTab(), next, m.tabReqGen), m.list.StartSpinner(), tea.ClearScreen)
 }
 
 func (m AppModel) tabTitle(t tab) string {

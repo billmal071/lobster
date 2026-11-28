@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"lobster/internal/config"
 	"lobster/internal/media"
 	"lobster/internal/provider"
+	"lobster/internal/resolver"
 )
 
 // An agent cannot guess episode numbers, so it needs a listing — and that
@@ -1239,5 +1241,41 @@ func TestEpisodesDoesNotCarryAWarningFromAProviderThatListedNothing(t *testing.T
 	}
 	if w := decodeEpisodesWarnings(t, buf.Bytes()); len(w) != 0 {
 		t.Fatalf("warnings = %+v; the complete list came from the chain, and the provider that flagged a shortfall returned no episodes at all", w)
+	}
+}
+
+func TestProbeSeasonsAdmitsTheNyaaSequelEntryPlaybackAdmits(t *testing.T) {
+	cases := []struct {
+		name string
+		row  media.SearchResult
+		want bool
+	}{
+		{"nyaa season entry dated later", media.SearchResult{ID: "nyaa/One%20Punch%20Man?s=2", Title: "One Punch Man 2nd Season", Year: "2019", Type: media.TV}, true},
+		{"same-titled remake", media.SearchResult{ID: "tv/remake", Title: "One Punch Man 2nd Season", Year: "2019", Type: media.TV}, false},
+	}
+	for _, c := range cases {
+		p := &stubProvider{results: []media.SearchResult{c.row}, seasons: []media.Season{{ID: "s1", Number: 1}}}
+		hit := probeSeasons(context.Background(), p, resolver.Request{Title: "One Punch Man 2nd Season", Year: "2015", MediaType: media.TV})
+		if (hit != nil) != c.want {
+			t.Errorf("%s: hit = %+v, want admitted %v", c.name, hit, c.want)
+		}
+	}
+}
+
+func TestProbeSeasonsFindsTheWorkBehindFiveSameTitledRowsFromAnotherYear(t *testing.T) {
+	results := make([]media.SearchResult, 0, 7)
+	for i := 0; i < 6; i++ {
+		results = append(results, media.SearchResult{ID: fmt.Sprintf("tv/remake-%d", i), Title: "Foo", Year: "2020", Type: media.TV})
+	}
+	results = append(results, media.SearchResult{ID: "tv/foo", Title: "Foo", Type: media.TV})
+	p := &stubProvider{results: results, seasons: []media.Season{{ID: "s1", Number: 1}}}
+
+	hit := probeSeasons(context.Background(), p, resolver.Request{Title: "Foo", Year: "2013", MediaType: media.TV})
+
+	if hit == nil {
+		t.Fatal("probeSeasons found nothing; the yearless Foo row was capped out behind the 2020 rows")
+	}
+	if hit.id != "tv/foo" {
+		t.Fatalf("probeSeasons answered with %q, want tv/foo", hit.id)
 	}
 }

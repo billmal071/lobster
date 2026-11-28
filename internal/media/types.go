@@ -42,6 +42,27 @@ type SearchResult struct {
 	// It travels with the ID through deduplication, because it is the ID it
 	// attributes — IDs are provider-specific and not portable.
 	Provider string
+
+	// ProviderID is the ID the playback provider knows this row by, and
+	// Unresolved marks a catalogue row that provider has no match for. Both
+	// are set only by the catalogue layer; ID stays the catalogue identity
+	// that history and resume key on.
+	ProviderID string
+	Unresolved bool
+
+	// FromCatalogue marks a row the TMDB catalogue produced, the only kind
+	// that needs a provider ID looked up. A provider's own row can carry
+	// the same movie/<n> shape and is passed through as it is.
+	FromCatalogue bool
+}
+
+// CallID is the ID to hand the playback provider: its own ID for the row when
+// the catalogue layer resolved one, otherwise ID.
+func (r SearchResult) CallID() string {
+	if r.ProviderID != "" {
+		return r.ProviderID
+	}
+	return r.ID
 }
 
 // ContentDetail contains detailed metadata fetched from a content's detail page.

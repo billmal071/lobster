@@ -85,7 +85,8 @@ type stubProvider struct {
 	episodesWithErr []media.Episode
 
 	// lastSeasonID records what GetEpisodes was actually asked for.
-	lastSeasonID string
+	lastSeasonID   string
+	lastEpisodesID string
 }
 
 func (s *stubProvider) Search(string) ([]media.SearchResult, error) {
@@ -97,7 +98,8 @@ func (s *stubProvider) GetDetails(string) (*media.ContentDetail, error) {
 func (s *stubProvider) GetSeasons(string) ([]media.Season, error) {
 	return s.seasons, s.seasonsErr
 }
-func (s *stubProvider) GetEpisodes(_, seasonID string) ([]media.Episode, error) {
+func (s *stubProvider) GetEpisodes(id, seasonID string) ([]media.Episode, error) {
+	s.lastEpisodesID = id
 	s.lastSeasonID = seasonID
 	if s.episodesErr != nil {
 		// Both, when the stub is set up that way: a provider that measured a

@@ -43,6 +43,8 @@ type ResolveRequest struct {
 	MediaType string // "movie" or "tv"
 	Season    int
 	Episode   int
+
+	FromCatalogue bool
 }
 
 // StreamResolver resolves a stream URL for a download.
@@ -262,6 +264,8 @@ func (m *Manager) processDownload(dl *store.Download) {
 			MediaType: dl.MediaType,
 			Season:    dl.Season,
 			Episode:   dl.Episode,
+
+			FromCatalogue: dl.FromCatalogue,
 		})
 		if err != nil {
 			m.store.UpdateStatus(dl.ID, "failed", err.Error())

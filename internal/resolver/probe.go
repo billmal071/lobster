@@ -131,7 +131,7 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 	var lastErr, refusal error
 	for i := range candidates {
 		match := &candidates[i]
-		if refusal != nil && !confidentMatch(*match, req) {
+		if refusal != nil && !SameWork(*match, req) {
 			log("fallback candidate %s skipped: not a confident match after a refused stream", match.Title)
 			continue
 		}
@@ -177,33 +177,43 @@ func searchUnlessOwner(p provider.Provider, req Request) ([]media.SearchResult, 
 	return p.Search(req.Title)
 }
 
-// admittedCandidates keeps the candidates that are the work req identifies. A
-// provider's search is relevance-ranked, not exact, so without this gate its
-// best-scoring unrelated row would be streamed under the requested title.
+// admittedCandidates keeps the candidates that are the work req identifies,
+// of either media type. A provider's search is relevance-ranked, not exact, so
+// without this gate its best-scoring unrelated row would be streamed under the
+// requested title. A Nyaa sequel row is admitted whatever its year.
 func admittedCandidates(candidates []media.SearchResult, req Request, log func(string, ...any)) []media.SearchResult {
 	out := make([]media.SearchResult, 0, len(candidates))
 	for _, c := range candidates {
-		sameWork := req
-		sameWork.MediaType = c.Type
-		if Matches(c, sameWork) || sequelSeason(req.Title, c.ID, 1) != 1 || isNyaaSequelOf(c, req) {
+		anyType := req
+		anyType.MediaType = c.Type
+		if Admits(c, anyType) {
 			out = append(out, c)
 			continue
 		}
-		log("fallback candidate %q (ID: %s) refused: not the requested title %q", c.Title, c.ID, req.Title)
+		log("fallback candidate %q (%s, ID: %s) refused: not the requested %q (%s)", c.Title, c.Year, c.ID, req.Title, req.Year)
 	}
 	return out
 }
 
-// confidentMatch reports whether c is the work req identifies: the same ID, or
-// a title Matches accepts with release years that are unknown or within one.
-func confidentMatch(c media.SearchResult, req Request) bool {
+// Admits reports whether c may stand for the work req identifies: SameWork, or
+// a Nyaa season entry of it, whose year is the season's rather than the work's.
+func Admits(c media.SearchResult, req Request) bool {
+	return SameWork(c, req) || sequelSeason(req.Title, c.ID, 1) != 1 || isNyaaSequelOf(c, req)
+}
+
+// SameWork reports whether c is the work req identifies: the same ID, or a
+// title Matches accepts whose release year is not known to be more than one
+// from req's. A year that is empty or not a number is unknown.
+func SameWork(c media.SearchResult, req Request) bool {
 	if req.ID != "" && c.ID == req.ID {
 		return true
 	}
-	if !Matches(c, req) {
-		return false
-	}
-	return req.Year == "" || c.Year == "" || yearDiff(c.Year, req.Year) <= 1
+	return Matches(c, req) && !yearsConflict(c.Year, req.Year)
+}
+
+func yearsConflict(a, b string) bool {
+	d := yearDiff(a, b)
+	return d != yearUnknown && d > 1
 }
 
 // acceptRefusal marks a candidate that failed only because Request.Accept refused its stream.
@@ -227,12 +237,13 @@ func FallbackCandidates(results []media.SearchResult, mediaType media.MediaType)
 // Ranking is not filtering. Every candidate of the right media type is
 // returned, including ones that match nothing about req. resolveWithProvider
 // filters them itself (admittedCandidates) before asking for a stream; a caller
-// that only reads metadata off the candidate must gate on Matches first.
+// that only reads metadata off the candidate must gate on Admits first.
 func Candidates(results []media.SearchResult, req Request) []media.SearchResult {
 	return candidatesFor(results, req)
 }
 
-// Matches reports whether r can plausibly be the work req identifies.
+// Matches reports whether r can plausibly be the work req identifies, judged
+// by ID, media type and title alone. Release years are SameWork's to compare.
 //
 // The test is the identity of the work, not the strength of the ranking:
 // candidateScore awards points for a year within one of req's, so a score
@@ -503,13 +514,20 @@ func candidateScore(r media.SearchResult, req Request) int {
 // normalize is the shared title comparison key; see titlekey.Normalize.
 func normalize(s string) string { return titlekey.Normalize(s) }
 
-// yearDiff returns the absolute difference between two year strings, or a large
-// value if either does not parse.
+func sameTitle(a, b string) bool {
+	key := normalize(a)
+	return key != "" && key == normalize(b)
+}
+
+const yearUnknown = 1 << 30
+
+// yearDiff returns the absolute difference between two year strings, or
+// yearUnknown if either does not parse.
 func yearDiff(a, b string) int {
 	ai, err1 := strconv.Atoi(a)
 	bi, err2 := strconv.Atoi(b)
 	if err1 != nil || err2 != nil {
-		return 1 << 30
+		return yearUnknown
 	}
 	if d := ai - bi; d < 0 {
 		return -d
@@ -541,7 +559,7 @@ func sequelSeason(title, candidateID string, season int) int {
 	want := titleSeasonNumber(title, t)
 	got, _ := strconv.Atoi(id[2])
 	base, err := url.QueryUnescape(id[1])
-	if err != nil || want != got || normalize(base) != normalize(title[:t[0]]) {
+	if err != nil || want != got || !sameTitle(base, title[:t[0]]) {
 		return season
 	}
 	return want

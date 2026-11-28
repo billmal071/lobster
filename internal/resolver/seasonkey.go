@@ -47,5 +47,5 @@ func isNyaaSequelOf(c media.SearchResult, req Request) bool {
 		return false
 	}
 	n, _ := strconv.Atoi(id[2])
-	return n == req.Season && normalize(base) == normalize(req.Title)
+	return n == req.Season && sameTitle(base, req.Title)
 }

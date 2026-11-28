@@ -44,6 +44,10 @@ type VidNest struct {
 	client *http.Client
 }
 
+// MintsTMDBShapedIDs reports that VidNest's own rows carry movie/<n> and tv/<n>
+// IDs that it plays directly.
+func (*VidNest) MintsTMDBShapedIDs() bool { return true }
+
 // NewVidNest creates a new VidNest provider.
 func NewVidNest() *VidNest {
 	return &VidNest{

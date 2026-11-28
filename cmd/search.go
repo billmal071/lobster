@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"lobster/internal/catalog"
 	"os"
 	"strings"
 	"time"
@@ -237,6 +238,13 @@ func init() {
 // tuiEpisodeListFallback is tui.EpisodeListFallback: the chain's answer for a
 // season the TUI's own provider could not list.
 func tuiEpisodeListFallback(prov provider.Provider, item media.SearchResult, seasonNumber int) ([]media.Episode, error) {
+	item, err := identifyCatalogueRow(prov, item)
+	if err != nil {
+		return nil, err
+	}
+	if w, ok := prov.(*catalog.Provider); ok {
+		prov = w.Unwrap()
+	}
 	a := fallbackEpisodeList(prov, item, seasonNumber)
 	if a == nil {
 		return nil, fmt.Errorf("no fallback provider could list season %d of %q", seasonNumber, item.Title)
@@ -296,7 +304,18 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	// Only the movie route moves the ID. The series branch hands `sel` back
 	// untouched on both of its paths, which is why the TV code below can go on
 	// using selected.ID for the provider calls.
+	selected, err := identifyCatalogueRow(p, selected)
+	if err != nil {
+		return err
+	}
 	p, routed := routeByType(p, selected)
+
+	routedAway := routed.ID != selected.ID
+	callID := selected.CallID()
+	if routed.ID == selected.ID {
+		routed.ID = callID
+	}
+	errUnresolved := fmt.Errorf("%q is not on this provider", selected.Title)
 
 	episodeID := ""
 	title := selected.Title
@@ -318,7 +337,11 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	if selected.Type == media.TV {
 		// Get seasons
 		stopSeasons := ui.StartSpinner("Fetching seasons...")
-		seasons, err := p.GetSeasons(selected.ID)
+		var seasons []media.Season
+		err := errUnresolved
+		if !selected.Unresolved {
+			seasons, err = p.GetSeasons(callID)
+		}
 		stopSeasons()
 		seasonsPartial := false
 		if err != nil && len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
@@ -406,7 +429,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		// provider. selected.ID stays put: it is the identity history is
 		// keyed on (cmd/session.go), so it has to mean the same work whichever
 		// provider ended up answering this run.
-		providerID := selected.ID
+		providerID := callID
 
 		// Select season (or use provided)
 		seasonIdx := 0
@@ -729,7 +752,11 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 	if sp, ok := p.(provider.StreamProvider); ok {
 		debugf("primary provider: %T (StreamProvider)", p)
 		stopStream := ui.StartSpinner("Negotiating stream servers...")
-		servers, err := p.GetServers(routed.ID, episodeID)
+		var servers []media.Server
+		err := errUnresolved
+		if !selected.Unresolved || routedAway {
+			servers, err = p.GetServers(routed.ID, episodeID)
+		}
 		stopStream()
 		if err != nil || len(servers) == 0 {
 			if err != nil {

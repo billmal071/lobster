@@ -24,6 +24,10 @@ type VaPlayer struct {
 	client *http.Client
 }
 
+// MintsTMDBShapedIDs reports that VaPlayer's own rows carry movie/<n> and tv/<n>
+// IDs that it plays directly.
+func (*VaPlayer) MintsTMDBShapedIDs() bool { return true }
+
 // NewVaPlayer creates a new VaPlayer provider.
 func NewVaPlayer() *VaPlayer {
 	return &VaPlayer{

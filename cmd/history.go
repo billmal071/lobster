@@ -1,12 +1,15 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
 
+	"lobster/internal/catalog"
 	"lobster/internal/history"
 	"lobster/internal/media"
+	"lobster/internal/provider"
 	"lobster/internal/ui"
 )
 
@@ -69,13 +72,23 @@ func historyRun(cmd *cobra.Command, args []string) error {
 	// Re-resolve and play from the saved position
 	p := newProvider()
 
-	// Search for the title to get fresh results
-	results, err := p.Search(selected.Title)
+	results, err := historySearch(p, selected)
 	if err != nil {
 		return fmt.Errorf("searching for %q: %w", selected.Title, err)
 	}
+	return resumeSaved(p, selected, results)
+}
 
-	// Find matching result by ID
+var (
+	resumePicker = resumeViaPicker
+	resumeFlow   = playFlow
+)
+
+func catalogueEntry(p provider.Provider, e media.HistoryEntry) bool {
+	return !catalog.MintsTMDBShapedIDs(p) && catalog.IsID(e.ID)
+}
+
+func resumeSaved(p provider.Provider, selected media.HistoryEntry, results []media.SearchResult) error {
 	for _, r := range results {
 		if r.ID == selected.ID {
 			// No flagContinue override here: resuming is the registered
@@ -87,6 +100,39 @@ func historyRun(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	if catalogueEntry(p, selected) {
+		return resumePicker(p, selected, results)
+	}
+
 	// If exact ID not found, let user pick from search results
-	return playFlow(p, selected.Title)
+	return resumeFlow(p, selected.Title)
+}
+
+func historySearch(p provider.Provider, e media.HistoryEntry) ([]media.SearchResult, error) {
+	results, err := p.Search(e.Title)
+	if err != nil && catalogueEntry(p, e) && errors.Is(err, provider.ErrNoResults) {
+		return nil, nil
+	}
+	return results, err
+}
+
+func resumeViaPicker(p provider.Provider, e media.HistoryEntry, results []media.SearchResult) error {
+	var rows []media.SearchResult
+	var items []string
+	for _, r := range results {
+		if r.Type == e.Type {
+			rows = append(rows, r)
+			items = append(items, provider.FormatDisplayTitle(r))
+		}
+	}
+	row := media.SearchResult{ID: e.ID, Title: e.Title, Type: e.Type, FromCatalogue: true, Unresolved: len(rows) == 0}
+	if len(rows) > 0 {
+		idx, err := selectItem("Select", items)
+		if err != nil {
+			return err
+		}
+		row = rows[idx]
+		row.ID, row.ProviderID, row.Title, row.FromCatalogue = e.ID, rows[idx].ID, e.Title, true
+	}
+	return resolveAndPlay(p, row, e.Season, e.Episode)
 }

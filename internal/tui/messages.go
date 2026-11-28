@@ -11,13 +11,43 @@ type errMsg struct{ err error }
 func (e errMsg) Error() string { return e.err.Error() }
 
 // resultsFetchedMsg is sent when a list of search/trending results is fetched.
-type resultsFetchedMsg []media.SearchResult
+type resultsFetchedMsg struct {
+	results []media.SearchResult
+	tab     tab
+	gen     int
+}
+
+type fetchErrMsg struct {
+	err error
+	tab tab
+	gen int
+}
+
+// noticeMsg carries a one-line catalogue notice to show in the footer.
+type noticeMsg struct {
+	text string
+	tab  tab
+	gen  int
+}
 
 // detailFetchedMsg is sent when detailed metadata for an item is fetched.
 type detailFetchedMsg struct {
 	id     string
+	gen    int
 	detail *media.ContentDetail
 }
+
+type detailErrMsg struct {
+	id  string
+	gen int
+	err error
+}
+
+type detailError struct{ err error }
+
+func (e detailError) Error() string { return e.err.Error() }
+
+func (e detailError) Unwrap() error { return e.err }
 
 // seasonsFetchedMsg is sent when TV show seasons are fetched.
 type seasonsFetchedMsg []media.Season

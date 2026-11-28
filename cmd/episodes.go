@@ -466,21 +466,21 @@ var episodesFallbackTimeout = multiSearchTimeout
 // `episodes --ref` reported "no seasons found" for a show `play --ref` then
 // played without complaint. The two commands must agree on what one ref means.
 //
-// They still do not agree completely, and this is the remaining gap: the
-// admission gate below is resolver.Matches, while play's tryFallbackStream
-// goes through resolver.Resolve, which has no such gate. So a ref whose title
+// Both apply the same admission rule, resolver.Admits: play's
+// tryFallbackStream reaches it through resolver.Resolve. So a ref whose title
 // the fallback spells differently — "Marvel's Agents of S.H.I.E.L.D." against
-// "Agents of S.H.I.E.L.D." — still plays and still lists nothing. Relaxing
-// Matches is not the obvious fix: it is what stops the resolver answering
-// about a different show, and loosening it needs its own adversarial pass.
-// Documented in GUIDE.md's "Content sources" section so the failure is at
-// least findable.
+// "Agents of S.H.I.E.L.D." — neither plays from the chain nor lists anything.
+// Relaxing the rule is not the obvious fix: it is what stops the resolver
+// answering about a different show, and loosening it needs its own adversarial
+// pass. Documented in GUIDE.md's "Content sources" section so the failure is
+// at least findable.
 //
-// The re-search is by title, ranked by resolver.Candidates so the ref's
-// ID/Title/Year all count — the reason a ref carries more than an ID — and then
-// admitted only if resolver.Matches says the candidate is the same work.
+// The re-search is by title, admitted only if resolver.Admits says the
+// candidate is the same work, and then ranked and capped by
+// resolver.Candidates so the ref's ID/Title/Year all count — the reason a ref
+// carries more than an ID.
 // Ranking alone is not a gate: candidatesFor applies no score threshold, so
-// without Matches the first fallback that returns any seasons for any show
+// without Admits the first fallback that returns any seasons for any show
 // wins, and the envelope echoes the ref's own title over it. The caller could
 // not detect the swap. A candidate that matches but returns an empty season
 // list is skipped too — it does not really have this show.
@@ -788,11 +788,15 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 		debugf("episodes: fallback %T search failed: %v", p, err)
 		return nil
 	}
-	for _, c := range resolver.Candidates(results, req) {
-		if !resolver.Matches(c, req) {
-			debugf("episodes: fallback %T offered %q, which is not %q", p, c.Title, req.Title)
+	admitted := make([]media.SearchResult, 0, len(results))
+	for _, c := range results {
+		if !resolver.Admits(c, req) {
+			debugf("episodes: fallback %T offered %q (%s), which is not %q (%s)", p, c.Title, c.Year, req.Title, req.Year)
 			continue
 		}
+		admitted = append(admitted, c)
+	}
+	for _, c := range resolver.Candidates(admitted, req) {
 		seasons, err := seasonsWithContext(ctx, p, c.ID)
 		partial := err != nil && len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList)
 		if (err != nil && !partial) || len(seasons) == 0 {

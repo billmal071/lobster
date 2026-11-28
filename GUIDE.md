@@ -307,6 +307,13 @@ subs_language = "english"
 # subdl_api_key = "..."
 # opensubtitles_api_key = "..."
 
+# Your own themoviedb.org API key (v3 key or v4 token). With it the Movies,
+# Series and Anime tabs and `lobster trending` / `lobster recent` list titles
+# from the TMDB API; without it they come from the content source. The
+# LOBSTER_TMDB_KEY environment variable overrides this. The key is only ever
+# sent to api.themoviedb.org. See README.md -> "TMDB catalogue".
+# tmdb_api_key = "..."
+
 # Optional opensubtitles.com account, which only affects how many subtitle
 # files you may download per day: the API key alone allows 5, the key plus
 # these allows 20. Twelve episodes is more than 5, and running out looks like
@@ -391,11 +398,15 @@ just slower.
 
 `lobster episodes` is not covered by that. When the primary cannot enumerate a
 ref's seasons it re-searches the chain by title, but a fallback's result is
-only accepted if its title matches the ref's after normalisation. A show the
+only accepted if its title matches the ref's after normalisation and its
+release year, when both are known, is within one year of the ref's. A show the
 two spell differently — `Marvel's Agents of S.H.I.E.L.D.` in the ref against
 `Agents of S.H.I.E.L.D.` on the fallback — is rejected, and `episodes` exits 2
-with `no seasons found`. `play --ref` has no such check, so it plays the very
-ref `episodes --ref` cannot list. If `episodes` says a ref has no seasons, run
+with `no seasons found`. A same-titled remake from another year is rejected the
+same way. Playback's fallback applies the same title and year check, so it does
+not play such a result either. Both make one exception: a Nyaa season entry
+whose show title and season number match the request is accepted whatever its
+year. If `episodes` says a ref has no seasons, run
 `lobster find --base tbcpl` for the title and pass the new TBCPL ref to
 `episodes`; the old ref's ID belongs to the source that found it, and TBCPL
 cannot use it.
@@ -566,7 +577,7 @@ tbcpl_include_untrusted = false
 
 ### TMDB key for title search
 
-`tbcpl`, `vidrock`, `eztv` and the TBCPL embed fallback look titles up on TMDB. Without a key they use the keyless `www.themoviedb.org` search, which TMDB now answers with HTTP 403, so their search fails. Set your own key (a v3 API key or a v4 read access token, free from a themoviedb.org account) in the `LOBSTER_TMDB_KEY` environment variable; there is no config-file setting for it.
+`tbcpl`, `vidrock`, `eztv` and the TBCPL embed fallback look titles up on TMDB. Without a key they use the keyless `www.themoviedb.org` search, which TMDB now answers with HTTP 403, so their search fails. Set your own key (a v3 API key or a v4 read access token, free from a themoviedb.org account) in the `LOBSTER_TMDB_KEY` environment variable. Title search does not read `tmdb_api_key` from `config.toml`; that setting feeds only the TMDB catalogue lists.
 
 - With the key set, search uses `api.themoviedb.org/3/search/multi`, and `eztv` reads IMDb ids from `/tv/{id}/external_ids` instead of the TMDB show page. A v4 token (it starts with `eyJ`) is sent as a `Bearer` header, a v3 key as the `api_key` parameter.
 - A refused key (HTTP 401 or 403) fails the search with `TMDB API rejected the key in LOBSTER_TMDB_KEY`, and HTTP 429 with a rate-limit error. Lobster does not fall back to the keyless search when a key is set, so a bad key shows up instead of being masked. `eztv` also reports either error from its IMDb id lookups when no show resolved; shows that did resolve are returned and the failed lookups dropped.

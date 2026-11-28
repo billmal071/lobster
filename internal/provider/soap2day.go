@@ -31,6 +31,10 @@ type Soap2Day struct {
 	client *http.Client
 }
 
+// MintsTMDBShapedIDs reports that Soap2Day's own rows carry movie/<n> and tv/<n>
+// IDs that it plays directly.
+func (*Soap2Day) MintsTMDBShapedIDs() bool { return true }
+
 // NewSoap2Day creates a new Soap2Day provider.
 func NewSoap2Day() *Soap2Day {
 	return &Soap2Day{
