@@ -14,6 +14,7 @@ func identifyCatalogueRow(p provider.Provider, r media.SearchResult) (media.Sear
 		return r, nil
 	}
 	if w, ok := p.(*catalog.Provider); ok {
+		r = w.Dated(r)
 		p = w.Unwrap()
 	}
 	w := catalog.Wrap(p, configuredCatalogClient(), catalog.General)

@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"lobster/internal/catalog"
@@ -160,5 +161,44 @@ func TestARowTheTUIResolvedIsNotDatedAgainBeforePlayback(t *testing.T) {
 	}
 	if *calls != 0 {
 		t.Fatalf("TMDB details asked %d times for a row the TUI already dated", *calls)
+	}
+}
+
+func TestDownloadDialogFallbackUsesTheYearTheTUIAlreadyRecoveredWhenTMDBLaterFails(t *testing.T) {
+	url := catalogueHarness(t)
+	details := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/trending/") {
+			io.WriteString(rw, `{"results":[{"id":37854,"name":"Some Show"}]}`)
+			return
+		}
+		details++
+		if details > 1 {
+			rw.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		io.WriteString(rw, `{"id":37854,"first_air_date":"2013-04-01"}`)
+	}))
+	t.Cleanup(srv.Close)
+	tmdbDetails(t, http.StatusInternalServerError, `{}`)
+	inner := &stubProvider{
+		results: []media.SearchResult{{ID: "tv/some-show-2013", Title: "Some Show", Type: media.TV, Year: "2013"}},
+		seasons: []media.Season{{ID: "s1", Number: 1}},
+	}
+	w := catalog.Wrap(inner, catalog.NewWithBase("k", srv.URL, srv.Client()), catalog.General)
+	rows, err := w.Trending(media.TV)
+	if err != nil || len(rows) != 1 || rows[0].Year != "" {
+		t.Fatalf("setup: Trending = %+v, %v; want one yearless row", rows, err)
+	}
+	if _, err := w.GetSeasons(rows[0].ID); err != nil {
+		t.Fatalf("setup: GetSeasons = %v", err)
+	}
+	fb := newListingChainProvider(url)
+	fb.results[0].Year = "2013"
+	withFallbackChain(t, fb)
+
+	eps, err := tuiEpisodeListFallback(w, rows[0], 1)
+	if err != nil || len(eps) != 22 {
+		t.Fatalf("tuiEpisodeListFallback = %d episodes, %v; want the 2013 series' 22", len(eps), err)
 	}
 }
