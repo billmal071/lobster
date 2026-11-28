@@ -799,13 +799,88 @@ func episodeLists(hits []*seasonHit, wantSeason int) ([]*episodeAnswer, bool) {
 	}
 	wg.Wait()
 
+	extras := make(map[*candidateReserve][]*episodeAnswer)
+	var extrasMu sync.Mutex
+	reserveFailed := false
+	for i, h := range hits {
+		r := h.reserve
+		if r == nil || (i+1 < len(hits) && hits[i+1].reserve == r) {
+			continue
+		}
+		if slices.ContainsFunc(answers, func(a *episodeAnswer) bool {
+			return a != nil && a.hit.reserve == r && !a.shortfall.mayBeTruncated()
+		}) {
+			continue
+		}
+		wg.Add(1)
+		go func(r *candidateReserve) {
+			defer wg.Done()
+			found, failed := r.episodeLists(ctx, wantSeason)
+			extrasMu.Lock()
+			extras[r] = found
+			reserveFailed = reserveFailed || failed
+			extrasMu.Unlock()
+		}(r)
+	}
+	wg.Wait()
+
 	listed := make([]*episodeAnswer, 0, len(answers))
-	for _, a := range answers {
+	for i, a := range answers {
 		if a != nil {
 			listed = append(listed, a)
 		}
+		if r := hits[i].reserve; r != nil && (i+1 == len(hits) || hits[i+1].reserve != r) {
+			listed = append(listed, extras[r]...)
+		}
 	}
-	return listed, slices.Contains(failures, true)
+	return listed, reserveFailed || slices.Contains(failures, true)
+}
+
+// episodeLists asks the reserve's candidates in turn for wantSeason's
+// episodes, fetching a candidate's seasons the first time it is asked, and
+// stops at the first list that is not flagged as possibly truncated.
+func (r *candidateReserve) episodeLists(ctx context.Context, wantSeason int) ([]*episodeAnswer, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var found []*episodeAnswer
+	failed := false
+	for i := range r.candidates {
+		c := &r.candidates[i]
+		if !c.probed {
+			seasons, err := seasonsWithContext(ctx, r.provider, c.id)
+			look := classifySeasonLookup(seasons, err)
+			if look.kind == lookupFailed {
+				failed = true
+				continue
+			}
+			look.provider, look.id = r.provider, c.id
+			c.look, c.probed = look, true
+		}
+		if c.look.kind != lookupListed {
+			continue
+		}
+		sel, ok := pickSeason(c.look.seasons, wantSeason)
+		if !ok {
+			continue
+		}
+		eps, err := episodesWithContext(ctx, r.provider, c.id, sel.ID)
+		shortfall := episodeShortfall{}
+		if sf := shortfallFor(err); len(eps) > 0 && sf.code != "" {
+			shortfall, err = sf, nil
+		}
+		if err != nil || len(eps) == 0 {
+			if kind, _ := classifyList(len(eps), err); kind == lookupFailed {
+				failed = true
+			}
+			continue
+		}
+		hit := &seasonHit{seasonLookup: c.look, title: c.title, reserve: r}
+		found = append(found, &episodeAnswer{hit: hit, season: sel, episodes: eps, shortfall: shortfall})
+		if !shortfall.mayBeTruncated() {
+			break
+		}
+	}
+	return found, failed
 }
 
 // episodesWithContext is seasonsWithContext for GetEpisodes, with the same
@@ -832,7 +907,24 @@ func episodesWithContext(ctx context.Context, p provider.Provider, id, seasonID 
 // seasonHit is one fallback provider's listed answer for a ref.
 type seasonHit struct {
 	seasonLookup
-	title string
+	title   string
+	reserve *candidateReserve
+}
+
+// candidateReserve holds a provider's same-work candidates that probeSeasons
+// did not keep, shared by every hit it kept from that provider. episodeLists
+// asks them, in search order, only when no kept hit of the provider lists the
+// season's episodes in full.
+type candidateReserve struct {
+	mu         sync.Mutex
+	provider   provider.Provider
+	candidates []reserveCandidate
+}
+
+type reserveCandidate struct {
+	id, title string
+	probed    bool
+	look      seasonLookup
 }
 
 // probeSeasons asks one fallback provider whether it has req's work and can
@@ -842,8 +934,9 @@ type seasonHit struct {
 // it; otherwise the first that lists any, followed by each later one that lists
 // a season in wants the ones kept so far lack or whose list was cut short. Once
 // one is kept, a later candidate is considered only when resolver.ConfidentMatch
-// takes it for the same work, judged by the first kept candidate's year.
-// failed is true when any lookup errored or timed out rather than answering,
+// takes it for the same work, judged by the first kept candidate's year. The
+// same-work candidates it does not keep, probed or not, go to the kept hits'
+// shared reserve. failed is true when any lookup errored or timed out rather than answering,
 // whichever candidates were kept, and when a list that lacks a season in wants
 // was cut short.
 func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request, wants []int) (hits []*seasonHit, failed bool) {
@@ -856,7 +949,17 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 		return nil, true
 	}
 	sameWork := req
-	for _, c := range resolver.Candidates(results, req) {
+	reserve := &candidateReserve{provider: p}
+	defer func() {
+		if len(reserve.candidates) == 0 {
+			return
+		}
+		for _, h := range hits {
+			h.reserve = reserve
+		}
+	}()
+	candidates := resolver.Candidates(results, req)
+	for i, c := range candidates {
 		if !resolver.Matches(c, req) {
 			debugf("episodes: fallback %T candidate %q (ID: %s) is not the requested work, skipping", p, c.Title, c.ID)
 			continue
@@ -877,13 +980,21 @@ func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request
 				sameWork.Year = c.Year
 			}
 			if listsEverySeason(seasons, wants) {
-				return append([]*seasonHit{listed}, hits...), failed
+				for _, later := range candidates[i+1:] {
+					if resolver.Matches(later, req) && resolver.ConfidentMatch(later, sameWork) {
+						reserve.candidates = append(reserve.candidates, reserveCandidate{id: later.ID, title: later.Title})
+					}
+				}
+				hits = append([]*seasonHit{listed}, hits...)
+				return hits, failed
 			}
 			if look.gap == gapShort {
 				failed = true
 			}
 			if len(hits) == 0 || look.gap == gapShort || addsWantedSeason(hits, seasons, wants) {
 				hits = append(hits, listed)
+			} else {
+				reserve.candidates = append(reserve.candidates, reserveCandidate{id: c.ID, title: c.Title, probed: true, look: look})
 			}
 		}
 	}
