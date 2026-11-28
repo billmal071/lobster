@@ -585,14 +585,15 @@ func (m *AppModel) queueCurrentDownload() tea.Cmd {
 
 		// For now, queue with metadata. Stream resolution happens at download time.
 		d := &store.Download{
-			Title:      item.Title,
-			MediaTitle: item.Title,
-			MediaType:  item.Type.String(),
-			Year:       item.Year,
-			MediaID:    item.ID,
-			OutputPath: outputDir + "/" + item.Title + ".mkv",
-			Status:     "queued",
-			StreamType: "hls", // Default; will be resolved by worker.
+			Title:         item.Title,
+			MediaTitle:    item.Title,
+			MediaType:     item.Type.String(),
+			Year:          item.Year,
+			MediaID:       item.ID,
+			FromCatalogue: item.FromCatalogue,
+			OutputPath:    outputDir + "/" + item.Title + ".mkv",
+			Status:        "queued",
+			StreamType:    "hls", // Default; will be resolved by worker.
 		}
 
 		id, err := mgr.Queue(d)

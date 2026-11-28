@@ -18,6 +18,7 @@ type Download struct {
 	MediaTitle    string
 	MediaType     string // "movie" or "tv"
 	Year          string // release year, disambiguates same-title works at resolve time
+	FromCatalogue bool
 	Season        int
 	Episode       int
 	MediaID       string // provider content ID
@@ -59,6 +60,7 @@ CREATE TABLE IF NOT EXISTS downloads (
     media_title    TEXT NOT NULL,
     media_type     TEXT NOT NULL,
     year           TEXT NOT NULL DEFAULT '',
+    from_catalogue INTEGER NOT NULL DEFAULT 0,
     season         INTEGER DEFAULT 0,
     episode        INTEGER DEFAULT 0,
     media_id       TEXT NOT NULL DEFAULT '',
@@ -153,6 +155,7 @@ func migrate(db *sql.DB) error {
 	for _, col := range []struct{ name, ddl string }{
 		{"year", "ALTER TABLE downloads ADD COLUMN year TEXT NOT NULL DEFAULT ''"},
 		{"user_agent", "ALTER TABLE downloads ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''"},
+		{"from_catalogue", "ALTER TABLE downloads ADD COLUMN from_catalogue INTEGER NOT NULL DEFAULT 0"},
 	} {
 		has, err := hasColumn(db, "downloads", col.name)
 		if err != nil {
@@ -205,12 +208,12 @@ func (s *Store) Close() error {
 // InsertDownload adds a new download and returns its ID.
 func (s *Store) InsertDownload(d *Download) (int, error) {
 	res, err := s.db.Exec(`
-		INSERT INTO downloads (title, media_title, media_type, year, season, episode,
+		INSERT INTO downloads (title, media_title, media_type, year, from_catalogue, season, episode,
 			media_id, episode_id, stream_url, stream_type, referer, user_agent,
 			output_path, subtitle_url, status, error,
 			total_bytes, done_bytes, total_segments, done_segments)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		d.Title, d.MediaTitle, d.MediaType, d.Year, d.Season, d.Episode,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.Title, d.MediaTitle, d.MediaType, d.Year, d.FromCatalogue, d.Season, d.Episode,
 		d.MediaID, d.EpisodeID, d.StreamURL, d.StreamType, d.Referer, d.UserAgent,
 		d.OutputPath, d.SubtitleURL, d.Status, d.Error,
 		d.TotalBytes, d.DoneBytes, d.TotalSegments, d.DoneSegments,
@@ -229,14 +232,14 @@ func (s *Store) InsertDownload(d *Download) (int, error) {
 func (s *Store) GetDownload(id int) (*Download, error) {
 	d := &Download{}
 	err := s.db.QueryRow(`
-		SELECT id, title, media_title, media_type, year, season, episode,
+		SELECT id, title, media_title, media_type, year, from_catalogue, season, episode,
 			media_id, episode_id, stream_url, stream_type, referer, user_agent,
 			output_path, subtitle_url, status, error,
 			total_bytes, done_bytes, total_segments, done_segments,
 			created_at, updated_at
 		FROM downloads WHERE id = ?`, id,
 	).Scan(
-		&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Year, &d.Season, &d.Episode,
+		&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Year, &d.FromCatalogue, &d.Season, &d.Episode,
 		&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer, &d.UserAgent,
 		&d.OutputPath, &d.SubtitleURL, &d.Status, &d.Error,
 		&d.TotalBytes, &d.DoneBytes, &d.TotalSegments, &d.DoneSegments,
@@ -254,7 +257,7 @@ func (s *Store) GetDownload(id int) (*Download, error) {
 // ListDownloads returns all downloads ordered by creation time (FIFO).
 func (s *Store) ListDownloads() ([]Download, error) {
 	rows, err := s.db.Query(`
-		SELECT id, title, media_title, media_type, year, season, episode,
+		SELECT id, title, media_title, media_type, year, from_catalogue, season, episode,
 			media_id, episode_id, stream_url, stream_type, referer, user_agent,
 			output_path, subtitle_url, status, error,
 			total_bytes, done_bytes, total_segments, done_segments,
@@ -269,7 +272,7 @@ func (s *Store) ListDownloads() ([]Download, error) {
 	for rows.Next() {
 		var d Download
 		if err := rows.Scan(
-			&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Year, &d.Season, &d.Episode,
+			&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Year, &d.FromCatalogue, &d.Season, &d.Episode,
 			&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer, &d.UserAgent,
 			&d.OutputPath, &d.SubtitleURL, &d.Status, &d.Error,
 			&d.TotalBytes, &d.DoneBytes, &d.TotalSegments, &d.DoneSegments,
@@ -352,7 +355,7 @@ func (s *Store) RecoverStale(maxAge time.Duration) ([]Download, error) {
 	}
 
 	rows, err := s.db.Query(`
-		SELECT id, title, media_title, media_type, year, season, episode,
+		SELECT id, title, media_title, media_type, year, from_catalogue, season, episode,
 			media_id, episode_id, stream_url, stream_type, referer, user_agent,
 			output_path, subtitle_url, status, error,
 			total_bytes, done_bytes, total_segments, done_segments,
@@ -367,7 +370,7 @@ func (s *Store) RecoverStale(maxAge time.Duration) ([]Download, error) {
 	for rows.Next() {
 		var d Download
 		if err := rows.Scan(
-			&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Year, &d.Season, &d.Episode,
+			&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Year, &d.FromCatalogue, &d.Season, &d.Episode,
 			&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer, &d.UserAgent,
 			&d.OutputPath, &d.SubtitleURL, &d.Status, &d.Error,
 			&d.TotalBytes, &d.DoneBytes, &d.TotalSegments, &d.DoneSegments,
@@ -468,7 +471,7 @@ func (s *Store) CountSegments(downloadID int) (total, done int, err error) {
 func (s *Store) NextQueued() (*Download, error) {
 	d := &Download{}
 	err := s.db.QueryRow(`
-		SELECT id, title, media_title, media_type, year, season, episode,
+		SELECT id, title, media_title, media_type, year, from_catalogue, season, episode,
 			media_id, episode_id, stream_url, stream_type, referer, user_agent,
 			output_path, subtitle_url, status, error,
 			total_bytes, done_bytes, total_segments, done_segments,
@@ -476,7 +479,7 @@ func (s *Store) NextQueued() (*Download, error) {
 		FROM downloads WHERE status = 'queued'
 		ORDER BY created_at ASC LIMIT 1`,
 	).Scan(
-		&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Year, &d.Season, &d.Episode,
+		&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Year, &d.FromCatalogue, &d.Season, &d.Episode,
 		&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer, &d.UserAgent,
 		&d.OutputPath, &d.SubtitleURL, &d.Status, &d.Error,
 		&d.TotalBytes, &d.DoneBytes, &d.TotalSegments, &d.DoneSegments,
@@ -502,7 +505,7 @@ func (s *Store) ClaimNextQueued() (*Download, error) {
 
 	d := &Download{}
 	err = tx.QueryRow(`
-		SELECT id, title, media_title, media_type, year, season, episode,
+		SELECT id, title, media_title, media_type, year, from_catalogue, season, episode,
 			media_id, episode_id, stream_url, stream_type, referer, user_agent,
 			output_path, subtitle_url, status, error,
 			total_bytes, done_bytes, total_segments, done_segments,
@@ -510,7 +513,7 @@ func (s *Store) ClaimNextQueued() (*Download, error) {
 		FROM downloads WHERE status = 'queued'
 		ORDER BY created_at ASC LIMIT 1`,
 	).Scan(
-		&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Year, &d.Season, &d.Episode,
+		&d.ID, &d.Title, &d.MediaTitle, &d.MediaType, &d.Year, &d.FromCatalogue, &d.Season, &d.Episode,
 		&d.MediaID, &d.EpisodeID, &d.StreamURL, &d.StreamType, &d.Referer, &d.UserAgent,
 		&d.OutputPath, &d.SubtitleURL, &d.Status, &d.Error,
 		&d.TotalBytes, &d.DoneBytes, &d.TotalSegments, &d.DoneSegments,

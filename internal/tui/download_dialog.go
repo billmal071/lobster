@@ -319,17 +319,18 @@ func (d *downloadDialog) queueEpisodes(episodes []media.Episode) tea.Cmd {
 			epLabel += " - " + ep.Title
 		}
 		dls = append(dls, &store.Download{
-			Title:      fmt.Sprintf("%s %s", item.Title, epLabel),
-			MediaTitle: item.Title,
-			MediaType:  item.Type.String(),
-			Year:       item.Year,
-			MediaID:    item.ID,
-			EpisodeID:  ep.ID,
-			Season:     seasonNum,
-			Episode:    ep.Number,
-			OutputPath: fmt.Sprintf("%s/%s/Season %02d/%s.mkv", outputDir, item.Title, seasonNum, epLabel),
-			Status:     "queued",
-			StreamType: "hls",
+			Title:         fmt.Sprintf("%s %s", item.Title, epLabel),
+			MediaTitle:    item.Title,
+			MediaType:     item.Type.String(),
+			Year:          item.Year,
+			MediaID:       item.ID,
+			FromCatalogue: item.FromCatalogue,
+			EpisodeID:     ep.ID,
+			Season:        seasonNum,
+			Episode:       ep.Number,
+			OutputPath:    fmt.Sprintf("%s/%s/Season %02d/%s.mkv", outputDir, item.Title, seasonNum, epLabel),
+			Status:        "queued",
+			StreamType:    "hls",
 		})
 	}
 
