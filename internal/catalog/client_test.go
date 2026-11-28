@@ -284,10 +284,9 @@ func TestDetailsUseExternalIDs(t *testing.T) {
 }
 
 func TestDetailsRefuseAndNeverCacheAResponseForAnotherTitle(t *testing.T) {
-	calls := 0
+	var calls atomic.Int32
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if calls == 1 {
+		if calls.Add(1) == 1 {
 			io.WriteString(w, `{"id":604,"overview":"Another film.","release_date":"2003-05-15"}`)
 			return
 		}
@@ -297,8 +296,8 @@ func TestDetailsRefuseAndNeverCacheAResponseForAnotherTitle(t *testing.T) {
 		t.Fatalf("Details(movie/603) = %+v, nil; the response was for TMDB id 604", d)
 	}
 	d, err := c.Details("movie/603")
-	if err != nil || d.Year != "1999" || calls != 2 {
-		t.Fatalf("second Details = %+v, %v after %d calls; want 1999 fetched afresh", d, err, calls)
+	if err != nil || d.Year != "1999" || calls.Load() != 2 {
+		t.Fatalf("second Details = %+v, %v after %d calls; want 1999 fetched afresh", d, err, calls.Load())
 	}
 }
 

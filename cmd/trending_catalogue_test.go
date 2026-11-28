@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -65,16 +66,20 @@ func TestTrendingUsesCatalogueWhenKeySet(t *testing.T) {
 }
 
 func TestRecentUsesCatalogueWhenKeySet(t *testing.T) {
-	paths := make(chan string, 1)
+	var mu sync.Mutex
+	var paths []string
 	catalogueFixture(t, "abc", func(rw http.ResponseWriter, r *http.Request) {
-		paths <- r.URL.Path
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
 		io.WriteString(rw, `{"results":[{"id":5,"name":"Show"}]}`)
 	})
 	p := &listProvider{}
 	got, err := listResults(p, media.TV, true)
-	path := <-paths
-	if err != nil || len(got) != 1 || got[0].ID != "tv/5" || path != "/tv/on_the_air" {
-		t.Fatalf("got %v, %v, path %s", got, err, path)
+	mu.Lock()
+	defer mu.Unlock()
+	if err != nil || len(got) != 1 || got[0].ID != "tv/5" || len(paths) != 1 || paths[0] != "/tv/on_the_air" {
+		t.Fatalf("got %v, %v, paths %v", got, err, paths)
 	}
 	if p.recent != 0 {
 		t.Error("provider consulted")
