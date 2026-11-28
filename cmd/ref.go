@@ -4,9 +4,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"regexp"
 
 	"lobster/internal/config"
 	"lobster/internal/media"
+	"lobster/internal/provider"
 )
 
 // playRef is everything needed to replay a selection the user confirmed.
@@ -46,6 +48,12 @@ import (
 // place: "auto" names no provider and instead licenses routing movies to YTS
 // and opening a magnet (cmd/typeroute.go, cmd/root.go).
 //
+// A ref without IDFromBase has no recorded issuer, and its Base may be the
+// configured base rather than the ID's producer (a fallback row can carry it).
+// legacyIssuer accepts it only when the ID's shape cannot be a fallback's
+// alone: a strict TMDB-shaped ID ("tv/<n>", "movie/<n>", matching Type) that
+// the primary, named by Base, mints itself and accepts as it is.
+//
 // Base mostly decides only where resolution *starts*. The one exception is a
 // ref with IDFromBase set: when its base's provider cannot list the show,
 // play asks that provider for the episode by ID (tryOwnerThenFallbackStream,
@@ -53,8 +61,8 @@ import (
 // whole chain (resolveAndPlay, cmd/search.go) and episodes does the same via
 // seasonSource (cmd/episodes.go) when the base's provider cannot enumerate the
 // ID. Refs minted by older versions carry the configured base instead, and are
-// decoded and applied exactly as before — the change is in what find writes,
-// not in how a ref is read.
+// decoded and applied exactly as before, apart from the TMDB-shaped case
+// legacyIssuer accepts.
 //
 // A live ref's identity story is different in kind, not degree. It is never
 // re-searched by title: play re-matches it against freshly loaded playlists
@@ -154,4 +162,31 @@ func (r playRef) searchResult() (media.SearchResult, error) {
 		sr.Provider = config.NormalizeBase(r.Base)
 	}
 	return sr, nil
+}
+
+// tmdbShapedID is the whole ID of a TMDB-shaped provider row: kind, slash,
+// digits, nothing else. A slug ("movie/free-x-75043"), a path or an
+// episode-qualified ID is some other provider's and does not match.
+var tmdbShapedID = regexp.MustCompile(`^(tv|movie)/[0-9]+$`)
+
+// legacyIssuer returns the base token to credit with the ID of a ref that
+// records no issuer (playRun calls it only when searchResult named none), or
+// "" when none can be credited. idOwner still requires that token to name
+// primary, so a Base that is not primary's own credits nobody.
+//
+// Base alone is not proof: older refs stamped the configured base, and a
+// fallback row could carry it. A legacy ref is credited only when primary is
+// a TMDBShapedIDMinter and the ID is strictly TMDB-shaped and
+// agrees with Type. Such an ID means the same title to primary wherever it
+// was first listed, so asking primary by it cannot play another title. Any
+// other legacy ref goes through title search.
+func (r playRef) legacyIssuer(primary provider.Provider) string {
+	if r.Base == "" || primary == nil || !provider.MintsTMDBShapedIDs(primary) {
+		return ""
+	}
+	m := tmdbShapedID.FindStringSubmatch(r.ID)
+	if m == nil || m[1] != r.Type {
+		return ""
+	}
+	return config.NormalizeBase(r.Base)
 }

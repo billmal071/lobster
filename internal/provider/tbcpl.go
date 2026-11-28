@@ -195,6 +195,10 @@ var tbcplDirectServers = []tbcplDirectServer{
 // tbcplDubServerPrefix marks a per-language Vidzee server, e.g. "v6:Hindi".
 const tbcplDubServerPrefix = "v6:"
 
+// MintsTMDBShapedIDs reports that Search rows carry "tv/<tmdb>" and
+// "movie/<tmdb>" IDs, which Watch accepts as they are.
+func (t *TBCPL) MintsTMDBShapedIDs() bool { return true }
+
 // Search uses TMDB multi-search (tmdbSearchMulti) for reliable title lookup.
 // The returned TMDB IDs are then used by 1Shows/Vidzee.
 func (t *TBCPL) Search(query string) ([]media.SearchResult, error) {

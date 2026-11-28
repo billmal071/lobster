@@ -41,3 +41,17 @@ type StreamProvider interface {
 	Provider
 	Watch(mediaID, episodeID, server, quality string) (*media.Stream, error)
 }
+
+// TMDBShapedIDMinter marks a provider whose own content IDs are exactly
+// "tv/<n>" or "movie/<n>" with n a TMDB number (TBCPL). A provider with that
+// shape is asked by such an ID without a title search, so a ref whose ID has
+// that shape is one it can answer for, whoever first listed the title.
+type TMDBShapedIDMinter interface {
+	MintsTMDBShapedIDs() bool
+}
+
+// MintsTMDBShapedIDs reports whether p's own IDs are TMDB-shaped.
+func MintsTMDBShapedIDs(p Provider) bool {
+	m, ok := p.(TMDBShapedIDMinter)
+	return ok && m.MintsTMDBShapedIDs()
+}
