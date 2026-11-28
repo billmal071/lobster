@@ -294,6 +294,9 @@ func playRun(cmd *cobra.Command, args []string) error {
 	if p == nil {
 		p = agentProvider()
 	}
+	if sel.Provider == "" {
+		sel.Provider = r.legacyIssuer(p)
+	}
 	if err := agentResolveAndPlay(p, sel, flagSeason, flagEpisode); err != nil {
 		// A season that does not exist is not a provider outage: it is the
 		// same answer validateSeasonEpisode gives above, reached later because

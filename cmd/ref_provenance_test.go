@@ -73,3 +73,13 @@ func TestSearchResultNamesAnIssuerOnlyWhenTheRefRecordsOne(t *testing.T) {
 		}
 	}
 }
+
+func TestOnlyTMDBShapedPrimariesCreditALegacyRefsBase(t *testing.T) {
+	legacy := playRef{ID: "tv/219", Title: "Kyle XY", Type: "tv", Base: "tbcpl"}
+	if got := legacy.legacyIssuer(provider.NewTBCPL("tbcpl")); got != "tbcpl" {
+		t.Errorf("TBCPL primary: legacyIssuer = %q, want tbcpl", got)
+	}
+	if got := legacy.legacyIssuer(provider.NewFlixHQWS("flixhq.ws")); got != "" {
+		t.Errorf("FlixHQWS primary: legacyIssuer = %q, want none", got)
+	}
+}

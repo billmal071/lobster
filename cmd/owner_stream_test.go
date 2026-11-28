@@ -108,3 +108,41 @@ func TestPlayDoesNotAskAPrimaryByALegacyRefsID(t *testing.T) {
 		t.Fatalf("primary Watch was asked for %q under a legacy ref's ID", primary.episodeAsked())
 	}
 }
+
+// tmdbOwner is a primary whose own IDs are TMDB-shaped, like TBCPL.
+type tmdbOwner struct{ unlistedOwner }
+
+func (tmdbOwner) MintsTMDBShapedIDs() bool { return true }
+
+func newTMDBOwner(t *testing.T) tmdbOwner { return tmdbOwner{newUnlistedOwner(t)} }
+
+func TestPlayAsksTheOwnerByALegacyRefsTMDBShapedID(t *testing.T) {
+	primary := newTMDBOwner(t)
+	err := playRefAgainst(t, primary, playRef{ID: "tv/219", Title: "Kyle XY", Year: "2006", Type: "tv", Base: "owner"})
+	if err != nil {
+		t.Fatalf("playRun: %v", err)
+	}
+	if got := primary.episodeAsked(); got != "219:2:15" {
+		t.Fatalf("primary Watch episode = %q, want 219:2:15", got)
+	}
+}
+
+func TestPlayDoesNotAskAnOwnerByALegacyIDOnlyAFallbackCouldHaveIssued(t *testing.T) {
+	for name, r := range map[string]playRef{
+		"slug id":         {ID: "tv/kyle-xy-219", Title: "Kyle XY", Type: "tv", Base: "owner"},
+		"movie id for tv": {ID: "movie/219", Title: "Kyle XY", Type: "tv", Base: "owner"},
+		"trailing path":   {ID: "tv/219/2/15", Title: "Kyle XY", Type: "tv", Base: "owner"},
+		"other base":      {ID: "tv/219", Title: "Kyle XY", Type: "tv", Base: "elsewhere"},
+		"no base":         {ID: "tv/219", Title: "Kyle XY", Type: "tv"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			primary := newTMDBOwner(t)
+			if err := playRefAgainst(t, primary, r); err == nil {
+				t.Fatal("playRun succeeded although only the primary could stream")
+			}
+			if primary.watchCalled {
+				t.Fatalf("primary Watch was asked for %q", primary.episodeAsked())
+			}
+		})
+	}
+}
