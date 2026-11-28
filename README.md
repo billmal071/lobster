@@ -489,8 +489,9 @@ lists; title search needs the environment variable (see below).
 - Playback is unchanged: picking a catalogue title searches the usual sources
   by title and year (`tbcpl`, `1shows.org` and `vidrock` take its TMDB ID
   as their own). The catalogue supplies lists and details, never streams.
-  A catalogue title TMDB gives no release year for is not played, since a
-  title alone cannot tell it from a same-titled remake. Resuming a catalogue title
+  A catalogue title TMDB gives no release year for is not played or
+  downloaded, since a title alone cannot tell it from a same-titled remake. A
+  queued download of a catalogue title asks TMDB for its year when it starts. Resuming a catalogue title
   from history, which stores no year, opens the usual picker when the source
   lists that title, so you confirm which work it is. If the source lists none,
   lobster asks TMDB for the title's release year and tries the usual fallback
@@ -504,10 +505,11 @@ lists; title search needs the environment variable (see below).
   "recent" list: the anime source returns none, with or without a key.
 - Responses are cached in memory for ten minutes.
 
-This product uses TMDB and the TMDB APIs but is not endorsed, certified, or
-otherwise approved by TMDB. TMDB's terms allow non-commercial use only and
-require you to use your own key; read them at
-https://www.themoviedb.org/api-terms-of-use before enabling this.
+This product uses the TMDB API but is not endorsed or certified by TMDB. The
+TUI shows this notice in its footer while a list from the catalogue is on
+screen. TMDB's terms allow non-commercial use only and require you to use your
+own key; read them at https://www.themoviedb.org/api-terms-of-use before
+enabling this.
 
 ### TMDB key for title search
 

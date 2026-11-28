@@ -218,3 +218,23 @@ func TestNoticeDoesNotReplaceTheShortcutFooter(t *testing.T) {
 		}
 	}
 }
+
+func browseView(rows []media.SearchResult) string {
+	m := AppModel{list: list.New(nil, list.NewDefaultDelegate(), 10, 10), activeTab: tabMovies, width: 160, height: 40, results: rows}
+	return m.View()
+}
+
+func TestCatalogueListingShowsTheTMDBAttribution(t *testing.T) {
+	view := browseView([]media.SearchResult{{ID: "movie/603", Title: "The Matrix", FromCatalogue: true}})
+	for _, want := range []string{catalog.Attribution, "[ENTER] Play"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view lacks %q", want)
+		}
+	}
+}
+
+func TestProviderListingShowsNoTMDBAttribution(t *testing.T) {
+	if view := browseView([]media.SearchResult{{ID: "movie/slug-1", Title: "From Provider"}}); strings.Contains(view, catalog.Attribution) {
+		t.Error("a provider's own listing carries the TMDB attribution")
+	}
+}

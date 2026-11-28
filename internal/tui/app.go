@@ -189,6 +189,15 @@ func finishSelection(r *media.SearchResult, p provider.Provider) (*media.SearchR
 	return r, unwrapProvider(p)
 }
 
+func showsCatalogueRows(rows []media.SearchResult) bool {
+	for _, r := range rows {
+		if r.FromCatalogue {
+			return true
+		}
+	}
+	return false
+}
+
 func unwrapProvider(p provider.Provider) provider.Provider {
 	if w, ok := p.(*catalog.Provider); ok {
 		return w.Unwrap()
@@ -664,6 +673,10 @@ func (m AppModel) View() string {
 		if m.notice != "" {
 			footerStyle = footerStyle.MarginTop(0)
 			footer = lipgloss.NewStyle().Foreground(lipgloss.Color("#F1FA8C")).Render(m.notice) + "\n"
+		}
+		if showsCatalogueRows(m.results) {
+			footerStyle = footerStyle.MarginTop(0)
+			footer += lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4")).Render(catalog.Attribution) + "\n"
 		}
 		footer += footerStyle.Render("[ENTER] Play" + dlHint + "[S] Search  " + tabRange + " Categories  [TAB] Next Tab  [Q] Quit")
 	}

@@ -13,6 +13,9 @@ import (
 // Hint is shown once when no key is configured.
 const Hint = "tip: set tmdb_api_key (or LOBSTER_TMDB_KEY) for richer trending and recent lists"
 
+// Attribution is the notice TMDB's terms require wherever its data is shown.
+const Attribution = "This product uses the TMDB API but is not endorsed or certified by TMDB."
+
 // Kind selects which catalogue lists a Provider serves.
 type Kind int
 
