@@ -185,3 +185,27 @@ func TestResolveWithProviderRefusedServerThenEmptyServerIsStillAnAcceptStage(t *
 		t.Fatalf("got %v stage=%q err=%v, want stage accept keeping the refusal reason", got, stage, err)
 	}
 }
+
+type acceptingSP struct{ *fakeSP }
+
+func (a *acceptingSP) Watch(string, string, string, string) (*media.Stream, error) {
+	return &media.Stream{URL: "https://cdn/a.mpd"}, nil
+}
+
+func (a *acceptingSP) WatchAccepting(_, _, _, _ string, accept func(*media.Stream) error) (*media.Stream, error) {
+	for _, u := range []string{"https://cdn/a.mpd", "https://cdn/b.m3u8"} {
+		s := &media.Stream{URL: u}
+		if accept == nil || accept(s) == nil {
+			return s, nil
+		}
+	}
+	return nil, errors.New("no server")
+}
+
+func TestResolveWithProviderPassesAcceptToAnAcceptingStreamProvider(t *testing.T) {
+	p := &acceptingSP{fakeSP: &fakeSP{searchResults: []media.SearchResult{{ID: "movie/1", Title: "Foo", Type: media.Movie}}}}
+	got, _, err := resolveWithProvider(p, Request{Title: "Foo", MediaType: media.Movie, Accept: refuseDASH}, func(string, ...any) {})
+	if err != nil || got == nil || got.URL != "https://cdn/b.m3u8" {
+		t.Fatalf("got %v / %v, want the provider's second server's HLS stream", got, err)
+	}
+}

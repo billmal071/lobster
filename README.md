@@ -24,7 +24,7 @@ Lobster is a security-hardened Go rewrite of [lobster.sh](https://github.com/jus
 - 🔍 Search movies and TV shows by name
 - 🔥 Browse trending and recently added content
 - 🎬 Stream in mpv, vlc, iina, or celluloid
-- 🔄 Continuous playback — auto-plays next episode with 10s countdown
+- 🔄 Continuous playback — auto-plays next episode with 10s countdown (detached series plays carry on by themselves with mpv)
 - 🧭 Episode navigation — next, previous, replay, episode list, cross-season
 - ⬇ Download with ffmpeg for offline viewing
 - 🌍 Subtitles with automatic language matching
@@ -280,6 +280,8 @@ lobster find "the matrix" --limit 5      # JSON candidates, each with a ref
 lobster find "the bear" --type tv        # filter to movie | tv (case-insensitive)
 lobster episodes --ref <REF> --season 2  # JSON season/episode listing
 lobster play --ref <REF> --detach        # start playback, return immediately
+lobster play --ref <REF> --season 1 --episode 1 --detach   # series with an episode list: keeps going to the next episode (mpv only; vlc, iina and celluloid stop after one)
+lobster play --ref <REF> --season 1 --episode 1 --detach --autoplay=false  # stop after this episode
 lobster channels                         # JSON categories + channel counts
 lobster channels --category news         # JSON channels in a category, each with a ref
 ```
@@ -365,8 +367,10 @@ carries — the source that actually produced that row, which is not necessarily
 the `--base` the search was run with, since `find` also searches a fallback
 chain — and `play` forwards any flags you pass explicitly (`--base`,
 `--quality`, `--player`, `--provider`, `--language`, `--audio-language`,
-`--no-subs`, `--debug`, `--continue`) to the detached child so overrides still
-apply in the background.
+`--no-subs`, `--debug`, `--continue`, `--autoplay`) to the detached child so overrides still
+apply in the background. A detached play of a series turns `--autoplay` on for the child unless you
+pass `--autoplay=false`, which plays just the one episode. A title that resolves as a single stream with no episode list plays one episode either way. Scripts and agents that relied on one episode per `play --detach` must
+now pass `--autoplay=false`.
 
 `--detach` is what makes the stdout-is-only-JSON guarantee hold: attached, the
 player inherits lobster's stdout and its progress output is interleaved with
@@ -464,6 +468,24 @@ iptv_org = true          # include the built-in iptv-org playlist
 oneball = true           # include 1ball.pk live sports (opens its match page in your browser)
 playlists = []           # extra M3U URLs or local file paths
 ```
+
+### TMDB key for title search
+
+`tbcpl`, `vidrock`, `eztv` and the TBCPL embed fallback find titles through
+TMDB. Without a key they use the keyless `www.themoviedb.org` search, which
+TMDB now answers with HTTP 403, so their title search fails. Get a free key
+from a themoviedb.org account and export it:
+
+```sh
+export LOBSTER_TMDB_KEY="..."   # v3 API key or v4 read access token
+```
+
+With it set, search goes to `api.themoviedb.org/3/search/multi`, and `eztv`
+reads IMDb ids from `/tv/{id}/external_ids`. A key TMDB refuses (HTTP 401 or
+403) fails the search with `TMDB API rejected the key in LOBSTER_TMDB_KEY`;
+lobster does not fall back to the keyless search, so a bad key is not hidden.
+The key is read from the environment only, sent only to `api.themoviedb.org`
+(redirects are not followed), and kept out of error messages.
 
 ---
 

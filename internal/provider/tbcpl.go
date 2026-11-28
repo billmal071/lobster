@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -175,27 +176,31 @@ type tbcplEpisode struct {
 }
 
 type tbcplDirectServer struct {
-	Name string
-	Slug string // the s= query value
+	Name        string
+	Slug        string // the s= query value
+	Origin      bool
+	Deobfuscate bool
 }
 
 // tbcplDirectServers are Vidzee's language-neutral ("Auto" audio) servers.
-// Vidzee's own default, "peak", is absent: its CDN needs an Origin header
-// nothing in lobster sends.
+// Peak's CDN (vercetti.org) 403s every request without an Origin and wraps
+// segments in a PNG. It is the last neutral server, so whatever DCloud or Tik
+// serve resolves as before.
 var tbcplDirectServers = []tbcplDirectServer{
 	{Name: "DCloud", Slug: "dcloud"},
 	{Name: "Tik", Slug: "tik"},
+	{Name: "Peak", Slug: "peak", Origin: true, Deobfuscate: true},
 }
 
 // tbcplDubServerPrefix marks a per-language Vidzee server, e.g. "v6:Hindi".
 const tbcplDubServerPrefix = "v6:"
 
-// Search uses TMDB's keyless multi-search endpoint for reliable title lookup.
+// Search uses TMDB multi-search (tmdbSearchMulti) for reliable title lookup.
 // The returned TMDB IDs are then used by 1Shows/Vidzee.
 func (t *TBCPL) Search(query string) ([]media.SearchResult, error) {
-	searchURL := tmdbMultiSearchURL(t.tmdbBaseURL, query)
-
-	body, err := t.fetch(searchURL, strings.TrimRight(t.tmdbBaseURL, "/")+"/", "application/json, text/html, */*")
+	body, err := tmdbSearchMulti(context.Background(), t.tmdbBaseURL, query, func(rawURL string) ([]byte, error) {
+		return t.fetch(rawURL, strings.TrimRight(t.tmdbBaseURL, "/")+"/", "application/json, text/html, */*")
+	})
 	if err != nil {
 		return nil, fmt.Errorf("tbcpl search: %w", err)
 	}
@@ -356,6 +361,13 @@ func (t *TBCPL) Recent(mediaType media.MediaType) ([]media.SearchResult, error) 
 // call, languages lookup and subtitles included, finishes within
 // tbcplWatchBudget.
 func (t *TBCPL) Watch(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+	return t.WatchAccepting(mediaID, episodeID, server, quality, nil)
+}
+
+// WatchAccepting is Watch that skips a server whose stream accept refuses. When
+// no server yields an accepted stream, the first refused one is returned so the
+// caller can tell a refusal from a failure.
+func (t *TBCPL) WatchAccepting(mediaID, episodeID, server, quality string, accept func(*media.Stream) error) (*media.Stream, error) {
 	path, err := tbcplStreamPath(mediaID, episodeID)
 	if err != nil {
 		return nil, err
@@ -372,17 +384,27 @@ func (t *TBCPL) Watch(mediaID, episodeID, server, quality string) (*media.Stream
 	}
 
 	var lastErr error
+	var refused *media.Stream
 	for _, srv := range candidates {
 		if ctx.Err() != nil {
 			break
 		}
 		stream, err := t.watchWithServer(ctx, path, srv, quality)
-		if err == nil {
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if accept == nil || accept(stream) == nil {
 			return stream, nil
 		}
-		lastErr = err
+		if refused == nil {
+			refused = stream
+		}
 	}
 
+	if refused != nil {
+		return refused, nil
+	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("all servers timed out")
 	}
@@ -459,6 +481,9 @@ func (t *TBCPL) fetchSeason(tmdbID string, season int) (*tbcplSeasonResponse, er
 	if err != nil {
 		return nil, err
 	}
+	if trimmed := bytes.TrimSpace(body); len(trimmed) > 0 && trimmed[0] == '<' {
+		return nil, fmt.Errorf("season %d of tv/%s: 1Shows answered with an HTML page, not season data", season, tmdbID)
+	}
 
 	var resp tbcplSeasonResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
@@ -530,7 +555,7 @@ func (t *TBCPL) serverCandidates(ctx context.Context, path string) []tbcplVidzee
 	// server Vidzee has ("v6:Tamil"), not one it does not ("v6:Ta").
 	addDub(lang.Canonical(pref))
 	for _, srv := range tbcplDirectServers {
-		srcs = append(srcs, tbcplVidzeeSource{Lang: "Auto", Link: srv.Slug, Name: srv.Name})
+		srcs = append(srcs, srv.source())
 	}
 	for _, lang := range t.fetchVidzeeLanguages(ctx, path) {
 		addDub(lang)
@@ -593,10 +618,14 @@ func (t *TBCPL) watchWithServer(ctx context.Context, path string, server tbcplVi
 	}
 
 	stream := &media.Stream{
-		URL:       resp.URL,
-		Quality:   quality,
-		Subtitles: t.fetchVidzeeSubtitles(ctx, path),
-		Referer:   t.vidzeeReferer(),
+		URL:         resp.URL,
+		Quality:     quality,
+		Subtitles:   t.fetchVidzeeSubtitles(ctx, path),
+		Referer:     t.vidzeeReferer(),
+		Deobfuscate: server.Deobfuscate,
+	}
+	if server.Origin {
+		stream.Origin = strings.TrimRight(t.vidzeeBaseURL, "/")
 	}
 	// The API's "headers" are what the CDN wants on playlist and segment
 	// requests. Referer and User-Agent are the two the players and hlsproxy
@@ -627,9 +656,15 @@ type tbcplVidzeeResponse struct {
 // query value and Lang the audio it serves ("Auto" for the neutral servers),
 // which is what preferAudioLang orders by.
 type tbcplVidzeeSource struct {
-	Lang string
-	Link string
-	Name string
+	Lang        string
+	Link        string
+	Name        string
+	Origin      bool
+	Deobfuscate bool
+}
+
+func (srv tbcplDirectServer) source() tbcplVidzeeSource {
+	return tbcplVidzeeSource{Lang: "Auto", Link: srv.Slug, Name: srv.Name, Origin: srv.Origin, Deobfuscate: srv.Deobfuscate}
 }
 
 type tbcplVidzeeSubtitle struct {
@@ -685,7 +720,7 @@ func (t *TBCPL) matchDirectServer(server string) (tbcplVidzeeSource, bool) {
 
 	for _, srv := range tbcplDirectServers {
 		if strings.EqualFold(server, srv.Name) || strings.EqualFold(server, srv.Slug) {
-			return tbcplVidzeeSource{Lang: "Auto", Link: srv.Slug, Name: srv.Name}, true
+			return srv.source(), true
 		}
 	}
 	if strings.HasPrefix(strings.ToLower(server), tbcplDubServerPrefix) {

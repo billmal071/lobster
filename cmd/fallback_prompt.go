@@ -74,12 +74,14 @@ func refFor(p provider.Provider, sel media.SearchResult) string {
 	if cfg != nil {
 		configured = config.NormalizeBase(cfg.Base)
 	}
+	base := refBaseFor(sel, searchProviderBase(p), configured)
 	ref, err := encodeRef(playRef{
-		ID:    sel.ID,
-		Title: sel.Title,
-		Year:  sel.Year,
-		Type:  sel.Type.String(),
-		Base:  refBaseFor(sel, searchProviderBase(p), configured),
+		ID:         sel.ID,
+		Title:      sel.Title,
+		Year:       sel.Year,
+		Type:       sel.Type.String(),
+		Base:       base,
+		IDFromBase: base != "",
 	})
 	if err != nil {
 		return "<ref from lobster find>"

@@ -372,7 +372,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 					}
 				}
 			}
-			fbStream, fbErr := tryFallbackStream(chainPrimary, selected, season, episode)
+			fbStream, fbErr := tryOwnerThenFallbackStream(chainPrimary, selected, season, episode)
 			if fbErr != nil {
 				// The resolver's failure is the cause, and `err` is not.
 				//
@@ -439,6 +439,10 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				)
 				if !ok && alt.partial {
 					debugf("season %d is absent from a partial season list; trying the fallback chain by number", season)
+					var askErr error
+					if season, episode, askErr = askSeasonEpisode(chainPrimary, selected, season, episode); askErr != nil {
+						return askErr
+					}
 					fbStream, fbErr := tryFallbackStream(chainPrimary, selected, season, episode)
 					if fbErr != nil {
 						return fbErr
@@ -449,7 +453,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 					return errSeasonNotFound{season: season, title: title}
 				}
 				debugf("season %d recovered from %T", altSel.Number, alt.provider)
-				p, providerID, seasons = alt.provider, alt.id, altSeasons
+				p, providerID, seasons, seasonsPartial = alt.provider, alt.id, altSeasons, alt.partial
 				// The season came out of this very list, so the lookup cannot
 				// miss; clamp anyway rather than index with -1.
 				if seasonIdx = seasonIndex(seasons, altSel.Number); seasonIdx < 0 {
@@ -528,11 +532,12 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		// that says it may be short is not evidence that an episode above it
 		// does not exist, so that case still falls through to the recovery
 		// below, which needs no list.
-		if sf := shortfallFor(err); sf.code != "" && len(episodes) > 0 &&
+		partialList := false
+		if provider.PartialEpisodeList(episodes, err) &&
 			(episode == 0 || episodeIndex(episodes, episode) >= 0) {
+			warnPartialSeason(p, selectedSeason, title, shortfallFor(err).reason)
+			partialList = true
 			err = nil
-			warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",
-				providerLabel(p), selectedSeason.Number, title, sf.reason)
 		}
 
 		if err != nil || len(episodes) == 0 {
@@ -568,6 +573,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				p = answer.hit.provider
 				providerID = answer.hit.id
 				seasons = answer.hit.seasons
+				seasonsPartial = answer.hit.partial
 				// The season came out of this very list, so the lookup
 				// cannot miss; clamp anyway rather than index with -1.
 				if seasonIdx = seasonIndex(seasons, answer.season.Number); seasonIdx < 0 {
@@ -575,6 +581,9 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				}
 				selectedSeason = answer.season
 				episodes = answer.episodes
+				if partialList = answer.shortfall.code != ""; partialList {
+					warnPartialSeason(p, selectedSeason, title, answer.shortfall.reason)
+				}
 				err = nil
 			} else if episode > 0 {
 				// A caller who already knows which episode it wants does not
@@ -588,7 +597,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				// have moved p to a chain member, and the chain excludes
 				// whoever it is handed. That member has this show; the
 				// configured primary is the one that could not answer.
-				fbStream, fbErr := tryFallbackStream(chainPrimary, selected, selectedSeason.Number, episode)
+				fbStream, fbErr := tryOwnerThenFallbackStream(chainPrimary, selected, selectedSeason.Number, episode)
 				if fbErr == nil {
 					return playStream(fbStream, title, selected, selectedSeason.Number, episode)
 				}
@@ -711,7 +720,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 		debugf("episode: %d (ID: %s)", selectedEpisode.Number, selectedEpisode.ID)
 
 		// Create a playlist session for continuous playback
-		sess := playlist.NewWithProviderID(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx)
+		sess := newPlaybackSession(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx, partialList, seasonsPartial)
 		cachedServerName = ""
 		return runPlaybackLoop(sess)
 	}
@@ -998,7 +1007,7 @@ func playStream(stream *media.Stream, title string, selected media.SearchResult,
 	// recorded, keeping whatever position history already holds. A tracked
 	// player that was never heard from says nothing about whether playback
 	// happened at all, so it writes nothing — even on a clean exit.
-	if cfg.History && (playErr == nil || result.Position > 0) &&
+	if cfg.History && (playErr == nil || !result.PositionUnknown) &&
 		(!result.PositionUnknown || result.PositionUntracked) {
 		entry := media.HistoryEntry{
 			ID:       selected.ID,
@@ -1294,4 +1303,20 @@ func initDownloadManager(c *config.Config) (*dlmanager.Manager, func(), error) {
 	}
 
 	return mgr, cleanup, nil
+}
+
+func warnPartialSeason(p provider.Provider, season media.Season, title, reason string) {
+	warnf("%s is not sure where season %d of %q ends, so the episode list may be short: %s",
+		providerLabel(p), season.Number, title, reason)
+}
+
+func newPlaybackSession(p provider.Provider, selected media.SearchResult, providerID string, chainPrimary provider.Provider,
+	seasons []media.Season, episodes []media.Episode, seasonIdx, episodeIdx int, episodesPartial, seasonsPartial bool) *playlist.Session {
+	sess := playlist.NewWithProviderID(p, selected, providerID, chainPrimary, seasons, episodes, seasonIdx, episodeIdx)
+	sess.EpisodesPartial = episodesPartial
+	sess.SeasonsPartial = seasonsPartial
+	sess.OnPartialSeason = func(season media.Season, err error) {
+		warnPartialSeason(sess.Provider, season, selected.Title, shortfallFor(err).reason)
+	}
+	return sess
 }

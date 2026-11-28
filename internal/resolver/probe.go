@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -100,6 +101,9 @@ type Request struct {
 	// this race (the next provider is tried) without being recorded in the
 	// health store, whatever else went wrong for it.
 	Accept func(*media.Stream) error
+	// Owner is the provider ID belongs to. It is asked for ID directly instead
+	// of searching by Title.
+	Owner provider.Provider
 }
 
 // resolveWithProvider tries to resolve a stream using the given provider and
@@ -108,7 +112,7 @@ type Request struct {
 // req.Accept), and any error. The log function receives debug
 // messages in the same format as fmt.Sprintf.
 func resolveWithProvider(p provider.Provider, req Request, log func(string, ...any)) (*media.Stream, string, error) {
-	results, err := p.Search(req.Title)
+	results, err := searchUnlessOwner(p, req)
 	if err != nil {
 		log("search failed on %s: %v", ProviderName(p), err)
 		return nil, "search", fmt.Errorf("search failed: %w", err)
@@ -135,7 +139,7 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 
 		var stream *media.Stream
 		if sp, ok := p.(provider.StreamProvider); ok {
-			stream, err = tryStreamProviderFallback(sp, match, req.MediaType, sequelSeason(req.Title, match.ID, req.Season), req.Episode, quality, log)
+			stream, err = tryStreamProviderFallback(sp, match, req.MediaType, sequelSeason(req.Title, match.ID, req.Season), req.Episode, quality, req.Accept, log)
 		} else {
 			stream, err = tryEmbedProviderFallback(p, match, req.MediaType, req.Season, req.Episode, quality, req.Accept, log)
 		}
@@ -162,6 +166,15 @@ func resolveWithProvider(p provider.Provider, req Request, log func(string, ...a
 		return nil, StageAccept, fmt.Errorf("stream refused: %w", refusal)
 	}
 	return nil, "resolve", fmt.Errorf("all %d candidates failed: %w", len(candidates), lastErr)
+}
+
+// searchUnlessOwner returns req's own work as the only result when p owns
+// req.ID, and p's search results for req.Title otherwise.
+func searchUnlessOwner(p provider.Provider, req Request) ([]media.SearchResult, error) {
+	if req.Owner != nil && req.ID != "" && reflect.TypeOf(p).Comparable() && p == req.Owner {
+		return []media.SearchResult{{ID: req.ID, Title: req.Title, Year: req.Year, Type: req.MediaType}}, nil
+	}
+	return p.Search(req.Title)
 }
 
 // admittedCandidates keeps the candidates that are the work req identifies. A
@@ -550,14 +563,26 @@ func titleSeasonNumber(title string, m []int) int {
 	return 0
 }
 
-// tryStreamProviderFallback resolves a stream via StreamProvider.Watch().
-func tryStreamProviderFallback(sp provider.StreamProvider, match *media.SearchResult, mediaType media.MediaType, season, episode int, quality string, log func(string, ...any)) (*media.Stream, error) {
+type acceptingStreamProvider interface {
+	provider.StreamProvider
+	WatchAccepting(mediaID, episodeID, server, quality string, accept func(*media.Stream) error) (*media.Stream, error)
+}
+
+// tryStreamProviderFallback resolves a stream via StreamProvider.Watch, or via
+// WatchAccepting when the provider has it and accept is set.
+func tryStreamProviderFallback(sp provider.StreamProvider, match *media.SearchResult, mediaType media.MediaType, season, episode int, quality string, accept func(*media.Stream) error, log func(string, ...any)) (*media.Stream, error) {
+	watch := sp.Watch
+	if ap, ok := sp.(acceptingStreamProvider); ok && accept != nil {
+		watch = func(mediaID, episodeID, server, quality string) (*media.Stream, error) {
+			return ap.WatchAccepting(mediaID, episodeID, server, quality, accept)
+		}
+	}
 	if mediaType == media.Movie {
-		return sp.Watch(match.ID, "", "Default", quality)
+		return watch(match.ID, "", "Default", quality)
 	}
 	episodeID := NumberedEpisodeID(match.ID, season, episode)
 	log("fallback episode ID: %s", episodeID)
-	return sp.Watch(match.ID, episodeID, "Default", quality)
+	return watch(match.ID, episodeID, "Default", quality)
 }
 
 // NumberedEpisodeID is the episode ID a StreamProvider's Watch is asked by

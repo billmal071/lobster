@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -240,6 +241,31 @@ func tryFallbackStream(primary provider.Provider, content media.SearchResult, se
 	return tryFallbackStreamFrom(streamChain(primary), content, season, episode)
 }
 
+// tryOwnerThenFallbackStream is tryFallbackStream for a primary that could not
+// list the show. When content's ID was issued by the primary and the primary
+// can Watch, it joins the chain and is asked by that ID, without a search.
+func tryOwnerThenFallbackStream(primary provider.Provider, content media.SearchResult, season, episode int) (*media.Stream, error) {
+	chain := streamChain(primary)
+	owner := idOwner(primary, content)
+	if owner != nil && !slices.Contains(chain, owner) {
+		chain = append([]provider.Provider{owner}, chain...)
+	}
+	return resolveChain(chain, fallbackRequest(content, season, episode, nil, owner))
+}
+
+// idOwner returns primary when it is a StreamProvider and content's ID came
+// from it, and nil otherwise.
+func idOwner(primary provider.Provider, content media.SearchResult) provider.Provider {
+	if _, ok := primary.(provider.StreamProvider); !ok {
+		return nil
+	}
+	token := searchProviderBase(primary)
+	if token == "" || content.Provider == "" || !baseSpellsToken(content.Provider, token) {
+		return nil
+	}
+	return primary
+}
+
 // streamChain is the fallback chain for resolving an episode's stream. A
 // primary that cannot enumerate seasons (Vidrock) rejoins first, since the
 // user named it. A primary without a Watch (FlixHQWS) is never asked for the stream by its
@@ -347,7 +373,11 @@ func tryFallbackStreamFrom(providers []provider.Provider, content media.SearchRe
 // moves on to the next provider. The streaming providers run first and the
 // torrent providers only after all of them fail.
 func tryFallbackStreamAccepting(providers []provider.Provider, content media.SearchResult, season, episode int, accept func(*media.Stream) error) (*media.Stream, error) {
-	req := resolver.Request{
+	return resolveChain(providers, fallbackRequest(content, season, episode, accept, nil))
+}
+
+func fallbackRequest(content media.SearchResult, season, episode int, accept func(*media.Stream) error, owner provider.Provider) resolver.Request {
+	return resolver.Request{
 		Accept:    accept,
 		ID:        content.ID,
 		Title:     fallbackTitle(content),
@@ -356,7 +386,12 @@ func tryFallbackStreamAccepting(providers []provider.Provider, content media.Sea
 		Season:    season,
 		Episode:   episode,
 		Quality:   cfgQuality(),
+		Owner:     owner,
 	}
+}
+
+// resolveChain races req across providers tier by tier (streamTiers).
+func resolveChain(providers []provider.Provider, req resolver.Request) (*media.Stream, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), fallbackBudget)
 	defer cancel()
 
@@ -406,7 +441,7 @@ func resolveTier(ctx context.Context, providers []provider.Provider, req resolve
 			err = fmt.Errorf("all providers failed: %s", report.Summary())
 		}
 		debugf("resolve failed: %s", report.Summary())
-		return nil, &resolveFailure{report: report, err: err}
+		return nil, &resolveFailure{report: report, err: err, season: req.Season, episode: req.Episode}
 	}
 	debugf("resolve ok via report: %s", report.Summary())
 	return stream, nil
@@ -427,8 +462,10 @@ func resolveTier(ctx context.Context, providers []provider.Provider, req resolve
 // download loop, makeStreamResolver — read exactly as they did before this
 // type existed. Only a caller that asks for the structure gets it.
 type resolveFailure struct {
-	report *resolver.Report
-	err    error
+	report  *resolver.Report
+	err     error
+	season  int
+	episode int
 }
 
 func (e *resolveFailure) Error() string { return e.err.Error() }
