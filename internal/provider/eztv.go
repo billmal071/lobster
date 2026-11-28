@@ -52,8 +52,8 @@ var ErrNotCarried = errors.New("not on EZTV")
 const eztvCacheTTL = 5 * time.Minute
 
 // EZTV resolves TV episodes to magnets from the EZTV public API, which is
-// keyed by IMDb id: Search goes through TMDB's keyless multi-search and reads
-// each hit's IMDb id off its TMDB page.
+// keyed by IMDb id: Search goes through TMDB multi-search (tmdbSearchMulti)
+// and looks up each hit's IMDb id (tmdbTVIMDBID).
 type EZTV struct {
 	client      *http.Client
 	tmdbBaseURL string
@@ -440,7 +440,7 @@ func (e *EZTV) tmdbGet(u string) ([]byte, error) {
 
 // tmdbTVSearch returns the TV entries of a TMDB multi-search, in TMDB's order.
 func (e *EZTV) tmdbTVSearch(query string) ([]tmdbSearchResult, error) {
-	body, err := e.tmdbGet(tmdbMultiSearchURL(e.tmdbBaseURL, query))
+	body, err := tmdbSearchMulti(context.Background(), e.tmdbBaseURL, query, e.tmdbGet)
 	if err != nil {
 		return nil, err
 	}
@@ -462,11 +462,9 @@ func (e *EZTV) tmdbTVSearch(query string) ([]tmdbSearchResult, error) {
 	return hits, nil
 }
 
-// tmdbIMDBLink matches the IMDb link on a TMDB show page; the keyless site has no external_ids endpoint.
-var tmdbIMDBLink = regexp.MustCompile(`imdb\.com/title/tt(\d+)`)
-
 // imdbFor resolves a TMDB TV id to IMDb digits ("" when none), memoised per
-// instance. A failed fetch is returned and not memoised, so the next search retries.
+// instance. A failed lookup returns its error and is not memoised, so the next
+// search retries it.
 func (e *EZTV) imdbFor(tmdbID int) (string, error) {
 	e.mu.Lock()
 	v, ok := e.imdb[tmdbID]
@@ -474,13 +472,9 @@ func (e *EZTV) imdbFor(tmdbID int) (string, error) {
 	if ok {
 		return v, nil
 	}
-	body, err := e.tmdbGet(fmt.Sprintf("%s/tv/%d", strings.TrimRight(e.tmdbBaseURL, "/"), tmdbID))
+	id, err := tmdbTVIMDBID(context.Background(), e.tmdbBaseURL, tmdbID, e.tmdbGet)
 	if err != nil {
 		return "", err
-	}
-	id := ""
-	if m := tmdbIMDBLink.FindSubmatch(body); m != nil {
-		id = string(m[1])
 	}
 	e.mu.Lock()
 	e.imdb[tmdbID] = id

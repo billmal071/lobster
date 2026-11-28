@@ -477,6 +477,24 @@ oneball = true           # include 1ball.pk live sports (opens its match page in
 playlists = []           # extra M3U URLs or local file paths
 ```
 
+### TMDB key for title search
+
+`tbcpl`, `vidrock`, `eztv` and the TBCPL embed fallback find titles through
+TMDB. Without a key they use the keyless `www.themoviedb.org` search, which
+TMDB now answers with HTTP 403, so their title search fails. Get a free key
+from a themoviedb.org account and export it:
+
+```sh
+export LOBSTER_TMDB_KEY="..."   # v3 API key or v4 read access token
+```
+
+With it set, search goes to `api.themoviedb.org/3/search/multi`, and `eztv`
+reads IMDb ids from `/tv/{id}/external_ids`. A key TMDB refuses (HTTP 401 or
+403) fails the search with `TMDB API rejected the key in LOBSTER_TMDB_KEY`;
+lobster does not fall back to the keyless search, so a bad key is not hidden.
+The key is read from the environment only, sent only to `api.themoviedb.org`
+(redirects are not followed), and kept out of error messages.
+
 ---
 
 ## Project Structure

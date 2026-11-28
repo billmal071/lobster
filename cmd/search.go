@@ -375,7 +375,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 					return seasonNotFound(res, season, title)
 				}
 			}
-			fbStream, fbErr := tryFallbackStream(chainPrimary, selected, season, episode)
+			fbStream, fbErr := tryOwnerThenFallbackStream(chainPrimary, selected, season, episode)
 			if fbErr != nil {
 				// The resolver's failure is the cause, and `err` is not.
 				//
@@ -611,7 +611,7 @@ func resolveAndPlay(p provider.Provider, selected media.SearchResult, season, ep
 				// have moved p to a chain member, and the chain excludes
 				// whoever it is handed. That member has this show; the
 				// configured primary is the one that could not answer.
-				fbStream, fbErr := tryFallbackStream(chainPrimary, selected, selectedSeason.Number, episode)
+				fbStream, fbErr := tryOwnerThenFallbackStream(chainPrimary, selected, selectedSeason.Number, episode)
 				if fbErr == nil {
 					return playStream(fbStream, title, selected, selectedSeason.Number, episode)
 				}
