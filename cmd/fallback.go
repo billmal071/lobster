@@ -238,7 +238,53 @@ func fallbackProviders(primary provider.Provider) []provider.Provider {
 // content carries the ID and year of the work the user actually selected so the
 // resolver can tell a franchise entry apart from its sequels.
 func tryFallbackStream(primary provider.Provider, content media.SearchResult, season, episode int) (*media.Stream, error) {
-	return tryFallbackStreamFrom(streamChain(primary), content, season, episode)
+	return leadWithCatalogueVerdict(primary, content, season, episode, func() (*media.Stream, error) {
+		return tryFallbackStreamFrom(streamChain(primary), content, season, episode)
+	})
+}
+
+func leadWithCatalogueVerdict(primary provider.Provider, content media.SearchResult, season, episode int, resolve func() (*media.Stream, error)) (*media.Stream, error) {
+	deadline := time.Now().Add(fallbackBudget)
+	stream, err := resolve()
+	if err != nil {
+		var failure *resolveFailure
+		if errors.As(err, &failure) {
+			failure.lead = primaryCatalogueVerdict(primary, content, season, episode, deadline)
+		}
+	}
+	return stream, err
+}
+
+type episodeCarrier interface {
+	CarriesEpisode(id string, season, episode int) error
+}
+
+// primaryCatalogueVerdict is the sentence that leads a failed resolve when the
+// primary's catalogue lacks the episode, and empty when it has it or the lookup
+// itself failed, since only a catalogue answer is a verdict. It gives up at
+// deadline, the end of the fallback budget, rather than hold the report back.
+func primaryCatalogueVerdict(primary provider.Provider, content media.SearchResult, season, episode int, deadline time.Time) string {
+	carrier, ok := primary.(episodeCarrier)
+	if !ok || season <= 0 || episode <= 0 {
+		return ""
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return ""
+	}
+	answer := make(chan error, 1)
+	go func() { answer <- carrier.CarriesEpisode(content.ID, season, episode) }()
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case err := <-answer:
+		if !errors.Is(err, provider.ErrNotCarried) {
+			return ""
+		}
+	case <-timer.C:
+		return ""
+	}
+	return fmt.Sprintf("%s has no standalone release of %s S%02dE%02d", strings.ToUpper(searchProviderBase(primary)), fallbackTitle(content), season, episode)
 }
 
 // tryOwnerThenFallbackStream is tryFallbackStream for a primary that could not
@@ -250,7 +296,9 @@ func tryOwnerThenFallbackStream(primary provider.Provider, content media.SearchR
 	if owner != nil && !slices.Contains(chain, owner) {
 		chain = append([]provider.Provider{owner}, chain...)
 	}
-	return resolveChain(chain, fallbackRequest(content, season, episode, nil, owner))
+	return leadWithCatalogueVerdict(primary, content, season, episode, func() (*media.Stream, error) {
+		return resolveChain(chain, fallbackRequest(content, season, episode, nil, owner))
+	})
 }
 
 // idOwner returns primary when it is a StreamProvider and content's ID came
@@ -464,11 +512,17 @@ func resolveTier(ctx context.Context, providers []provider.Provider, req resolve
 type resolveFailure struct {
 	report  *resolver.Report
 	err     error
+	lead    string
 	season  int
 	episode int
 }
 
-func (e *resolveFailure) Error() string { return e.err.Error() }
+func (e *resolveFailure) Error() string {
+	if e.lead == "" {
+		return e.err.Error()
+	}
+	return e.lead + "; " + e.err.Error()
+}
 func (e *resolveFailure) Unwrap() error { return e.err }
 
 // providerRows renders the report as JSON-ready rows, one per probe attempt, in

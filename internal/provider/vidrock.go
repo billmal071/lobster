@@ -130,11 +130,14 @@ func (v *Vidrock) GetDetails(id string) (*media.ContentDetail, error) {
 // The resolver reaches Vidrock through Watch with a built episode ID, and a
 // primary that cannot enumerate hands listing to the fallback chain.
 func (v *Vidrock) GetSeasons(id string) ([]media.Season, error) {
-	return nil, errors.New("vidrock: season listing unavailable; the API exposes no episode index")
+	return nil, fmt.Errorf("vidrock: season listing unavailable; the API exposes no index (%w)", ErrNoEpisodeIndex)
 }
 
+// GetEpisodes is unavailable for the same reason. Both wrap ErrNoEpisodeIndex,
+// so a season lookup that reaches Vidrock in the fallback chain reads its
+// answer as "lists nothing", not as a lookup that failed.
 func (v *Vidrock) GetEpisodes(id string, seasonID string) ([]media.Episode, error) {
-	return nil, errors.New("vidrock: episode listing unavailable; the API exposes no episode index")
+	return nil, fmt.Errorf("vidrock: %w; the API exposes no episode index", ErrNoEpisodeIndex)
 }
 
 func (v *Vidrock) GetServers(id string, episodeID string) ([]media.Server, error) {

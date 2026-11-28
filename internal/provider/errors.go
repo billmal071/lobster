@@ -96,6 +96,9 @@ var ErrIncompleteEpisodeList = errors.New("episode list may be incomplete")
 // reported, under its own code, with words that say the list is probably whole.
 var ErrUnconfirmedEpisodeList = errors.New("the end of the episode list was not confirmed")
 
+// ErrNoEpisodeIndex reports a source that never lists episodes, which is an answer about the source and not a lookup that failed.
+var ErrNoEpisodeIndex = errors.New("episode listing unavailable")
+
 // PartialEpisodeList reports whether a GetEpisodes result is a usable partial
 // list: a non-empty list returned alongside ErrIncompleteEpisodeList. EZTV's
 // can start after episode 1, when the page holding the earlier ones failed.

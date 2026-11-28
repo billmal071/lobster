@@ -57,6 +57,7 @@ type AppModel struct {
 	height int
 
 	currentItem   *media.SearchResult
+	owners        []provider.Provider
 	currentDetail *media.ContentDetail
 	currentPoster string
 	posterReady   bool // an inline poster image is loaded and ready to overlay
@@ -83,6 +84,7 @@ type AppModel struct {
 	liveCategory   string    // current category at level 1
 	liveMaster     []liveRow // unfiltered rows for the current level
 	liveReqGen     int       // bumped per Live TV fetch; stale responses are ignored
+	resultsGen     int       // bumped per search and tab switch; stale result lists are ignored
 
 	// Download dialog for TV show batch downloads
 	dlDialog downloadDialog
@@ -170,7 +172,7 @@ func StartApp(p provider.Provider, cfg *config.Config, liveSources []string, mgr
 
 func (m AppModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		fetchTabCmd(m.providerForActiveTab(), m.activeTab),
+		m.stampResults(fetchTabCmd(m.providerForActiveTab(), m.activeTab)),
 		textinput.Blink,
 		m.loader.Tick,
 		m.list.StartSpinner(),
@@ -244,7 +246,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.activeTab == tabAnime {
 					fallbacks = nil
 				}
-				return m, tea.Batch(searchCmd(m.providerForActiveTab(), m.searchInput.Value(), fallbacks...), m.list.StartSpinner())
+				m.resultsGen++
+				return m, tea.Batch(m.stampResults(searchCmd(m.providerForActiveTab(), m.searchInput.Value(), fallbacks...)), m.list.StartSpinner())
 			case tea.KeyEsc:
 				m.isSearching = false
 				m.searchInput.Blur()
@@ -329,7 +332,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.currentItem != nil {
 				m.selectedResult = m.currentItem
-				m.selectedProvider = m.providerForActiveTab()
+				m.selectedProvider = m.providerForCurrentItem()
 				return m, tea.Quit
 			}
 			return m, nil
@@ -345,7 +348,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.err = err
 						return m, nil
 					}
-					cmd := m.dlDialog.start(*m.currentItem, m.providerForActiveTab(), m.dlManager, outputDir)
+					cmd := m.dlDialog.start(*m.currentItem, m.providerForCurrentItem(), m.dlManager, outputDir)
 					m.drawnPosterKey = ""
 					return m, cmd
 				}
@@ -367,9 +370,21 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		m.list.StopSpinner()
 
+	case resultsErrMsg:
+		if msg.gen != m.resultsGen {
+			return m, nil
+		}
+		m.err = msg.err
+		m.list.StopSpinner()
+
 	case resultsFetchedMsg:
+		// Ignore a list the user has moved past: another tab or a newer search.
+		if msg.gen != m.resultsGen {
+			return m, nil
+		}
 		m.err = nil
-		m.results = msg
+		m.results = msg.results
+		m.owners = msg.owners
 		// Clear all selection-derived state so the previous title's metadata and
 		// poster don't show under the new result until the fresh fetches land.
 		m.currentDetail = nil
@@ -379,17 +394,17 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.posterImgW = 0
 		m.posterImgH = 0
 		m.drawnPosterKey = ""
-		items := make([]list.Item, len(msg))
-		for i, v := range msg {
+		items := make([]list.Item, len(m.results))
+		for i, v := range m.results {
 			items[i] = listItem{result: v}
 		}
 		m.list.SetItems(items)
 		m.list.StopSpinner()
-		if len(msg) > 0 {
-			m.currentItem = &msg[0]
-			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), msg[0].ID))
+		if len(m.results) > 0 {
+			m.currentItem = &m.results[0]
+			cmds = append(cmds, fetchDetailCmd(m.providerForCurrentItem(), m.results[0].ID))
 			pw, ph := poster.BoxDims(m.width, 0, 0)
-			cmds = append(cmds, fetchPosterForItemCmd(msg[0], pw, ph, m.posterLookup()))
+			cmds = append(cmds, fetchPosterForItemCmd(m.results[0], m.providerForCurrentItem(), pw, ph, m.posterLookup()))
 		} else {
 			m.currentItem = nil
 			m.currentDetail = nil
@@ -410,12 +425,12 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case detailFetchedMsg:
 		m.err = nil
-		if m.currentItem != nil && m.currentItem.ID == msg.id {
+		if m.currentItem != nil && m.currentItem.ID == msg.id && msg.owner == m.providerForCurrentItem() {
 			m.currentDetail = msg.detail
 		}
 
 	case posterFetchedMsg:
-		if m.currentItem != nil && m.currentItem.ID == msg.id {
+		if m.currentItem != nil && m.currentItem.ID == msg.id && msg.owner == m.providerForCurrentItem() {
 			if msg.inline {
 				m.posterB64 = msg.b64
 				m.posterImgW = msg.imgW
@@ -467,9 +482,9 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.posterReady = false
 			m.posterB64 = ""
 			m.err = nil
-			cmds = append(cmds, fetchDetailCmd(m.providerForActiveTab(), m.currentItem.ID))
+			cmds = append(cmds, fetchDetailCmd(m.providerForCurrentItem(), m.currentItem.ID))
 			pw, ph := poster.BoxDims(m.width, 0, 0)
-			cmds = append(cmds, fetchPosterForItemCmd(*m.currentItem, pw, ph, m.posterLookup()))
+			cmds = append(cmds, fetchPosterForItemCmd(*m.currentItem, m.providerForCurrentItem(), pw, ph, m.posterLookup()))
 		}
 		cmds = append(cmds, listCmd)
 	}
@@ -500,6 +515,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // index-aligned (selection reads m.results[m.list.Index()]).
 func (m *AppModel) setLiveRows(rows []liveRow) {
 	m.results = make([]media.SearchResult, len(rows))
+	m.owners = nil
 	items := make([]list.Item, len(rows))
 	for i, r := range rows {
 		m.results[i] = r.result
@@ -667,6 +683,15 @@ func (m AppModel) renderTabBar() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
 }
 
+func (m AppModel) providerForCurrentItem() provider.Provider {
+	for i := range m.results {
+		if m.currentItem == &m.results[i] && i < len(m.owners) && m.owners[i] != nil {
+			return m.owners[i]
+		}
+	}
+	return m.providerForActiveTab()
+}
+
 func (m AppModel) providerForActiveTab() provider.Provider {
 	switch m.activeTab {
 	case tabAnime:
@@ -717,6 +742,7 @@ func (m *AppModel) switchTab(next tab) tea.Cmd {
 	}
 
 	m.activeTab = next
+	m.resultsGen++
 	m.isSearching = false
 	m.searchInput.Blur()
 	m.currentItem = nil
@@ -738,7 +764,7 @@ func (m *AppModel) switchTab(next tab) tea.Cmd {
 		m.liveReqGen++
 		return tea.Batch(fetchCategoriesCmd(m.liveTVProvider, m.liveReqGen), m.list.StartSpinner(), tea.ClearScreen)
 	}
-	return tea.Batch(fetchTabCmd(m.providerForActiveTab(), next), m.list.StartSpinner(), tea.ClearScreen)
+	return tea.Batch(m.stampResults(fetchTabCmd(m.providerForActiveTab(), next)), m.list.StartSpinner(), tea.ClearScreen)
 }
 
 func (m AppModel) tabTitle(t tab) string {

@@ -157,7 +157,7 @@ func TestResolveAndPlayFallsBackWhenPrimaryCannotListEpisodes(t *testing.T) {
 
 // errProviderCannotList stands in for the error MovieBox and VidNest now
 // return from GetEpisodes.
-var errProviderCannotList = errors.New("episode listing unavailable")
+var errProviderCannotList = fmt.Errorf("stub: %w", provider.ErrNoEpisodeIndex)
 
 // twentyTwoEpisodes is a real-shaped season list: season 1 of Marvel's Agents
 // of S.H.I.E.L.D. has 22 episodes, the count the fabricating providers used to

@@ -51,7 +51,7 @@ import (
 // play asks that provider for the episode by ID (tryOwnerThenFallbackStream,
 // cmd/fallback.go). Otherwise play re-searches by title through the
 // whole chain (resolveAndPlay, cmd/search.go) and episodes does the same via
-// seasonSource (cmd/episodes.go) when the base's provider cannot enumerate the
+// resolveSeason (cmd/episodes.go) when the base's provider cannot enumerate the
 // ID. Refs minted by older versions carry the configured base instead, and are
 // decoded and applied exactly as before — the change is in what find writes,
 // not in how a ref is read.

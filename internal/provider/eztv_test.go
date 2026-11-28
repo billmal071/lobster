@@ -121,8 +121,8 @@ func TestEZTVSeasonsAndEpisodes(t *testing.T) {
 	}
 
 	eps, err := p.GetEpisodes("eztv/11280740", "2")
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("err = %v, want ErrIncompleteEpisodeList: the fixture holds only S02E10", err)
 	}
 	// Season packs (episode 0) are not episodes; six releases of E10 are one.
 	if len(eps) != 1 {
@@ -256,8 +256,8 @@ func TestEZTVWatchReturnsMagnetAndCaches(t *testing.T) {
 	if _, err := p.GetSeasons("eztv/11280740"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.GetEpisodes("eztv/11280740", "2"); err != nil {
-		t.Fatal(err)
+	if _, err := p.GetEpisodes("eztv/11280740", "2"); !errors.Is(err, ErrIncompleteEpisodeList) {
+		t.Fatalf("err = %v, want ErrIncompleteEpisodeList for a season holding only E10", err)
 	}
 	st, err := p.Watch("eztv/11280740", "2x10", "", "1080")
 	if err != nil {

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -28,37 +29,38 @@ func fetchTabCmd(p provider.Provider, active tab) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		return resultsFetchedMsg(results)
+		return resultsFetchedMsg{results: results}
 	}
 }
 
 // searchCmd searches for items matching the query using the primary provider
 // and optional fallback providers. When the primary returns few results (< 3),
-// fallbacks are searched in parallel and results are merged/deduplicated.
+// fallbacks are searched in parallel and results are merged/deduplicated, each
+// row keeping the provider whose ID it carries.
 func searchCmd(p provider.Provider, query string, fallbacks ...provider.Provider) tea.Cmd {
 	return func() tea.Msg {
 		results, err := p.Search(query)
-		if err != nil {
+		if err != nil && (len(fallbacks) == 0 || !errors.Is(err, provider.ErrNoResults)) {
 			return errMsg{err}
 		}
 
 		// If we got enough results or have no fallbacks, return immediately.
 		if len(results) >= 3 || len(fallbacks) == 0 {
-			return resultsFetchedMsg(results)
+			return resultsFetchedMsg{results: results}
 		}
 
 		// Search fallbacks in parallel with a 5s timeout.
-		// Provider provenance is not tracked when merging because all providers
-		// use TMDB IDs as their universal content identifier — any provider can
-		// resolve streams for results discovered by another.
-		merged := tuiMultiSearch(results, fallbacks, query)
-		return resultsFetchedMsg(merged)
+		merged, owners := tuiMultiSearch(p, results, fallbacks, query)
+		if len(merged) == 0 && err != nil {
+			return errMsg{err}
+		}
+		return resultsFetchedMsg{results: merged, owners: owners}
 	}
 }
 
 // tuiMultiSearch searches fallback providers in parallel and merges with
 // existing primary results, deduplicating by title (case-insensitive).
-func tuiMultiSearch(primary []media.SearchResult, fallbacks []provider.Provider, query string) []media.SearchResult {
+func tuiMultiSearch(primaryProvider provider.Provider, primary []media.SearchResult, fallbacks []provider.Provider, query string) ([]media.SearchResult, []provider.Provider) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -91,43 +93,48 @@ func tuiMultiSearch(primary []media.SearchResult, fallbacks []provider.Provider,
 	}
 	wg.Wait()
 
-	return tuiDeduplicateResults(primary, fbResults)
+	return tuiDeduplicateResults(primaryProvider, primary, fallbacks, fbResults)
 }
 
 // tuiDeduplicateResults merges primary and fallback results, deduplicating
-// by title (case-insensitive). Prefers the result with more metadata.
-func tuiDeduplicateResults(primary []media.SearchResult, fallbackGroups [][]media.SearchResult) []media.SearchResult {
+// by title (case-insensitive). Prefers the result with more metadata. The
+// second slice is index-aligned with the first and names the provider each
+// row came from.
+func tuiDeduplicateResults(primaryProvider provider.Provider, primary []media.SearchResult, fallbacks []provider.Provider, fallbackGroups [][]media.SearchResult) ([]media.SearchResult, []provider.Provider) {
 	type entry struct {
 		idx   int
 		score int
 	}
 	seen := make(map[string]entry)
 	var merged []media.SearchResult
+	var owners []provider.Provider
 
-	addResult := func(r media.SearchResult) {
+	addResult := func(r media.SearchResult, owner provider.Provider) {
 		key := strings.ToLower(strings.TrimSpace(r.Title))
 		score := tuiResultScore(r)
 		if e, exists := seen[key]; exists {
 			if score > e.score {
 				merged[e.idx] = r
+				owners[e.idx] = owner
 				seen[key] = entry{e.idx, score}
 			}
 			return
 		}
 		seen[key] = entry{len(merged), score}
 		merged = append(merged, r)
+		owners = append(owners, owner)
 	}
 
 	for _, r := range primary {
-		addResult(r)
+		addResult(r, primaryProvider)
 	}
-	for _, group := range fallbackGroups {
+	for i, group := range fallbackGroups {
 		for _, r := range group {
-			addResult(r)
+			addResult(r, fallbacks[i])
 		}
 	}
 
-	return merged
+	return merged, owners
 }
 
 // tuiResultScore returns a metadata completeness score for dedup preference.
@@ -174,7 +181,7 @@ func fetchDetailCmd(p provider.Provider, id string) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		return detailFetchedMsg{id: id, detail: detail}
+		return detailFetchedMsg{id: id, owner: p, detail: detail}
 	}
 }
 
@@ -209,21 +216,21 @@ func queueSeasonCmd(mgr *dlmanager.Manager, downloads []*store.Download) tea.Cmd
 // TMDB high-res poster when the caller's lookup policy allows) and renders it
 // for the detail pane. lookup is supplied per-tab so only the Movies/Series
 // (FlixHQ) views opt into TMDB enrichment; other tabs keep their own posters.
-func fetchPosterForItemCmd(item media.SearchResult, width, height int, lookup func(title, year string, isTV bool) string) tea.Cmd {
+func fetchPosterForItemCmd(item media.SearchResult, owner provider.Provider, width, height int, lookup func(title, year string, isTV bool) string) tea.Cmd {
 	return func() tea.Msg {
 		url := posterURLForItem(item, lookup)
 		if url == "" {
-			return posterFetchedMsg{id: item.ID, inline: poster.IsInlineImage()}
+			return posterFetchedMsg{id: item.ID, owner: owner, inline: poster.IsInlineImage()}
 		}
 		if poster.IsInlineImage() {
 			b64, w, h, err := poster.FetchInlineImage(url)
 			if err != nil {
-				return posterFetchedMsg{id: item.ID, inline: true} // empty -> placeholder box
+				return posterFetchedMsg{id: item.ID, owner: owner, inline: true} // empty -> placeholder box
 			}
-			return posterFetchedMsg{id: item.ID, inline: true, b64: b64, imgW: w, imgH: h}
+			return posterFetchedMsg{id: item.ID, owner: owner, inline: true, b64: b64, imgW: w, imgH: h}
 		}
 		rendered := poster.RenderTUI(url, width, height)
-		return posterFetchedMsg{id: item.ID, poster: rendered}
+		return posterFetchedMsg{id: item.ID, owner: owner, poster: rendered}
 	}
 }
 
@@ -288,5 +295,23 @@ func listenProgressCmd(mgr *dlmanager.Manager) tea.Cmd {
 			return nil // Channel closed, manager stopped.
 		}
 		return downloadProgressMsg(update)
+	}
+}
+
+// stampResults tags the result list (or error) cmd yields with the results
+// generation current when it was issued, so Update drops an answer the user
+// has moved past by switching tabs or starting another search.
+func (m AppModel) stampResults(cmd tea.Cmd) tea.Cmd {
+	gen := m.resultsGen
+	return func() tea.Msg {
+		switch msg := cmd().(type) {
+		case resultsFetchedMsg:
+			msg.gen = gen
+			return msg
+		case errMsg:
+			return resultsErrMsg{err: msg.err, gen: gen}
+		default:
+			return msg
+		}
 	}
 }

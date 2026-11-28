@@ -41,6 +41,7 @@ type downloadDialog struct {
 
 	seasons  []media.Season
 	episodes []media.Episode
+	partial  bool
 
 	seasonCursor  int
 	modeCursor    int
@@ -74,7 +75,7 @@ func (d *downloadDialog) start(item media.SearchResult, p provider.Provider, mgr
 	d.manager = mgr
 	d.outputDir = outputDir
 	d.seasons = nil
-	d.episodes = nil
+	d.episodes, d.partial = nil, false
 	d.seasonCursor = 0
 	d.modeCursor = 0
 	d.episodeCursor = 0
@@ -86,6 +87,9 @@ func (d *downloadDialog) start(item media.SearchResult, p provider.Provider, mgr
 		seasons, err := prov.GetSeasons(id)
 		if err != nil && !(errors.Is(err, provider.ErrIncompleteEpisodeList) && len(seasons) > 0) {
 			return dlSeasonsMsg{err: err}
+		}
+		if len(seasons) == 0 {
+			return dlSeasonsMsg{err: errors.New("no seasons found")}
 		}
 		return dlSeasonsMsg{seasons: seasons}
 	}
@@ -107,6 +111,7 @@ type dlSeasonsMsg struct {
 type dlEpisodesMsg struct {
 	episodes []media.Episode
 	err      error
+	partial  bool
 }
 
 // --- Update ---
@@ -137,6 +142,7 @@ func (d *downloadDialog) Update(msg tea.Msg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		d.episodes = msg.episodes
+		d.partial = msg.partial
 		d.step = dlStepPickMode
 		return true, nil
 
@@ -280,10 +286,12 @@ func (d *downloadDialog) handleRangeInput(msg tea.KeyMsg) (bool, tea.Cmd) {
 // tui package must not reach the chain directly, because building it needs the
 // configured primary and the health store.
 //
+// The bool reports a list that is short because the source lacks episodes.
+//
 // It exists because a provider can enumerate seasons and not episodes —
 // MovieBox and VidNest both do — which left this dialog showing an error where
 // another provider had the list.
-var EpisodeListFallback func(prov provider.Provider, item media.SearchResult, seasonNumber int) ([]media.Episode, error)
+var EpisodeListFallback func(prov provider.Provider, item media.SearchResult, seasonNumber int) ([]media.Episode, bool, error)
 
 func (d *downloadDialog) fetchEpisodes(seasonIdx int) tea.Cmd {
 	prov := d.provider
@@ -291,15 +299,28 @@ func (d *downloadDialog) fetchEpisodes(seasonIdx int) tea.Cmd {
 	season := d.seasons[seasonIdx]
 	return func() tea.Msg {
 		episodes, err := prov.GetEpisodes(item.ID, season.ID)
+		partial := false
+		if err != nil && provider.ListedWithCatalogueGap(len(episodes), err) {
+			err, partial = nil, true
+		}
+		var fallbackErr error
 		if (err != nil || len(episodes) == 0) && EpisodeListFallback != nil {
-			if eps, ferr := EpisodeListFallback(prov, item, season.Number); ferr == nil && len(eps) > 0 {
-				return dlEpisodesMsg{episodes: eps}
+			eps, fpartial, ferr := EpisodeListFallback(prov, item, season.Number)
+			if ferr == nil && len(eps) > 0 {
+				return dlEpisodesMsg{episodes: eps, partial: fpartial}
 			}
+			fallbackErr = ferr
 		}
 		if err != nil {
 			return dlEpisodesMsg{err: err}
 		}
-		return dlEpisodesMsg{episodes: episodes}
+		if len(episodes) == 0 && fallbackErr != nil {
+			return dlEpisodesMsg{err: fmt.Errorf("no episodes listed for season %d: %w", season.Number, fallbackErr)}
+		}
+		if len(episodes) == 0 {
+			return dlEpisodesMsg{err: fmt.Errorf("no episodes listed for season %d", season.Number)}
+		}
+		return dlEpisodesMsg{episodes: episodes, partial: partial}
 	}
 }
 
@@ -417,6 +438,22 @@ func (d *downloadDialog) View(width, height int) string {
 	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Bold(true)
 	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F8F8F2"))
 
+	footer := labelStyle.Render("[ESC] Cancel  [ENTER] Select  [j/k] Navigate")
+
+	boxWidth := width / 2
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+	if boxWidth > 60 {
+		boxWidth = 60
+	}
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#FF0055")).
+		Padding(1, 2).
+		Width(boxWidth)
+	frame := func(content string) string { return boxStyle.Render(content + "\n\n" + footer) }
+
 	var content string
 
 	switch d.step {
@@ -446,14 +483,20 @@ func (d *downloadDialog) View(width, height int) string {
 		if d.seasonCursor < len(d.seasons) {
 			lines = append(lines, labelStyle.Render(fmt.Sprintf("Season %d - %d episodes", d.seasons[d.seasonCursor].Number, len(d.episodes))))
 		}
-		lines = append(lines, "")
+		var modes []string
 		for i, label := range modeLabels {
 			if i == d.modeCursor {
-				lines = append(lines, selectedStyle.Render("> "+label))
+				modes = append(modes, selectedStyle.Render("> "+label))
 			} else {
-				lines = append(lines, normalStyle.Render("  "+label))
+				modes = append(modes, normalStyle.Render("  "+label))
 			}
 		}
+		if d.partial {
+			rows := height - lipgloss.Height(frame(strings.Join(append(append(lines, ""), modes...), "\n")))
+			lines = append(lines, labelStyle.Render(partialListLabel(d.episodes, boxWidth-boxStyle.GetHorizontalPadding(), rows)))
+		}
+		lines = append(lines, "")
+		lines = append(lines, modes...)
 		content = strings.Join(lines, "\n")
 
 	case dlStepPickEpisode:
@@ -493,8 +536,14 @@ func (d *downloadDialog) View(width, height int) string {
 
 	case dlStepRangeInput:
 		var lines []string
-		lines = append(lines, titleStyle.Render("Episode Range"))
-		if len(d.episodes) > 0 {
+		title := titleStyle.Render("Episode Range")
+		lines = append(lines, title)
+		switch {
+		case len(d.episodes) == 0:
+		case d.partial:
+			rows := height - lipgloss.Height(frame(title+"\n\n"+d.rangeInput.View()))
+			lines = append(lines, labelStyle.Render(partialListLabel(d.episodes, boxWidth-boxStyle.GetHorizontalPadding(), rows)))
+		default:
 			lines = append(lines, labelStyle.Render(fmt.Sprintf("Available: 1-%d", d.episodes[len(d.episodes)-1].Number)))
 		}
 		lines = append(lines, "")
@@ -507,23 +556,73 @@ func (d *downloadDialog) View(width, height int) string {
 		content = errStyle.Render(fmt.Sprintf("Error: %v\n\nPress any key to dismiss.", d.err))
 	}
 
-	footer := labelStyle.Render("[ESC] Cancel  [ENTER] Select  [j/k] Navigate")
-
-	boxWidth := width / 2
-	if boxWidth < 40 {
-		boxWidth = 40
-	}
-	if boxWidth > 60 {
-		boxWidth = 60
-	}
-
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#FF0055")).
-		Padding(1, 2).
-		Width(boxWidth).
-		Render(content + "\n\n" + footer)
-
 	// Center the dialog
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, frame(content))
+}
+
+const partialListPrefix = "Partial list, standalone releases:"
+
+// partialListLabel names the episodes of a list with gaps as ranges ("2-4, 7")
+// on lines of at most width, leaving out trailing ranges to stay within rows lines.
+func partialListLabel(episodes []media.Episode, width, rows int) string {
+	runs := episodeRuns(episodes)
+	lines := func(keep int) []string {
+		words := strings.Fields(partialListPrefix)
+		for i, r := range runs[:keep] {
+			word := strconv.Itoa(r[0])
+			if r[1] > r[0] {
+				word = fmt.Sprintf("%d-%d", r[0], r[1])
+			}
+			if i < keep-1 {
+				word += ","
+			}
+			words = append(words, word)
+		}
+		if keep < len(runs) {
+			hidden := 0
+			for _, r := range runs[keep:] {
+				hidden += r[1] - r[0] + 1
+			}
+			words = append(words, "and", strconv.Itoa(hidden), "more")
+		}
+		return wrapWords(words, width)
+	}
+	keep := len(runs)
+	if len(lines(keep)) > rows {
+		keep = sort.Search(len(runs)-1, func(i int) bool { return len(lines(i+1)) > rows })
+		keep = min(max(keep, 1), len(runs))
+	}
+	return strings.Join(lines(keep), "\n")
+}
+
+func wrapWords(words []string, width int) []string {
+	var lines []string
+	for _, w := range words {
+		if last := len(lines) - 1; last >= 0 && len(lines[last])+1+len(w) <= width {
+			lines[last] += " " + w
+			continue
+		}
+		lines = append(lines, w)
+	}
+	return lines
+}
+
+// episodeRuns groups the episode numbers into ascending [first, last] runs of consecutive numbers.
+func episodeRuns(episodes []media.Episode) [][2]int {
+	nums := make([]int, len(episodes))
+	for i, ep := range episodes {
+		nums[i] = ep.Number
+	}
+	sort.Ints(nums)
+	var runs [][2]int
+	for _, n := range nums {
+		switch last := len(runs) - 1; {
+		case last >= 0 && n <= runs[last][1]:
+		case last >= 0 && n == runs[last][1]+1:
+			runs[last][1] = n
+		default:
+			runs = append(runs, [2]int{n, n})
+		}
+	}
+	return runs
 }

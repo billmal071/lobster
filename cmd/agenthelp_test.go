@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"lobster/internal/media"
@@ -86,6 +87,7 @@ type stubProvider struct {
 
 	// lastSeasonID records what GetEpisodes was actually asked for.
 	lastSeasonID string
+	mu           sync.Mutex
 }
 
 func (s *stubProvider) Search(string) ([]media.SearchResult, error) {
@@ -98,7 +100,9 @@ func (s *stubProvider) GetSeasons(string) ([]media.Season, error) {
 	return s.seasons, s.seasonsErr
 }
 func (s *stubProvider) GetEpisodes(_, seasonID string) ([]media.Episode, error) {
+	s.mu.Lock()
 	s.lastSeasonID = seasonID
+	s.mu.Unlock()
 	if s.episodesErr != nil {
 		// Both, when the stub is set up that way: a provider that measured a
 		// prefix returns the prefix alongside provider.ErrIncompleteEpisodeList

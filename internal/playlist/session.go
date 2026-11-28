@@ -200,7 +200,8 @@ func (s *Session) Next() (media.Episode, error) {
 		return media.Episode{}, fmt.Errorf("season %d has no episodes", nextSeason.Number)
 	}
 
-	if err != nil && episodes[0].Number != 1 {
+	gapped := provider.ListedWithCatalogueGap(len(episodes), err)
+	if err != nil && !gapped && episodes[0].Number != 1 {
 		s.SeasonIdx--
 		return media.Episode{}, fmt.Errorf("season %d episode list starts at episode %d, not 1: %w", nextSeason.Number, episodes[0].Number, err)
 	}
@@ -211,7 +212,7 @@ func (s *Session) Next() (media.Episode, error) {
 
 	s.Episodes = episodes
 	s.EpisodeIdx = 0
-	s.EpisodesPartial = err != nil
+	s.EpisodesPartial = err != nil && !gapped
 	return s.Current(), nil
 }
 
@@ -244,13 +245,17 @@ func (s *Session) Previous() (media.Episode, error) {
 	s.SeasonIdx--
 	prevSeason := s.Seasons[s.SeasonIdx]
 	episodes, err := s.Provider.GetEpisodes(s.ProviderKey(), prevSeason.ID)
-	if err != nil {
+	if err != nil && !provider.ListedWithCatalogueGap(len(episodes), err) {
 		s.SeasonIdx++ // rollback
 		return media.Episode{}, fmt.Errorf("loading season %d episodes: %w", prevSeason.Number, err)
 	}
 	if len(episodes) == 0 {
 		s.SeasonIdx++
 		return media.Episode{}, fmt.Errorf("season %d has no episodes", prevSeason.Number)
+	}
+
+	if err != nil && s.OnPartialSeason != nil {
+		s.OnPartialSeason(prevSeason, err)
 	}
 
 	s.Episodes = episodes

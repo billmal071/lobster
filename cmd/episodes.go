@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -51,31 +52,6 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	applyRefBase(cmd, r)
 
 	primary := agentProvider()
-	src := seasonSource(primary, r)
-	if len(src.seasons) == 0 {
-		if src.err != nil {
-			// Name both halves of what happened. seasonSource only ever puts
-			// a non-nil err here on its `len(hits) == 0` return, so reaching
-			// this line means the primary failed AND the whole fallback chain
-			// was re-searched by title and nothing answered. "getting seasons:
-			// no seasons found" said neither: it reads as one provider's
-			// complaint about one call, which sends the reader to look at
-			// --base when eleven providers were asked.
-			//
-			// The bound is part of the answer, not decoration. The scan is
-			// capped at episodesFallbackTimeout (5s) while the play path's
-			// resolver gives each provider 30s, so a provider that answers
-			// `play` can legitimately miss this scan — and a reader comparing
-			// the two commands on one ref needs to know a deadline was in
-			// play before concluding the chain does not have the show.
-			return emitErr("providers_failed", exitProvidersFailed,
-				"no provider could list the seasons of %q: %s reported %v, and no fallback provider answered within %s",
-				r.Title, providerLabel(primary), src.err, episodesFallbackTimeout)
-		}
-		return emitErr("no_results", exitNoResults, "no seasons found for %q", r.Title)
-	}
-
-	p, seasons := src.provider, src.seasons
 	// --season shares flagSeason with play, whose default is 0 and which
 	// requires a positive number, so this command cannot tell "--season 0" from
 	// "no --season" and keeps reading both as "the first season". The
@@ -86,25 +62,35 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	if wantSeason <= 0 {
 		wantSeason = seasonUnspecified
 	}
-	sel, ok := pickSeason(seasons, wantSeason)
-	if !ok {
-		// One season list is not the show. VidNest's GetSeasons probes each
-		// season for streams and stops at the first one it cannot reach, so
-		// whoever answered here can genuinely have fewer seasons than the show
-		// does — and `--season 5` was no_results for a show another chain
-		// member lists in full. Episodes already ask every hit; seasons did
-		// not.
-		src, seasons, sel, ok = seasonAcrossHits(primary, seasonRequest(r), src, wantSeason)
-		p = src.provider
-	}
-	if !ok && src.partial {
+	look := lookupPrimarySeasons(primary, r.ID)
+	// VidNest's GetSeasons stops at the first season it cannot probe, so one
+	// list can be short of the show: resolveSeason asks the chain before refusing.
+	res := resolveSeason(primary, seasonRequest(r), look, wantSeason)
+	switch res.verdict {
+	case seasonNoList:
+		return emitErr("no_results", exitNoResults, "no seasons found for %q", r.Title)
+	case seasonLookupFailed:
+		return primaryFailedErr(primary, r.Title, look, "no fallback provider listed any")
+	case seasonUndetermined:
+		if !res.anyListed && look.kind == lookupFailed {
+			return primaryFailedErr(primary, r.Title, look, "a fallback provider's lookup failed")
+		}
+		if !res.anyListed {
+			return emitErr("providers_failed", exitProvidersFailed,
+				"%s listed no seasons of %q, and a fallback provider's lookup failed within %s, so the show may still exist",
+				providerLabel(primary), r.Title, episodesFallbackTimeout)
+		}
 		return emitErr("providers_failed", exitProvidersFailed,
-			"season %d was not in the season list %s could fetch for %q, and that list is incomplete, so it may still exist",
-			flagSeason, providerLabel(src.provider), r.Title)
-	}
-	if !ok {
+			"season %d was not in the season lists that could be fetched for %q, and a lookup failed or a list is incomplete, so it may still exist",
+			flagSeason, r.Title)
+	case seasonAbsent:
+		if res.gapSource != nil {
+			return emitErr("no_results", exitNoResults, "%s", seasonNotFound(res, flagSeason, r.Title).Error())
+		}
 		return emitErr("no_results", exitNoResults, "season %d not found for %q", flagSeason, r.Title)
 	}
+	src, sel := res.answer, res.season
+	p, seasons := src.provider, src.seasons
 
 	// Whoever answers below, this is who the request named — the configured
 	// primary, and not whatever the chain has already put in p. The chain can
@@ -113,9 +99,8 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	// substitution is itself the finding. See episodeSourceWarnings.
 	//
 	// It must be captured from primary rather than from p, because by this
-	// line p is no longer necessarily the primary: seasonSource replaces it
-	// with the first chain hit whenever the primary cannot enumerate seasons,
-	// and seasonAcrossHits replaces it again when the primary's season list
+	// line p is no longer necessarily the primary: resolveSeason hands back a
+	// chain hit whenever the primary cannot enumerate seasons or its list
 	// lacks the requested season. Reading p here made the comparison below
 	// "did the chain member that answered differ from the chain member that
 	// answered", which is never true — so the warning stayed silent in exactly
@@ -123,9 +108,12 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	// base test below asked whether the *chain member's* token named the
 	// primary.
 	asked := primary
-	seasonsPartial := src.partial
+	seasonGap := src.gap
 
 	eps, err := listSeasonEpisodes(p, src, sel)
+	epsKind, _ := classifyList(len(eps), err)
+	askedLacks := src.primaryLacks || (src.fromPrimary && epsKind == lookupAbsent)
+	askedSeason := sel.Number
 	// An enumeration that stopped short of the end is an answer, not a
 	// failure: the list is episodes the provider actually confirmed, and
 	// dropping it to ask the chain would trade a measured prefix for a guess
@@ -137,6 +125,7 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	if sf := shortfallFor(err); len(eps) > 0 && sf.code != "" {
 		shortfall, err = sf, nil
 	}
+	fallbackFailed := false
 	if err != nil || len(eps) == 0 {
 		// Enumerating seasons and enumerating episodes are different
 		// questions, and a provider can answer the first and not the second:
@@ -158,16 +147,34 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		// chain, so that case costs no extra scan. Only a primary-sourced
 		// season list has to run the scan here.
 		debugf("episodes: %T enumerated seasons but not episodes (err=%v, episodes=%d); asking the fallback chain", p, err, len(eps))
-		alts := src.alts
+		alts, scanFailed := src.alts, src.scanFailed
 		if src.fromPrimary {
-			alts = fallbackSeasonHits(primary, seasonRequest(r))
+			alts, scanFailed = fallbackSeasonScan(primary, seasonRequest(r), []int{wantSeason})
 		}
-		if a := firstEpisodeList(alts, wantSeason); a != nil {
+		lists, listFailed := episodeLists(alts, wantSeason)
+		fallbackFailed = len(lists) == 0 && (scanFailed || listFailed)
+		if len(lists) > 0 {
+			a := lists[0]
 			debugf("episodes: %T listed %d episodes of season %d", a.hit.provider, len(a.episodes), a.season.Number)
 			p, seasons, sel, eps, err = a.hit.provider, a.hit.seasons, a.season, a.episodes, nil
 			shortfall = a.shortfall
-			seasonsPartial = a.hit.partial
+			seasonGap = a.hit.gap
+			if sel.Number != askedSeason {
+				askedLacks = src.primaryLacks
+			}
 		}
+	}
+	if !src.fromPrimary && epsKind == lookupAbsent && len(eps) == 0 {
+		err = nil
+	}
+	if err != nil && len(eps) == 0 && errors.Is(err, provider.ErrNoEpisodeIndex) {
+		listed := "no fallback provider listed them"
+		if fallbackFailed {
+			listed += " (a fallback provider's lookup failed)"
+		}
+		return emitErr("providers_failed", exitProvidersFailed,
+			"%s cannot list the episodes of season %d of %q (it has no episode index), and %s, so the season may still have episodes",
+			providerLabel(p), sel.Number, r.Title, listed)
 	}
 	if err != nil {
 		return emitErr("providers_failed", exitProvidersFailed, "getting episodes: %v", err)
@@ -187,6 +194,11 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 	// no_results rather than providers_failed, because nothing failed in a way
 	// anyone reported: the chain was asked and came back empty-handed, which
 	// is what no_results already means one line up at the season gate.
+	if len(eps) == 0 && fallbackFailed {
+		return emitErr("providers_failed", exitProvidersFailed,
+			"%s listed no episodes for season %d of %q, and a fallback provider's lookup failed, so the season may still have episodes",
+			providerLabel(p), sel.Number, r.Title)
+	}
 	if len(eps) == 0 {
 		return emitErr("no_results", exitNoResults,
 			"no episodes found for season %d of %q", sel.Number, r.Title)
@@ -208,14 +220,16 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 		"episodes": out,
 		"provider": providerLabel(p),
 	}
-	w := episodeSourceWarnings(asked, p, shortfall, len(out))
-	if seasonsPartial {
+	w := episodeSourceWarnings(asked, p, shortfall, len(out), askedLacks)
+	if seasonGap != gapNone {
+		message := fmt.Sprintf("%s flagged its season list as incomplete, so the seasons above may be missing some", providerLabel(p))
+		if seasonGap == gapCatalogue {
+			message = fmt.Sprintf("%s does not carry every season of %q, so the seasons above are the ones it has", providerLabel(p), r.Title)
+		}
 		w = append(w, map[string]any{
 			"code":     "season_list_incomplete",
 			"provider": providerLabel(p),
-			"message": fmt.Sprintf(
-				"%s flagged its season list as incomplete, so the seasons above may be missing some",
-				providerLabel(p)),
+			"message":  message,
 		})
 	}
 	if len(w) > 0 {
@@ -291,12 +305,17 @@ func episodesRun(cmd *cobra.Command, args []string) error {
 // Silent when no base was named, or "auto" was, or the base does not select
 // the primary at all: broadening is then the documented behaviour rather than
 // a departure from a request, which is the rule find.go already follows.
-func episodeSourceWarnings(asked, answered provider.Provider, shortfall episodeShortfall, listed int) []map[string]any {
+func episodeSourceWarnings(asked, answered provider.Provider, shortfall episodeShortfall, listed int, askedLacks bool) []map[string]any {
 	var out []map[string]any
 	if shortfall.code != "" {
 		message := fmt.Sprintf(
 			"%s could not establish where this season ends, so the %d episodes above are what it confirmed and there may be more: %s",
 			providerLabel(answered), listed, shortfall.reason)
+		if shortfall.gap {
+			message = fmt.Sprintf(
+				"%s has no standalone release for some episodes of this season, so the %d episodes above are the ones it has standalone releases for and others may exist elsewhere: %s",
+				providerLabel(answered), listed, shortfall.reason)
+		}
 		if shortfall.code == "episode_list_unconfirmed" {
 			message = fmt.Sprintf(
 				"%s found nothing beyond the %d episodes above, but could not re-check that on a request of its own, so the count is very likely the whole season rather than certainly: %s",
@@ -319,14 +338,20 @@ func episodeSourceWarnings(asked, answered provider.Provider, shortfall episodeS
 	askedBase := searchProviderBase(asked)
 	if asked != answered && configured != "" && configured != config.BaseAuto &&
 		baseNamedThePrimary(configured, askedBase) {
+		message := fmt.Sprintf(
+			"base %q could not list this season, so the %d episodes above came from %s instead; a fallback provider can list episodes it cannot stream, so check that a ref from this listing plays before relying on the count",
+			configured, listed, providerLabel(answered))
+		if askedBase == "eztv" && askedLacks {
+			message = fmt.Sprintf(
+				"base %q could not list this season, so the %d episodes above came from %s instead; EZTV could not list it, so these episodes will not play via EZTV and play only if another source serves them",
+				configured, listed, providerLabel(answered))
+		}
 		out = append(out, map[string]any{
 			"code":            "episode_list_from_fallback",
 			"base":            configured,
 			"provider":        providerLabel(answered),
 			"episodes_listed": listed,
-			"message": fmt.Sprintf(
-				"base %q could not list this season, so the %d episodes above came from %s instead; a fallback provider can list episodes it cannot stream, so check that a ref from this listing plays before relying on the count",
-				configured, listed, providerLabel(answered)),
+			"message":         message,
 		})
 	}
 	return out
@@ -341,6 +366,11 @@ func episodeSourceWarnings(asked, answered provider.Provider, shortfall episodeS
 type episodeShortfall struct {
 	code   string
 	reason string
+	gap    bool
+}
+
+func (s episodeShortfall) mayBeTruncated() bool {
+	return s.code != "" && !s.gap
 }
 
 // shortfallFor reads a GetEpisodes error and says which warning code it is, or
@@ -369,7 +399,7 @@ func shortfallFor(err error) episodeShortfall {
 	if errors.Is(err, provider.ErrUnconfirmedEpisodeList) {
 		return episodeShortfall{code: "episode_list_unconfirmed", reason: err.Error()}
 	}
-	return episodeShortfall{code: "episode_list_incomplete", reason: err.Error()}
+	return episodeShortfall{code: "episode_list_incomplete", reason: err.Error(), gap: errors.Is(err, provider.ErrNotCarried)}
 }
 
 // listSeasonEpisodes makes the first episode-listing call, under a deadline
@@ -383,7 +413,7 @@ func shortfallFor(err error) episodeShortfall {
 // exactly once, and no fan-out is waiting on it.
 //
 // What the command as a whole promises is a bound per chain phase, not one
-// across them. It can serialise three — seasonAcrossHits' scan, this call, and
+// across them. It can serialise three — resolveSeason's scan, this call, and
 // firstEpisodeList's every-hit scan — each at episodesFallbackTimeout, so the
 // worst case is around three times that, plus the primary's own unbounded
 // GetSeasons and GetEpisodes.
@@ -403,6 +433,12 @@ func listSeasonEpisodes(p provider.Provider, src seasonAnswer, sel media.Season)
 	ctx, cancel := context.WithTimeout(context.Background(), episodesFallbackTimeout)
 	defer cancel()
 	return episodesWithContext(ctx, p, src.id, sel.ID)
+}
+
+func primaryFailedErr(primary provider.Provider, title string, look seasonLookup, fallbacks string) error {
+	return emitErr("providers_failed", exitProvidersFailed,
+		"no provider could list the seasons of %q: %s reported %v, and %s",
+		title, providerLabel(primary), look.err, fallbacks)
 }
 
 // providerLabel names a provider for the JSON envelope. provider.Provider has
@@ -445,10 +481,9 @@ var agentFallbackProviders = fallbackProviders
 // A var, not a const, so tests can shrink it and still be deterministic.
 var episodesFallbackTimeout = multiSearchTimeout
 
-// seasonSource returns the provider that can actually enumerate this ref's
-// seasons, the ID to ask it about, that season list, whether the answer came
-// from the primary (so a caller knows the fallback scan has not run yet), and
-// the primary's error if it had one.
+// resolveSeason weighs the configured primary's season answer (look) against
+// the fallback chain's for want, scanning the chain only when the primary's own
+// list does not hold the season. combineSeasons decides the verdict.
 //
 // The primary is asked first and almost always answers. It fails for one
 // specific, non-rare reason: a ref's ID need not belong to the primary at all.
@@ -467,7 +502,7 @@ var episodesFallbackTimeout = multiSearchTimeout
 // played without complaint. The two commands must agree on what one ref means.
 //
 // They still do not agree completely, and this is the remaining gap: the
-// admission gate below is resolver.Matches, while play's tryFallbackStream
+// admission gate (resolver.Matches, in probeSeasons) is applied by the season scan, while play's tryFallbackStream
 // goes through resolver.Resolve, which has no such gate. So a ref whose title
 // the fallback spells differently — "Marvel's Agents of S.H.I.E.L.D." against
 // "Agents of S.H.I.E.L.D." — still plays and still lists nothing. Relaxing
@@ -492,86 +527,41 @@ var episodesFallbackTimeout = multiSearchTimeout
 // timeout, is minutes of silence on a degraded chain. Provider order still
 // decides the winner, so the answer does not depend on which provider was
 // quickest.
-func seasonSource(primary provider.Provider, r playRef) seasonAnswer {
-	seasons, err := primary.GetSeasons(r.ID)
-	if err == nil && len(seasons) > 0 {
-		return seasonAnswer{provider: primary, id: r.ID, seasons: seasons, fromPrimary: true}
-	}
-	if len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList) {
-		return seasonAnswer{provider: primary, id: r.ID, seasons: seasons, fromPrimary: true, partial: true}
-	}
-	debugf("episodes: primary could not enumerate %q (err=%v, seasons=%d); re-searching the fallback chain by title", r.ID, err, len(seasons))
-
-	if hits := fallbackSeasonHits(primary, seasonRequest(r)); len(hits) > 0 {
-		return seasonAnswer{
-			provider: hits[0].provider,
-			id:       hits[0].id,
-			seasons:  hits[0].seasons,
-			partial:  hits[0].partial,
-			alts:     hits[1:],
+func resolveSeason(primary provider.Provider, req resolver.Request, look seasonLookup, want int) seasonResolution {
+	if look.kind == lookupListed {
+		if _, ok := pickSeason(look.seasons, want); ok {
+			return combineSeasons(look, nil, false, want)
 		}
 	}
-	return seasonAnswer{provider: primary, id: r.ID, fromPrimary: true, err: err}
+	debugf("episodes: primary lookup of %q gave kind=%d, season %d not in it; re-searching the fallback chain by title", look.id, look.kind, want)
+	hits, failed := fallbackSeasonScan(primary, req, []int{want})
+	return combineSeasons(look, hits, failed, want)
 }
 
-// seasonAcrossHits looks for wantSeason in the chain hits src did not pick,
-// returning the hit that has it as the new answer. It reports ok false when
-// none does, leaving the caller's own answer untouched.
-//
-// The scan only has to run when the season list came from the primary; a
-// chain-sourced answer already carries its alternatives.
-//
-// It takes a resolver.Request rather than a playRef because both agent
-// commands make this move and only one of them has a ref: play reaches it from
-// a media.SearchResult (contentRequest). They have to make it identically —
-// `episodes` advertising a season `play` then refuses is the agent workflow
-// breaking in the middle, and seasonSource's own rule is that the two commands
-// agree on what one ref means.
-func seasonAcrossHits(primary provider.Provider, req resolver.Request, src seasonAnswer, wantSeason int) (seasonAnswer, []media.Season, media.Season, bool) {
-	alts := src.alts
-	if src.fromPrimary {
-		alts = fallbackSeasonHits(primary, req)
-	}
-	for i, h := range alts {
-		sel, ok := pickSeason(h.seasons, wantSeason)
-		if !ok {
-			continue
-		}
-		debugf("episodes: %T has season %d, which %T does not", h.provider, sel.Number, src.provider)
-		// The hits after this one stay available, so a provider that has the
-		// season but cannot list its episodes still falls through to the next.
-		return seasonAnswer{
-			provider: h.provider,
-			id:       h.id,
-			seasons:  h.seasons,
-			partial:  h.partial,
-			alts:     alts[i+1:],
-		}, h.seasons, sel, true
-	}
-	for _, h := range alts {
-		src.partial = src.partial || h.partial
-	}
-	return src, src.seasons, media.Season{}, false
+// lookupPrimarySeasons asks the configured primary for id's seasons.
+func lookupPrimarySeasons(primary provider.Provider, id string) seasonLookup {
+	seasons, err := primary.GetSeasons(id)
+	look := classifySeasonLookup(seasons, err)
+	look.provider, look.id = primary, id
+	return look
 }
 
-// seasonAnswer is who ended up answering seasonSource, plus the chain hits it
-// did not pick. alts exists so the caller can move on to the next provider
-// when the chosen one turns out to enumerate seasons but not episodes, without
-// paying for the chain scan a second time.
+// seasonAnswer is the one result of a season lookup: the list in use and who
+// gave it (the embedded seasonLookup, with its gap), what the configured
+// primary itself said, and the chain hits that were not picked. alts exists so
+// the caller can move on to the next provider when the chosen one turns out to
+// enumerate seasons but not episodes, without paying for the chain scan twice.
 type seasonAnswer struct {
-	provider provider.Provider
-	id       string
-	seasons  []media.Season
-	alts     []*seasonHit
+	seasonLookup
+	alts []*seasonHit
 	// fromPrimary reports that the chain scan has not run, so alts is empty
 	// because nothing looked rather than because nothing answered.
 	fromPrimary bool
-	// partial reports that a season list consulted for this answer, the
-	// provider's own or a chain hit's, was flagged incomplete
-	// (provider.ErrIncompleteEpisodeList), so a season absent from all of them
-	// may still exist.
-	partial bool
-	err     error
+	// scanFailed reports that a fallback lookup behind alts errored rather
+	// than answering.
+	scanFailed bool
+	// primaryLacks reports that the primary answered without this season.
+	primaryLacks bool
 }
 
 // seasonRequest is the ref as the resolver sees it: the ID/Title/Year all
@@ -594,8 +584,10 @@ func seasonRequest(r playRef) resolver.Request {
 // caller — the interactive episode menu, the TUI download dialog, a
 // multi-season batch — with nothing to show, and the chain usually has the
 // list. The answer is a provider's own list, so a number offered from it is a
-// number that provider will honour.
-func fallbackEpisodeList(primary provider.Provider, content media.SearchResult, seasonNumber int) *episodeAnswer {
+// number that provider will honour. pref says which list: the first in chain
+// order, the first that is complete or short only by catalogue gaps with any
+// other as a last resort, or such a list and nothing else.
+func fallbackEpisodeList(primary provider.Provider, content media.SearchResult, seasonNumber int, pref listPreference) *episodeAnswer {
 	if seasonNumber < 0 {
 		// Every caller here has a season in hand. A negative number is not a
 		// request for "whatever is first" — it is a caller that lost track of
@@ -604,7 +596,35 @@ func fallbackEpisodeList(primary provider.Provider, content media.SearchResult, 
 		debugf("fallback episode list: refusing a negative season number %d", seasonNumber)
 		return nil
 	}
-	return firstEpisodeList(fallbackSeasonHits(primary, contentRequest(content)), seasonNumber)
+	hits := fallbackSeasonHits(primary, contentRequest(content), []int{seasonNumber})
+	if pref == firstListed {
+		return firstEpisodeList(hits, seasonNumber)
+	}
+	lists, _ := episodeLists(hits, seasonNumber)
+	if a := firstConfirmed(lists); a != nil || pref == confirmedOnly {
+		return a
+	}
+	if len(lists) > 0 {
+		return lists[0]
+	}
+	return nil
+}
+
+type listPreference int
+
+const (
+	firstListed listPreference = iota
+	confirmedElseFirst
+	confirmedOnly
+)
+
+func firstConfirmed(lists []*episodeAnswer) *episodeAnswer {
+	for _, a := range lists {
+		if !a.shortfall.mayBeTruncated() {
+			return a
+		}
+	}
+	return nil
 }
 
 // contentRequest is a selected search result as the resolver sees it: the
@@ -649,25 +669,35 @@ func pickSeason(seasons []media.Season, want int) (media.Season, bool) {
 }
 
 // fallbackSeasonHits runs the parallel, deadline-bounded scan of the fallback
-// chain described on seasonSource, returning every provider that has this work
+// chain described on resolveSeason, returning every provider that has this work
 // and can enumerate its seasons, in chain order.
 //
 // Every hit, not just the first: enumerating seasons does not imply
 // enumerating episodes, so the caller needs somewhere to go when its first
 // choice cannot answer the second question.
-func fallbackSeasonHits(primary provider.Provider, req resolver.Request) []*seasonHit {
+func fallbackSeasonHits(primary provider.Provider, req resolver.Request, wants []int) []*seasonHit {
+	hits, _ := fallbackSeasonScan(primary, req, wants)
+	return hits
+}
+
+// fallbackSeasonScan is fallbackSeasonHits plus whether any provider's lookup
+// failed rather than answering, so a caller can tell "the chain lacks it" from
+// "the chain could not say". A provider contributes one hit per title
+// probeSeasons keeps.
+func fallbackSeasonScan(primary provider.Provider, req resolver.Request, wants []int) ([]*seasonHit, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), episodesFallbackTimeout)
 	defer cancel()
 
 	fallbacks := agentFallbackProviders(primary)
 	// Indexed by provider so the result is provider order, not arrival order.
-	hits := make([]*seasonHit, len(fallbacks))
+	hits := make([][]*seasonHit, len(fallbacks))
+	failures := make([]bool, len(fallbacks))
 	var wg sync.WaitGroup
 	for i, fb := range fallbacks {
 		wg.Add(1)
 		go func(idx int, p provider.Provider) {
 			defer wg.Done()
-			hits[idx] = probeSeasons(ctx, p, req)
+			hits[idx], failures[idx] = probeSeasons(ctx, p, req, wants)
 		}(i, fb)
 	}
 	// Every worker returns at the deadline even when a provider call is still
@@ -676,13 +706,17 @@ func fallbackSeasonHits(primary provider.Provider, req resolver.Request) []*seas
 	wg.Wait()
 
 	found := make([]*seasonHit, 0, len(hits))
-	for _, h := range hits {
-		if h != nil {
+	for _, perProvider := range hits {
+		for _, h := range perProvider {
 			debugf("episodes: %T answers for %q (ID %s)", h.provider, h.title, h.id)
 			found = append(found, h)
 		}
 	}
-	return found
+	failed := false
+	for _, f := range failures {
+		failed = failed || f
+	}
+	return found, failed
 }
 
 // episodeAnswer is one fallback provider's episode list for the requested
@@ -697,23 +731,46 @@ type episodeAnswer struct {
 	shortfall episodeShortfall
 }
 
-// firstEpisodeList asks every hit for the requested season's episodes and
-// returns the first one in chain order that answers, or nil.
+func firstEpisodeList(hits []*seasonHit, wantSeason int) *episodeAnswer {
+	if lists, _ := episodeLists(hits, wantSeason); len(lists) > 0 {
+		return lists[0]
+	}
+	return nil
+}
+
+func confirmedEpisodeList(hits []*seasonHit, scanFailed bool, season int, title string) (*episodeAnswer, error) {
+	lists, listFailed := episodeLists(hits, season)
+	if a := firstConfirmed(lists); a != nil {
+		return a, nil
+	}
+	if len(lists) > 0 {
+		return nil, fmt.Errorf("no fallback provider could confirm season %d of %q: %s", season, title, lists[0].shortfall.reason)
+	}
+	if scanFailed || listFailed {
+		return nil, fmt.Errorf("no fallback provider could list season %d of %q: a fallback lookup failed", season, title)
+	}
+	return nil, nil
+}
+
+// episodeLists asks every hit for the requested season's episodes and returns
+// the ones that answer, in chain order, and whether any hit's lookup failed
+// rather than answering.
 //
 // It fans out under the same deadline the season scan uses, for the same
 // reason: asking up to eleven providers in turn, each against a 30s HTTP
 // timeout, is minutes of silence on a degraded chain, and `episodes` exists so
-// an agent is never left waiting. Provider order still decides the winner, so
-// the answer does not depend on which provider was quickest.
-func firstEpisodeList(hits []*seasonHit, wantSeason int) *episodeAnswer {
+// an agent is never left waiting. The result is in provider order, so it does
+// not depend on which provider was quickest.
+func episodeLists(hits []*seasonHit, wantSeason int) ([]*episodeAnswer, bool) {
 	if len(hits) == 0 {
-		return nil
+		return nil, false
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), episodesFallbackTimeout)
 	defer cancel()
 
 	answers := make([]*episodeAnswer, len(hits))
+	failures := make([]bool, len(hits))
 	var wg sync.WaitGroup
 	for i, h := range hits {
 		sel, ok := pickSeason(h.seasons, wantSeason)
@@ -733,6 +790,8 @@ func firstEpisodeList(hits []*seasonHit, wantSeason int) *episodeAnswer {
 			}
 			if err != nil || len(eps) == 0 {
 				debugf("episodes: fallback %T cannot list season %d (err=%v, episodes=%d)", h.provider, sel.Number, err, len(eps))
+				kind, _ := classifyList(len(eps), err)
+				failures[idx] = kind == lookupFailed
 				return
 			}
 			answers[idx] = &episodeAnswer{hit: h, season: sel, episodes: eps, shortfall: shortfall}
@@ -740,12 +799,89 @@ func firstEpisodeList(hits []*seasonHit, wantSeason int) *episodeAnswer {
 	}
 	wg.Wait()
 
-	for _, a := range answers {
+	extras := make(map[*candidateReserve][]*episodeAnswer)
+	var extrasMu sync.Mutex
+	reserveFailed := false
+	for i, h := range hits {
+		r := h.reserve
+		if r == nil || (i+1 < len(hits) && hits[i+1].reserve == r) {
+			continue
+		}
+		if slices.ContainsFunc(answers, func(a *episodeAnswer) bool {
+			return a != nil && a.hit.reserve == r && !a.shortfall.mayBeTruncated()
+		}) {
+			continue
+		}
+		wg.Add(1)
+		go func(r *candidateReserve) {
+			defer wg.Done()
+			found, failed := r.episodeLists(ctx, wantSeason)
+			extrasMu.Lock()
+			extras[r] = found
+			reserveFailed = reserveFailed || failed
+			extrasMu.Unlock()
+		}(r)
+	}
+	wg.Wait()
+
+	listed := make([]*episodeAnswer, 0, len(answers))
+	for i, a := range answers {
 		if a != nil {
-			return a
+			listed = append(listed, a)
+		}
+		if r := hits[i].reserve; r != nil && (i+1 == len(hits) || hits[i+1].reserve != r) {
+			listed = append(listed, extras[r]...)
 		}
 	}
-	return nil
+	return listed, reserveFailed || slices.Contains(failures, true)
+}
+
+// episodeLists asks the reserve's candidates in turn for wantSeason's
+// episodes, fetching a candidate's seasons the first time it is asked, and
+// stops at the first list that is not flagged as possibly truncated.
+func (r *candidateReserve) episodeLists(ctx context.Context, wantSeason int) ([]*episodeAnswer, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var found []*episodeAnswer
+	failed := false
+	for i := range r.candidates {
+		c := &r.candidates[i]
+		if !c.probed {
+			seasons, err := seasonsWithContext(ctx, r.provider, c.id)
+			look := classifySeasonLookup(seasons, err)
+			if look.kind == lookupFailed {
+				failed = true
+				continue
+			}
+			look.provider, look.id = r.provider, c.id
+			c.look, c.probed = look, true
+		}
+		if c.look.kind != lookupListed {
+			continue
+		}
+		sel, ok := pickSeason(c.look.seasons, wantSeason)
+		if !ok {
+			failed = failed || c.look.gap == gapShort
+			continue
+		}
+		eps, err := episodesWithContext(ctx, r.provider, c.id, sel.ID)
+		shortfall := episodeShortfall{}
+		if sf := shortfallFor(err); len(eps) > 0 && sf.code != "" {
+			shortfall, err = sf, nil
+		}
+		if err != nil || len(eps) == 0 {
+			if kind, _ := classifyList(len(eps), err); kind == lookupFailed {
+				failed = true
+			}
+			continue
+		}
+		hit := &seasonHit{seasonLookup: c.look, title: c.title, reserve: r}
+		found = append(found, &episodeAnswer{hit: hit, season: sel, episodes: eps, shortfall: shortfall})
+		if !shortfall.mayBeTruncated() {
+			break
+		}
+	}
+	return found, failed
 }
 
 // episodesWithContext is seasonsWithContext for GetEpisodes, with the same
@@ -769,38 +905,126 @@ func episodesWithContext(ctx context.Context, p provider.Provider, id, seasonID 
 	}
 }
 
-// seasonHit is one fallback provider's answer for a ref.
+// seasonHit is one fallback provider's listed answer for a ref.
 type seasonHit struct {
-	provider provider.Provider
-	id       string
-	title    string
-	seasons  []media.Season
-	// partial reports that seasons came with provider.ErrIncompleteEpisodeList.
-	partial bool
+	seasonLookup
+	title   string
+	reserve *candidateReserve
+}
+
+// candidateReserve holds a provider's same-work candidates that probeSeasons
+// did not keep, shared by every hit it kept from that provider. episodeLists
+// asks them, in rank order, only when no kept hit of the provider lists the
+// season's episodes in full.
+type candidateReserve struct {
+	mu         sync.Mutex
+	provider   provider.Provider
+	candidates []reserveCandidate
+}
+
+type reserveCandidate struct {
+	id, title string
+	probed    bool
+	look      seasonLookup
 }
 
 // probeSeasons asks one fallback provider whether it has req's work and can
-// enumerate its seasons. It returns nil for "no", including when the context
-// expires mid-call.
-func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request) *seasonHit {
+// enumerate its seasons. It returns nothing for "no", including when the
+// context expires mid-call. Of several matching candidates the first whose list
+// holds every season in wants is returned first, followed by those kept before
+// it; otherwise the first that lists any, followed by each later one that lists
+// a season in wants the ones kept so far lack or whose list was cut short. Once
+// one is kept, a later candidate is considered only when resolver.ConfidentMatch
+// takes it for the same work, judged by the first kept candidate's year. The
+// same-work candidates it does not keep, probed or not, go to the kept hits'
+// shared reserve. failed is true when any lookup errored or timed out rather than answering,
+// whichever candidates were kept, and when a list that lacks a season in wants
+// was cut short.
+func probeSeasons(ctx context.Context, p provider.Provider, req resolver.Request, wants []int) (hits []*seasonHit, failed bool) {
 	results, err := searchWithContext(ctx, p, req.Title)
+	if errors.Is(err, provider.ErrNoResults) {
+		return nil, false
+	}
 	if err != nil {
 		debugf("episodes: fallback %T search failed: %v", p, err)
-		return nil
+		return nil, true
 	}
-	for _, c := range resolver.Candidates(results, req) {
+	sameWork := req
+	reserve := &candidateReserve{provider: p}
+	defer func() {
+		if len(reserve.candidates) == 0 {
+			return
+		}
+		for _, h := range hits {
+			h.reserve = reserve
+		}
+	}()
+	candidates := resolver.Candidates(results, req)
+	for i, c := range candidates {
 		if !resolver.Matches(c, req) {
-			debugf("episodes: fallback %T offered %q, which is not %q", p, c.Title, req.Title)
+			debugf("episodes: fallback %T candidate %q (ID: %s) is not the requested work, skipping", p, c.Title, c.ID)
+			continue
+		}
+		if len(hits) > 0 && !resolver.ConfidentMatch(c, sameWork) {
+			debugf("episodes: fallback %T candidate %q (%s, ID: %s) is not the work already kept, skipping", p, c.Title, c.Year, c.ID)
 			continue
 		}
 		seasons, err := seasonsWithContext(ctx, p, c.ID)
-		partial := err != nil && len(seasons) > 0 && errors.Is(err, provider.ErrIncompleteEpisodeList)
-		if (err != nil && !partial) || len(seasons) == 0 {
+		look := classifySeasonLookup(seasons, err)
+		switch look.kind {
+		case lookupFailed:
+			failed = true
+		case lookupListed:
+			look.provider, look.id = p, c.ID
+			listed := &seasonHit{seasonLookup: look, title: c.Title}
+			if len(hits) == 0 && c.Year != "" {
+				sameWork.Year = c.Year
+			}
+			if listsEverySeason(seasons, wants) {
+				for _, later := range candidates[i+1:] {
+					if resolver.Matches(later, req) && resolver.ConfidentMatch(later, sameWork) {
+						reserve.candidates = append(reserve.candidates, reserveCandidate{id: later.ID, title: later.Title})
+					}
+				}
+				hits = append([]*seasonHit{listed}, hits...)
+				return hits, failed
+			}
+			if look.gap == gapShort {
+				failed = true
+			}
+			if len(hits) == 0 || look.gap == gapShort || addsWantedSeason(hits, seasons, wants) {
+				hits = append(hits, listed)
+			} else {
+				reserve.candidates = append(reserve.candidates, reserveCandidate{id: c.ID, title: c.Title, probed: true, look: look})
+			}
+		}
+	}
+	return hits, failed
+}
+
+func addsWantedSeason(kept []*seasonHit, seasons []media.Season, wants []int) bool {
+	for _, want := range wants {
+		if _, listed := pickSeason(seasons, want); !listed {
 			continue
 		}
-		return &seasonHit{provider: p, id: c.ID, title: c.Title, seasons: seasons, partial: partial}
+		covered := slices.ContainsFunc(kept, func(h *seasonHit) bool {
+			_, ok := pickSeason(h.seasons, want)
+			return ok
+		})
+		if !covered {
+			return true
+		}
 	}
-	return nil
+	return false
+}
+
+func listsEverySeason(seasons []media.Season, wants []int) bool {
+	for _, want := range wants {
+		if _, ok := pickSeason(seasons, want); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // seasonsWithContext runs GetSeasons, abandoning the result if the context

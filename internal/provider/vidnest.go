@@ -141,7 +141,7 @@ func (v *VidNest) GetSeasons(id string) ([]media.Season, error) {
 // every chain provider that can enumerate the season (cmd/episodes.go) —
 // rather than listing fifty episodes that do not exist.
 func (v *VidNest) GetEpisodes(id string, seasonID string) ([]media.Episode, error) {
-	return nil, fmt.Errorf("vidnest: episode listing unavailable; backends expose no episode index")
+	return nil, fmt.Errorf("vidnest: %w; backends expose no episode index", ErrNoEpisodeIndex)
 }
 
 // GetServers returns one server per backend.

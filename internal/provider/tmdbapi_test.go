@@ -420,17 +420,17 @@ func TestEZTVKeyedIMDbLookupPartialFailureKeepsTheHitsFound(t *testing.T) {
 	}
 }
 
-func TestEZTVKeyedIMDbLookupOtherFailureIsNoResults(t *testing.T) {
+func TestEZTVKeyedIMDbLookupOtherFailureIsASearchFailure(t *testing.T) {
 	p := eztvKeyedStub(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 	_, err := p.Search("severance")
-	if !errors.Is(err, ErrNoResults) {
-		t.Fatalf("err = %v, want ErrNoResults for a non-key, non-limit failure", err)
+	if err == nil || errors.Is(err, ErrNoResults) || !strings.Contains(err.Error(), "HTTP 500") {
+		t.Fatalf("err = %v, want the HTTP 500 lookup error, not ErrNoResults", err)
 	}
 }
 
-func TestEZTVScrapeIMDbLookupFailureStaysNoResults(t *testing.T) {
+func TestEZTVScrapeIMDbLookupFailureIsASearchFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/search") {
 			fmt.Fprint(w, eztvTMDBFixture)
@@ -442,7 +442,7 @@ func TestEZTVScrapeIMDbLookupFailureStaysNoResults(t *testing.T) {
 	p := NewEZTV()
 	p.tmdbBaseURL = srv.URL
 	_, err := p.Search("severance")
-	if !errors.Is(err, ErrNoResults) {
-		t.Fatalf("err = %v, want ErrNoResults on the keyless path", err)
+	if err == nil || errors.Is(err, ErrNoResults) {
+		t.Fatalf("err = %v, want the keyless lookup error, not ErrNoResults", err)
 	}
 }
