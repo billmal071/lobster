@@ -913,7 +913,7 @@ type seasonHit struct {
 
 // candidateReserve holds a provider's same-work candidates that probeSeasons
 // did not keep, shared by every hit it kept from that provider. episodeLists
-// asks them, in search order, only when no kept hit of the provider lists the
+// asks them, in rank order, only when no kept hit of the provider lists the
 // season's episodes in full.
 type candidateReserve struct {
 	mu         sync.Mutex

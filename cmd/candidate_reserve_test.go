@@ -2,10 +2,12 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
 	"lobster/internal/media"
+	"lobster/internal/provider"
 	"lobster/internal/resolver"
 )
 
@@ -137,5 +139,56 @@ func TestAReserveLookupThatFailsIsReportedAsAFailedLookup(t *testing.T) {
 				t.Fatalf("answer = %+v, err = %v; want a failed-lookup error, since b might list the season", a, err)
 			}
 		})
+	}
+}
+
+func truncatedReserveChain(t *testing.T, withCompleteThird bool) {
+	t.Helper()
+	p := &byIDLookup{
+		stubProvider: &stubProvider{},
+		results:      showResults("a", "b"),
+		seasons:      map[string][]media.Season{"a": seasonsOf(1, 2), "b": seasonsOf(1)},
+		episodes:     map[string][]media.Episode{"b": oneEpisode("b-s1e1")},
+		errs:         map[string]error{"episodes:b": fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList)},
+	}
+	if withCompleteThird {
+		p.results = showResults("a", "b", "c")
+		p.seasons["c"] = seasonsOf(1)
+		p.episodes["c"] = []media.Episode{{ID: "c-s1e1", Number: 1}, {ID: "c-s1e2", Number: 2}}
+	}
+	hostileEnv(t)
+	chainOf(t, p)
+}
+
+func TestBatchListerRejectsTheSourcesOwnTruncatedPrefix(t *testing.T) {
+	hostileEnv(t)
+	chainOf(t)
+	primary := &stubProvider{episodesWithErr: oneEpisode("1x1"), episodesErr: fmt.Errorf("%w: page 2 failed", provider.ErrIncompleteEpisodeList)}
+	l := newSeasonLister(primary, media.SearchResult{ID: "x", Title: "Show", Type: media.TV}, seasonsOf(1, 2)...)
+	if eps, err := l.episodes(media.Season{ID: "1", Number: 1}); err == nil {
+		t.Fatalf("episodes = %d, err = nil; want the truncated prefix refused", len(eps))
+	}
+}
+
+func TestBatchListerRejectsATruncatedPrefixFromTheReserve(t *testing.T) {
+	truncatedReserveChain(t, false)
+	l := newSeasonLister(&stubProvider{}, media.SearchResult{ID: "x", Title: "Show", Type: media.TV}, seasonsOf(1, 2)...)
+	if eps, err := l.episodes(media.Season{ID: "1", Number: 1}); err == nil {
+		t.Fatalf("episodes = %d, err = nil; want the reserve's truncated prefix refused", len(eps))
+	}
+}
+
+func TestBatchListerPassesOverATruncatedReservePrefixForALaterCompleteList(t *testing.T) {
+	truncatedReserveChain(t, true)
+	l := newSeasonLister(&stubProvider{}, media.SearchResult{ID: "x", Title: "Show", Type: media.TV}, seasonsOf(1, 2)...)
+	if eps, err := l.episodes(media.Season{ID: "1", Number: 1}); err != nil || len(eps) != 2 {
+		t.Fatalf("episodes = %d, err = %v; want c's 2 episodes", len(eps), err)
+	}
+}
+
+func TestDownloadDialogFallbackRejectsATruncatedPrefixFromTheReserve(t *testing.T) {
+	truncatedReserveChain(t, false)
+	if eps, _, err := tuiEpisodeListFallback(&stubProvider{}, media.SearchResult{ID: "x", Title: "Show", Type: media.TV}, 1); err == nil {
+		t.Fatalf("episodes = %d, err = nil; want the reserve's truncated prefix refused", len(eps))
 	}
 }
