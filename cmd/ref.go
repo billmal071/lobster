@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"lobster/internal/config"
 	"lobster/internal/media"
 )
 
@@ -33,14 +34,22 @@ import (
 // deduplicateResults pins the first arrival's ID and pins its attribution
 // alongside it.
 //
+// IDFromBase records that Base names the provider that issued ID. find and
+// the season/episode prompt set it whenever they stamp a Base. Refs minted
+// before it existed lack it, and their Base may be the configured base rather
+// than the ID's producer, so searchResult treats only a ref that carries it as
+// evidence of who issued the ID.
+//
 // An empty Base is the honest answer for a provider no base value reaches
 // (AniPub, TBCPLEmbed, Consumet), and applyRefBase (cmd/play.go) treats it as
 // "leave the configuration alone". config.BaseAuto is never stamped in its
 // place: "auto" names no provider and instead licenses routing movies to YTS
 // and opening a magnet (cmd/typeroute.go, cmd/root.go).
 //
-// Base still only decides where resolution *starts*; nothing downstream
-// assumes the ID resolves against it. play re-searches by title through the
+// Base mostly decides only where resolution *starts*. The one exception is a
+// ref with IDFromBase set: when its base's provider cannot list the show,
+// play asks that provider for the episode by ID (tryOwnerThenFallbackStream,
+// cmd/fallback.go). Otherwise play re-searches by title through the
 // whole chain (resolveAndPlay, cmd/search.go) and episodes does the same via
 // seasonSource (cmd/episodes.go) when the base's provider cannot enumerate the
 // ID. Refs minted by older versions carry the configured base instead, and are
@@ -71,6 +80,7 @@ type playRef struct {
 	Year          string `json:"year,omitempty"`
 	Type          string `json:"type"`
 	Base          string `json:"base,omitempty"`
+	IDFromBase    bool   `json:"id_from_base,omitempty"`
 	TVGID         string `json:"tvg_id,omitempty"`         // live only: stable upstream id, "" when the playlist omits it
 	Source        string `json:"source,omitempty"`         // live only: the playlist the channel was loaded from, sanitized for display
 	SrcKey        string `json:"src_key,omitempty"`        // live only: collision-safe digest of the raw playlist source; the value matching compares
@@ -139,5 +149,9 @@ func (r playRef) searchResult() (media.SearchResult, error) {
 	if r.Type == media.TV.String() {
 		t = media.TV
 	}
-	return media.SearchResult{ID: r.ID, Title: r.Title, Year: r.Year, Type: t}, nil
+	sr := media.SearchResult{ID: r.ID, Title: r.Title, Year: r.Year, Type: t}
+	if r.IDFromBase {
+		sr.Provider = config.NormalizeBase(r.Base)
+	}
+	return sr, nil
 }
