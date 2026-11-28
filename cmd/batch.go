@@ -11,6 +11,7 @@ import (
 	"lobster/internal/download"
 	"lobster/internal/media"
 	"lobster/internal/provider"
+	"lobster/internal/resolver"
 	"lobster/internal/ui"
 )
 
@@ -188,14 +189,17 @@ func openBatchStream(chainPrimary provider.Provider, selected media.SearchResult
 // resolveBatchStream asks the fallback chain for an episode's stream. An
 // explicitly chosen torrent base (nyaa, eztv, 1337x) is asked first: the chain is
 // built by excluding its primary, which would otherwise skip the one source
-// the user named and the one proven to carry the episode list.
+// the user named and the one proven to carry the episode list. It is asked by
+// season and episode number: ep may come from another provider's list, whose
+// episode IDs are not this source's.
 func resolveBatchStream(chainPrimary provider.Provider, selected media.SearchResult, ep media.Episode, seasonNum int) (*media.Stream, error) {
 	if sp, ok := chainPrimary.(provider.StreamProvider); ok && cfg != nil && cfg.APIURL == "" && config.IsTorrentBase(cfg.Base) {
-		stream, err := sp.Watch(selected.ID, ep.ID, "", cfgQuality())
+		episodeID := resolver.NumberedEpisodeID(selected.ID, seasonNum, ep.Number)
+		stream, err := sp.Watch(selected.ID, episodeID, "", cfgQuality())
 		if err == nil && stream != nil && stream.URL != "" {
 			return stream, nil
 		}
-		debugf("selected torrent source failed for %s episode %s: %v", selected.ID, ep.ID, err)
+		debugf("selected torrent source failed for %s episode %s: %v", selected.ID, episodeID, err)
 	}
 	debugf("resolving stream via fallback providers for %s S%dE%d", selected.Title, seasonNum, ep.Number)
 	stream, err := tryFallbackStream(chainPrimary, selected, seasonNum, ep.Number)

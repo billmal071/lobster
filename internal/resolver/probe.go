@@ -580,17 +580,21 @@ func tryStreamProviderFallback(sp provider.StreamProvider, match *media.SearchRe
 	if mediaType == media.Movie {
 		return watch(match.ID, "", "Default", quality)
 	}
-	// TV: construct the episode ID
-	tmdbID := match.ID
-	if idx := len("tv/"); len(tmdbID) > idx && tmdbID[:idx] == "tv/" {
-		tmdbID = tmdbID[idx:]
-	} else if idx := len("movie/"); len(tmdbID) > idx && tmdbID[:idx] == "movie/" {
-		tmdbID = tmdbID[idx:]
-	}
-
-	episodeID := fmt.Sprintf("%s:%d:%d", tmdbID, season, episode)
+	episodeID := NumberedEpisodeID(match.ID, season, episode)
 	log("fallback episode ID: %s", episodeID)
 	return watch(match.ID, episodeID, "Default", quality)
+}
+
+// NumberedEpisodeID is the episode ID a StreamProvider's Watch is asked by
+// number with: "<id>:<season>:<episode>", the ID's "tv/" or "movie/" prefix
+// dropped.
+func NumberedEpisodeID(id string, season, episode int) string {
+	if idx := len("tv/"); len(id) > idx && id[:idx] == "tv/" {
+		id = id[idx:]
+	} else if idx := len("movie/"); len(id) > idx && id[:idx] == "movie/" {
+		id = id[idx:]
+	}
+	return fmt.Sprintf("%s:%d:%d", id, season, episode)
 }
 
 // tryEmbedProviderFallback resolves a stream via GetServers + GetEmbedURL + Extract.

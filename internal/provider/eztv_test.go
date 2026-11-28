@@ -338,7 +338,7 @@ func TestEZTVWatchRefusesAMovieRequest(t *testing.T) {
 }
 
 func TestEZTVEpisodeRef(t *testing.T) {
-	for in, want := range map[string][2]int{"2x10": {2, 10}, "2:10": {2, 10}, "eztv/1:3:4": {3, 4}} {
+	for in, want := range map[string][2]int{"2x10": {2, 10}, "2:10": {2, 10}, "eztv/1:3:4": {3, 4}, "eztv/0903747:2:10": {2, 10}, "1337x/The+Expanse:2:5": {2, 5}} {
 		s, e, err := eztvEpisodeRef(in)
 		if err != nil || s != want[0] || e != want[1] {
 			t.Errorf("eztvEpisodeRef(%q) = %d,%d,%v want %v", in, s, e, err, want)
@@ -346,7 +346,7 @@ func TestEZTVEpisodeRef(t *testing.T) {
 	}
 	// "" is what the resolver sends for a movie. EZTV is TV-only, and
 	// defaulting to S01E01 answered a film request with a pilot episode.
-	for _, bad := range []string{"", "x", "2x", "0x1", "ax1"} {
+	for _, bad := range []string{"", "x", "2x", "0x1", "ax1", "eztv/0903747:2:0", "3", "/series/show-123/2-3/"} {
 		if _, _, err := eztvEpisodeRef(bad); err == nil {
 			t.Errorf("eztvEpisodeRef(%q) should fail", bad)
 		}
