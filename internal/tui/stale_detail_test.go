@@ -56,7 +56,7 @@ func TestDetailFromAnEarlierSelectionKeepsTheCurrentError(t *testing.T) {
 func TestDetailForTheCurrentSelectionIsShownAndClearsItsError(t *testing.T) {
 	m := browseModel(tabMovies, stubProvider{})
 	m.currentItem = &media.SearchResult{ID: "movie/1", Title: "Current"}
-	m.err = assertErr("an earlier detail failure")
+	m = apply(t, m, detailErrMsg{id: "movie/1", err: assertErr("an earlier detail failure")})
 	detail := &media.ContentDetail{Description: "fresh"}
 
 	m = apply(t, m, detailFetchedMsg{id: "movie/1", detail: detail})
@@ -156,5 +156,17 @@ func TestDetailFailureFromAnEarlierRequestForTheSameTitleIsIgnored(t *testing.T)
 	}
 	if m.currentDetail == nil || m.currentDetail.Description != "second" {
 		t.Fatalf("detail = %+v, want the second request's", m.currentDetail)
+	}
+}
+
+func TestDetailForTheCurrentSelectionKeepsADownloadError(t *testing.T) {
+	m := browseModel(tabMovies, stubProvider{})
+	m.currentItem = &media.SearchResult{ID: "movie/1", Title: "Current"}
+	m = apply(t, m, errMsg{assertErr("queue failed")})
+
+	m = apply(t, m, detailFetchedMsg{id: "movie/1", detail: &media.ContentDetail{Description: "fresh"}})
+
+	if m.err == nil || m.err.Error() != "queue failed" {
+		t.Fatalf("err = %v; a detail must not clear the download failure", m.err)
 	}
 }

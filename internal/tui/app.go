@@ -455,13 +455,15 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case detailFetchedMsg:
 		if m.isCurrentDetail(msg.id, msg.gen) {
-			m.err = nil
+			if _, ok := m.err.(detailError); ok {
+				m.err = nil
+			}
 			m.currentDetail = msg.detail
 		}
 
 	case detailErrMsg:
 		if m.isCurrentDetail(msg.id, msg.gen) {
-			m.err = msg.err
+			m.err = detailError{msg.err}
 		}
 
 	case posterFetchedMsg:

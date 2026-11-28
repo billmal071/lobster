@@ -43,6 +43,12 @@ type detailErrMsg struct {
 	err error
 }
 
+type detailError struct{ err error }
+
+func (e detailError) Error() string { return e.err.Error() }
+
+func (e detailError) Unwrap() error { return e.err }
+
 // seasonsFetchedMsg is sent when TV show seasons are fetched.
 type seasonsFetchedMsg []media.Season
 
